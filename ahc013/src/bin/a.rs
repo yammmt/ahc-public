@@ -31,7 +31,7 @@ fn greedy_ans(available_k: usize, cnn: &[Vec<char>]) -> (Vec<Connect>, Vec<Vec<c
     'search_r: for i in 0..n {
         let mut prev_c = cnn[i][0];
         let mut prev_j = 0;
-        for j in 1..n - 1 {
+        for j in 1..n {
             if cnn[i][j] == '0' {
                 continue;
             } else if cnn[i][j] == prev_c {
@@ -57,7 +57,7 @@ fn greedy_ans(available_k: usize, cnn: &[Vec<char>]) -> (Vec<Connect>, Vec<Vec<c
     'search_b: for j in 0..n {
         let mut prev_c = cnn[0][j];
         let mut prev_i = 0;
-        for i in 1..n - 1 {
+        for i in 1..n {
             if cable[i][j] != '0' {
                 // クロスしたのでもう接続できない
                 prev_c = '0';
