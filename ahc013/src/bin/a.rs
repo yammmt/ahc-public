@@ -20,28 +20,13 @@ impl fmt::Display for Connect {
     }
 }
 
-fn main() {
-    input! {
-        n: usize,
-        k: usize,
-        cnn: [Chars; n],
-    }
-
-    // 小さなクラスタを乱立させるより巨大なクラスタにまとめた方が良い
-    // 同種の a 個のクラスタと b 個のクラスタをマージさせると得られる点は +ab
-    // その際に c 個の異種クラスタが入ると -(a+b)c
-    // 異種クラスタを認める条件は最低限 ab > (a+b)c になる
-
-    // とりあえず正の得点を取る
-    // 右/下が同じ種類のときだけ結ぶ
-    // N <= 48 より O(N^4) なら間に合うし結ぶ際には距離は不問なので右/下全部見ても平均的には良化しそう
-    let max_k = 100 * k;
+// 始点を固定して右/下方向を検索して同じやつが出る限り結ぶ
+fn greedy_ans(available_k: usize, cnn: &[Vec<char>]) -> (Vec<Connect>, Vec<Vec<char>>) {
+    let n = cnn[0].len();
+    let mut y_connect = vec![];
+    let mut cable = vec![vec!['0'; n]; n];
     let mut cur_k = 0;
-    let x_move: Vec<Move> = vec![];
-    let mut y_connect: Vec<Connect> = vec![];
-    let mut is_cable_area = vec![vec![false; n]; n];
 
-    // 始点を固定して右/下方向を検索して同じやつが出る限り結ぶ
     // -> 右
     'search_r: for i in 0..n {
         let mut prev_c = cnn[i][0];
@@ -52,10 +37,11 @@ fn main() {
             } else if cnn[i][j] == prev_c {
                 y_connect.push(Connect(i, prev_j, i, j));
                 for jj in prev_j + 1..j {
-                    is_cable_area[i][jj] = true;
+                    assert_ne!(cnn[i][j], '0');
+                    cable[i][jj] = cnn[i][j];
                 }
                 cur_k += 1;
-                if cur_k == max_k {
+                if cur_k == available_k {
                     break 'search_r;
                 }
 
@@ -72,7 +58,8 @@ fn main() {
         let mut prev_c = cnn[0][j];
         let mut prev_i = 0;
         for i in 1..n - 1 {
-            if is_cable_area[i][j] {
+            if cable[i][j] != '0' {
+                // クロスしたのでもう接続できない
                 prev_c = '0';
                 prev_i = i;
             } else if cnn[i][j] == '0' {
@@ -80,7 +67,7 @@ fn main() {
             } else if cnn[i][j] == prev_c {
                 y_connect.push(Connect(prev_i, j, i, j));
                 cur_k += 1;
-                if cur_k == max_k {
+                if cur_k == available_k {
                     break 'search_b;
                 }
 
@@ -91,6 +78,33 @@ fn main() {
             }
         }
     }
+
+    (y_connect, cable)
+}
+
+fn main() {
+    input! {
+        n: usize,
+        k: usize,
+        cnn: [Chars; n],
+    }
+
+    // 小さなクラスタを乱立させるより巨大なクラスタにまとめた方が良い
+    // 同種の a 個のクラスタと b 個のクラスタをマージさせると得られる点は +ab
+    // その際に c 個の異種クラスタが入ると -(a+b)c
+    // 異種クラスタを認める条件は最低限 ab > (a+b)c になる
+
+    // とりあえず正の得点を取る
+    // N <= 48 より O(N^4) なら間に合うし結ぶ際には距離は不問なので右/下全部見ても平均的には良化しそう
+
+    // 一度結べるだけ結んだ後に孤児を移動して近いグループに入れてみる
+    // 接続判定が微妙に変わるので解答作成もやり直す
+    // ちまちませず巨大なグループを作るべきではあるが賢い方法が浮かばないので保留
+
+    let max_k = 100 * k;
+    let x_move: Vec<Move> = vec![];
+
+    let (y_connect, _cable) = greedy_ans(max_k, &cnn);
 
     println!("{}", x_move.len());
     for x in &x_move {
