@@ -35,16 +35,16 @@ fn greedy_ans(available_k: usize, cnn: &[Vec<char>]) -> (Vec<Connect>, Vec<Vec<c
             if cnn[i][j] == '0' {
                 continue;
             } else if cnn[i][j] == prev_c {
+                if cur_k + 1 > available_k {
+                    break 'search_r;
+                }
+
                 y_connect.push(Connect(i, prev_j, i, j));
-                for jj in prev_j + 1..j {
+                for jj in prev_j..j + 1 {
                     assert_ne!(cnn[i][j], '0');
                     cable[i][jj] = cnn[i][j];
                 }
                 cur_k += 1;
-                if cur_k == available_k {
-                    break 'search_r;
-                }
-
                 prev_j = j;
             } else {
                 prev_c = cnn[i][j];
@@ -58,23 +58,32 @@ fn greedy_ans(available_k: usize, cnn: &[Vec<char>]) -> (Vec<Connect>, Vec<Vec<c
         let mut prev_c = cnn[0][j];
         let mut prev_i = 0;
         for i in 1..n {
-            if cable[i][j] != '0' {
-                // クロスしたのでもう接続できない
-                prev_c = '0';
-                prev_i = i;
-            } else if cnn[i][j] == '0' {
-                continue;
-            } else if cnn[i][j] == prev_c {
-                y_connect.push(Connect(prev_i, j, i, j));
-                cur_k += 1;
-                if cur_k == available_k {
-                    break 'search_b;
+            // 今のマスが 0 かつ cable なし => 継続
+            // 今のマスが 0 かつ cable あり => 基点リセット
+            // 今のマスが非 0 かつ基点と等しい => 接続
+            // 今のマスが非 0 かつ基点と等しくない => 基点リセット
+            if cnn[i][j] == '0' {
+                if cable[i][j] == '0' {
+                    continue;
+                } else {
+                    prev_c = '0';
+                    prev_i = i;
                 }
-
-                prev_i = i;
             } else {
-                prev_c = cnn[i][j];
-                prev_i = i;
+                if cnn[i][j] == prev_c {
+                    if cur_k + 1 > available_k {
+                        break 'search_b;
+                    }
+
+                    y_connect.push(Connect(prev_i, j, i, j));
+                    cur_k += 1;
+
+                    // 種類は更新なし
+                    prev_i = i;
+                } else {
+                    prev_c = cnn[i][j];
+                    prev_i = i;
+                }
             }
         }
     }
