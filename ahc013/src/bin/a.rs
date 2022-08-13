@@ -1,12 +1,17 @@
 use proconio::input;
 use proconio::marker::Chars;
+use rand::rngs::SmallRng;
+use rand::{Rng, SeedableRng};
 use std::collections::{HashSet, VecDeque};
 use std::fmt;
+use std::time::{Duration, Instant};
 
 // 種類数は小さめ
-const MAX_KIND_NUM: usize = 5;
+const MAX_KIND_NUM: usize = 6;
+// 実行制限 3000ms に対し入出力の手間を省いてこれだけあれば余裕あるはず
+const LONGEST_EXEC_TIME_MS: u64 = 2700;
 
-#[derive(Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct Move(usize, usize, usize, usize);
 
 impl fmt::Display for Move {
@@ -15,7 +20,7 @@ impl fmt::Display for Move {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct Connect(usize, usize, usize, usize);
 
 impl fmt::Display for Connect {
@@ -25,6 +30,7 @@ impl fmt::Display for Connect {
 }
 
 // BFS して今のスコアを計算する
+// スコアは負数となりうる
 fn calc_score(cnn: &[Vec<char>], conns: &[Connect]) -> i64 {
     let mut ret = 0;
     let n = cnn[0].len();
@@ -149,11 +155,15 @@ fn greedy_ans(available_k: usize, cnn: &[Vec<char>]) -> (Vec<Connect>, Vec<Vec<c
 }
 
 fn main() {
+    let start_time = Instant::now();
+
     input! {
         n: usize,
         k: usize,
         mut cnn: [Chars; n],
     }
+
+    let dir = [(-1, 0), (1, 0), (0, -1), (0, 1)];
 
     // 小さなクラスタを乱立させるより巨大なクラスタにまとめた方が良い
     // 同種の a 個のクラスタと b 個のクラスタをマージさせると得られる点は +ab
@@ -182,7 +192,6 @@ fn main() {
         is_orphaned[y.2][y.3] = false;
     }
 
-    let dir = [(-1, 0), (1, 0), (0, -1), (0, 1)];
     for i in 0..n {
         for j in 0..n {
             if !is_orphaned[i][j] || cnn[i][j] == '0' {
@@ -240,8 +249,65 @@ fn main() {
             }
         }
     }
-    let (y_connect, _cable) = greedy_ans(max_k - x_move.len(), &cnn);
+    let (mut y_connect, _cable) = greedy_ans(max_k - x_move.len(), &cnn);
     assert!(x_move.len() + y_connect.len() <= max_k);
+
+    // cable は愚直解用であり不要
+    let mut ans_score = calc_score(&cnn, &y_connect);
+
+    // 山登り法: 適当に移動させてスコアが上がるようなら上げてやる
+    // TODO: 無駄な移動を積み重ねてマージさせたほうが良くなる場合がある (焼きなまし)
+    let time_limit_ms = Duration::from_millis(LONGEST_EXEC_TIME_MS);
+    let mut rng = SmallRng::from_entropy();
+    while start_time.elapsed() < time_limit_ms {
+        let mut cur_cnn = cnn.clone();
+        let mut non_zeros: Vec<(usize, usize)> = vec![];
+        for i in 0..n {
+            for j in 0..n {
+                if cur_cnn[i][j] != '0' {
+                    non_zeros.push((i, j));
+                }
+            }
+        }
+
+        // 任意の非 0 マスを任意の 0 マスに動かす
+        // 制約より non_zeros は空でない
+        let move_from: (usize, usize) = non_zeros[rng.gen::<usize>() % non_zeros.len()];
+        let cur_dir: (isize, isize) = dir[rng.gen::<usize>() % dir.len()];
+        let next_i_i = move_from.0 as isize + cur_dir.0;
+        let next_j_i = move_from.1 as isize + cur_dir.1;
+        if next_i_i < 0 || next_i_i >= n as isize || next_j_i < 0 || next_j_i >= n as isize {
+            // 範囲外で移動不可
+            continue;
+        }
+
+        let next_i_u = next_i_i as usize;
+        let next_j_u = next_j_i as usize;
+        if cur_cnn[next_i_u][next_j_u] != '0' {
+            // 移動不可
+            continue;
+        }
+
+        let mut cur_x_move = x_move.clone();
+        cur_x_move.push(Move(move_from.0, move_from.1, next_i_u, next_j_u));
+        cur_cnn[next_i_u][next_j_u] = cur_cnn[move_from.0][move_from.1];
+        cur_cnn[move_from.0][move_from.1] = '0';
+
+        // HACK: "来た道を戻る" 場合にはその移動を消す
+        //       大回りした場合を考慮したい, 例えば右に移動する際に -> 上 -> 右 -> 下 と
+        //       大掛かりに遷移してくる可能性がある
+        //       辺削除が入る場合には残りの移動に制約に反するものが生まれてしまう可能性がある
+
+        // スコアの計算と比較
+        let (cur_y_connect, _cable) = greedy_ans(max_k - cur_x_move.len(), &cur_cnn);
+        let cur_score = calc_score(&cur_cnn, &cur_y_connect);
+        if cur_score > ans_score {
+            ans_score = cur_score;
+            cnn = cur_cnn;
+            x_move = cur_x_move;
+            y_connect = cur_y_connect;
+        }
+    }
 
     println!("{}", x_move.len());
     for x in &x_move {
