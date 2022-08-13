@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 // 種類数は小さめ
 const MAX_KIND_NUM: usize = 6;
 // 実行制限 3000ms に対し入出力の手間を省いてこれだけあれば余裕あるはず
-const LONGEST_EXEC_TIME_MS: u64 = 2700;
+const LONGEST_EXEC_TIME_MS: u64 = 2850;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct Move(usize, usize, usize, usize);
