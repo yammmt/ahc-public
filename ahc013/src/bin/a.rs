@@ -14,6 +14,12 @@ const LONGEST_EXEC_TIME_MS: u64 = 2900;
 // これだけやって解が変わらなければ極値に陥ったとしてリセットする
 const EXTREMUM_STREAK_NUM: usize = 2000;
 
+// 焼きなましのパーツ, コンピュータは一種につき 100 個で固定
+// 一度での追加点最大: 50C2 グループ x2 をマージ
+// 一度での追加点最小: 100C2 グループが二つに分割
+const START_TEMP: f64 =  2500.0;
+const END_TEMP: f64   = -2500.0;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct Move(usize, usize, usize, usize);
 
@@ -182,15 +188,13 @@ fn main() {
     let mut ans_y_connect = greedy_ans(max_k, &cnn);
     let mut ans_score = calc_score(&cnn, &ans_y_connect);
     let init_x_move = ans_x_move.clone();
-    let init_y_connect = ans_y_connect.clone();
     let init_score = ans_score;
     let mut hc_cnn = cnn.clone();
     let mut hc_x_move = ans_x_move.clone();
-    let mut hc_y_connect = ans_y_connect.clone();
     let mut hc_score = ans_score;
 
-    // 山登り法: 適当に移動させてスコアが上がるようなら上げてやる
-    // TODO: 無駄な移動を積み重ねてマージさせたほうが良くなる場合がある (焼きなまし)
+    // 焼きなまし法でとりあえず数を稼ぐ
+    // 焼きなますと初期のうちは移動に気を取られてスコアが伸びない？
     let time_limit_ms = Duration::from_millis(LONGEST_EXEC_TIME_MS);
     let mut rng = SmallRng::from_entropy();
     let mut non_zeros = vec![];
@@ -201,16 +205,17 @@ fn main() {
             }
         }
     }
+
     // let mut try_num = 0;
     let mut same_score_streak = 0;
+    let move_limit = max_k / 2;
     while start_time.elapsed() < time_limit_ms {
         // try_num += 1;
 
-        if same_score_streak == EXTREMUM_STREAK_NUM {
+        if same_score_streak == EXTREMUM_STREAK_NUM || hc_x_move.len() >= move_limit {
             // 一度下山する
             hc_cnn = cnn.clone();
             hc_x_move = init_x_move.clone();
-            hc_y_connect = init_y_connect.clone();
             hc_score = init_score;
 
             non_zeros.clear();
@@ -252,6 +257,11 @@ fn main() {
         // スコアの計算と比較
         let cur_y_connect = greedy_ans(max_k - cur_x_move.len(), &cur_cnn);
         let cur_score = calc_score(&cur_cnn, &cur_y_connect);
+
+        // 焼きなまし法の経過時間を移動サイズに置き換える
+        let temp = START_TEMP + (END_TEMP - START_TEMP) * cur_x_move.len() as f64 / move_limit as f64;
+        let prob = f64::exp((cur_score - hc_score) as f64 / temp);
+
         // 同点で接続数が減るなら良いスコア, 接続と移動は同コスト
         if cur_score > ans_score || (cur_score == ans_score && cur_y_connect.len() < ans_y_connect.len() - 1) {
             ans_score = cur_score;
@@ -261,14 +271,12 @@ fn main() {
             hc_score = cur_score;
             hc_cnn = cur_cnn;
             hc_x_move = cur_x_move;
-            hc_y_connect = cur_y_connect;
             non_zeros[moved_idx] = (next_i_u, next_j_u);
             same_score_streak = 0;
-        } else if cur_score > hc_score || (cur_score == hc_score && cur_y_connect.len() < hc_y_connect.len() - 1) {
+        } else if prob > rng.gen::<usize>() as f64 / std::usize::MAX as f64 {
             hc_score = cur_score;
             hc_cnn = cur_cnn;
             hc_x_move = cur_x_move;
-            hc_y_connect = cur_y_connect;
             non_zeros[moved_idx] = (next_i_u, next_j_u);
             same_score_streak = 0;
         } else {
