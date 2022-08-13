@@ -3,6 +3,9 @@ use proconio::marker::Chars;
 use std::collections::{HashSet, VecDeque};
 use std::fmt;
 
+// 種類数は小さめ
+const MAX_KIND_NUM: usize = 5;
+
 #[derive(Debug)]
 struct Move(usize, usize, usize, usize);
 
@@ -19,6 +22,59 @@ impl fmt::Display for Connect {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{} {} {} {}", self.0, self.1, self.2, self.3)
     }
+}
+
+// BFS して今のスコアを計算する
+fn calc_score(cnn: &[Vec<char>], conns: &[Connect]) -> i64 {
+    let mut ret = 0;
+    let n = cnn[0].len();
+
+    let mut edges = vec![vec![]; n * n];
+    for e in conns {
+        let v0 = e.0 * n + e.1;
+        let v1 = e.2 * n + e.3;
+        edges[v0].push((e.2, e.3));
+        edges[v1].push((e.0, e.1));
+    }
+
+    let mut visited = vec![vec![false; n]; n];
+    for i in 0..n {
+        for j in 0..n {
+            if visited[i][j] || cnn[i][j] == '0' {
+                continue;
+            }
+
+            let mut member_num = vec![0; MAX_KIND_NUM];
+            let mut que = VecDeque::new();
+            que.push_back((i, j));
+            visited[i][j] = true;
+            while let Some(cur) = que.pop_front() {
+                member_num[(cnn[cur.0][cur.1] as u8 - b'0') as usize] += 1;
+
+                for &v in &edges[cur.0 * n + cur.1] {
+                    if visited[v.0][v.1] {
+                        continue;
+                    }
+
+                    que.push_back((v.0, v.1));
+                    visited[v.0][v.1] = true;
+                }
+            }
+
+            for &m in &member_num {
+                if m > 1 {
+                    ret += (m * (m - 1)) / 2;
+                }
+            }
+            for m0 in 0..MAX_KIND_NUM {
+                for m1 in m0 + 1..MAX_KIND_NUM {
+                    ret -= member_num[m0] * member_num[m1];
+                }
+            }
+        }
+    }
+
+    ret
 }
 
 // 始点を固定して右/下方向を検索して同じやつが出る限り結ぶ
