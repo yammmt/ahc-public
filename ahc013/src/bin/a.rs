@@ -221,7 +221,8 @@ fn main() {
         // スコアの計算と比較
         let (cur_y_connect, _cable) = greedy_ans(max_k - cur_x_move.len(), &cur_cnn);
         let cur_score = calc_score(&cur_cnn, &cur_y_connect);
-        if cur_score > ans_score {
+        // 同点で接続数が減るなら良いスコア, 接続と移動は同コスト
+        if cur_score > ans_score || (cur_score == ans_score && cur_y_connect.len() < y_connect.len() - 1) {
             ans_score = cur_score;
             cnn = cur_cnn;
             x_move = cur_x_move;
