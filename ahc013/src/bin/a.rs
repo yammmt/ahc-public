@@ -11,6 +11,8 @@ const MAX_KIND_NUM: usize = 6;
 // 実行制限 3000ms に対し入出力の手間を省いてこれだけあれば余裕あるはず
 // 時間を 10 倍にするとスコアも 20% くらい伸びる
 const LONGEST_EXEC_TIME_MS: u64 = 2900;
+// これだけやって解が変わらなければ極値に陥ったとしてリセットする
+const EXTREMUM_STREAK_NUM: usize = 2000;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct Move(usize, usize, usize, usize);
@@ -179,6 +181,13 @@ fn main() {
     let mut ans_x_move: Vec<Move> = vec![];
     let mut ans_y_connect = greedy_ans(max_k, &cnn);
     let mut ans_score = calc_score(&cnn, &ans_y_connect);
+    let init_x_move = ans_x_move.clone();
+    let init_y_connect = ans_y_connect.clone();
+    let init_score = ans_score;
+    let mut hc_cnn = cnn.clone();
+    let mut hc_x_move = ans_x_move.clone();
+    let mut hc_y_connect = ans_y_connect.clone();
+    let mut hc_score = ans_score;
 
     // 山登り法: 適当に移動させてスコアが上がるようなら上げてやる
     // TODO: 無駄な移動を積み重ねてマージさせたほうが良くなる場合がある (焼きなまし)
@@ -193,9 +202,28 @@ fn main() {
         }
     }
     // let mut try_num = 0;
+    let mut same_score_streak = 0;
     while start_time.elapsed() < time_limit_ms {
         // try_num += 1;
-        let mut cur_cnn = cnn.clone();
+
+        if same_score_streak == EXTREMUM_STREAK_NUM {
+            // 一度下山する
+            hc_cnn = cnn.clone();
+            hc_x_move = init_x_move.clone();
+            hc_y_connect = init_y_connect.clone();
+            hc_score = init_score;
+
+            non_zeros.clear();
+            for i in 0..n {
+                for j in 0..n {
+                    if cnn[i][j] != '0' {
+                        non_zeros.push((i, j));
+                    }
+                }
+            }
+        }
+
+        let mut cur_cnn = hc_cnn.clone();
 
         // 任意の非 0 マスを任意の 0 マスに動かす
         // 制約より non_zeros は空でない
@@ -216,7 +244,7 @@ fn main() {
             continue;
         }
 
-        let mut cur_x_move = ans_x_move.clone();
+        let mut cur_x_move = hc_x_move.clone();
         cur_x_move.push(Move(move_from.0, move_from.1, next_i_u, next_j_u));
         cur_cnn[next_i_u][next_j_u] = cur_cnn[move_from.0][move_from.1];
         cur_cnn[move_from.0][move_from.1] = '0';
@@ -227,10 +255,24 @@ fn main() {
         // 同点で接続数が減るなら良いスコア, 接続と移動は同コスト
         if cur_score > ans_score || (cur_score == ans_score && cur_y_connect.len() < ans_y_connect.len() - 1) {
             ans_score = cur_score;
-            cnn = cur_cnn;
-            ans_x_move = cur_x_move;
-            ans_y_connect = cur_y_connect;
+            ans_x_move = cur_x_move.clone();
+            ans_y_connect = cur_y_connect.clone();
+
+            hc_score = cur_score;
+            hc_cnn = cur_cnn;
+            hc_x_move = cur_x_move;
+            hc_y_connect = cur_y_connect;
             non_zeros[moved_idx] = (next_i_u, next_j_u);
+            same_score_streak = 0;
+        } else if cur_score > hc_score || (cur_score == hc_score && cur_y_connect.len() < hc_y_connect.len() - 1) {
+            hc_score = cur_score;
+            hc_cnn = cur_cnn;
+            hc_x_move = cur_x_move;
+            hc_y_connect = cur_y_connect;
+            non_zeros[moved_idx] = (next_i_u, next_j_u);
+            same_score_streak = 0;
+        } else {
+            same_score_streak += 1;
         }
     }
 
