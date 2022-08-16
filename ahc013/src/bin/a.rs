@@ -11,8 +11,6 @@ const MAX_KIND_NUM: usize = 6;
 // 実行制限 3000ms に対し入出力の手間を省いてこれだけあれば余裕あるはず
 // 時間を 10 倍にするとスコアも 20% くらい伸びる
 const LONGEST_EXEC_TIME_MS: u64 = 2900;
-// これだけやって解が変わらなければ極値に陥ったとしてリセットする
-const EXTREMUM_STREAK_NUM: usize = 2000;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct Move(usize, usize, usize, usize);
@@ -192,6 +190,9 @@ fn main() {
     // 山登り法: 適当に移動させてスコアが上がるようなら上げてやる
     // TODO: 無駄な移動を積み重ねてマージさせたほうが良くなる場合がある (焼きなまし)
     let time_limit_ms = Duration::from_millis(LONGEST_EXEC_TIME_MS);
+    // これだけやって解が変わらなければ極値に陥ったとしてリセットする
+    // とりあえず全コンピュータの全方向にするがやり過ぎの気がする
+    let extremum_streak_num = k * 100 * 4;
     let mut rng = SmallRng::from_entropy();
     let mut non_zeros = vec![];
     for i in 0..n {
@@ -206,7 +207,7 @@ fn main() {
     while start_time.elapsed() < time_limit_ms {
         // try_num += 1;
 
-        if same_score_streak == EXTREMUM_STREAK_NUM {
+        if same_score_streak == extremum_streak_num {
             // 一度下山する
             hc_cnn = cnn.clone();
             hc_x_move = init_x_move.clone();
