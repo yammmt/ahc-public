@@ -174,11 +174,11 @@ fn main() {
     // N <= 48 より O(N^4) なら間に合うし結ぶ際には距離は不問なので右/下全部見ても平均的には良化しそう
 
     let max_k = 100 * k;
-    let mut x_move: Vec<Move> = vec![];
 
     // 初期状態
-    let mut y_connect = greedy_ans(max_k, &cnn);
-    let mut ans_score = calc_score(&cnn, &y_connect);
+    let mut ans_x_move: Vec<Move> = vec![];
+    let mut ans_y_connect = greedy_ans(max_k, &cnn);
+    let mut ans_score = calc_score(&cnn, &ans_y_connect);
 
     // 山登り法: 適当に移動させてスコアが上がるようなら上げてやる
     // TODO: 無駄な移動を積み重ねてマージさせたほうが良くなる場合がある (焼きなまし)
@@ -216,7 +216,7 @@ fn main() {
             continue;
         }
 
-        let mut cur_x_move = x_move.clone();
+        let mut cur_x_move = ans_x_move.clone();
         cur_x_move.push(Move(move_from.0, move_from.1, next_i_u, next_j_u));
         cur_cnn[next_i_u][next_j_u] = cur_cnn[move_from.0][move_from.1];
         cur_cnn[move_from.0][move_from.1] = '0';
@@ -225,22 +225,22 @@ fn main() {
         let cur_y_connect = greedy_ans(max_k - cur_x_move.len(), &cur_cnn);
         let cur_score = calc_score(&cur_cnn, &cur_y_connect);
         // 同点で接続数が減るなら良いスコア, 接続と移動は同コスト
-        if cur_score > ans_score || (cur_score == ans_score && cur_y_connect.len() < y_connect.len() - 1) {
+        if cur_score > ans_score || (cur_score == ans_score && cur_y_connect.len() < ans_y_connect.len() - 1) {
             ans_score = cur_score;
             cnn = cur_cnn;
-            x_move = cur_x_move;
-            y_connect = cur_y_connect;
+            ans_x_move = cur_x_move;
+            ans_y_connect = cur_y_connect;
             non_zeros[moved_idx] = (next_i_u, next_j_u);
         }
     }
 
     // println!("{}", try_num);
-    println!("{}", x_move.len());
-    for x in &x_move {
+    println!("{}", ans_x_move.len());
+    for x in &ans_x_move {
         println!("{}", x);
     }
-    println!("{}", y_connect.len());
-    for y in &y_connect {
+    println!("{}", ans_y_connect.len());
+    for y in &ans_y_connect {
         println!("{}", y);
     }
 }
