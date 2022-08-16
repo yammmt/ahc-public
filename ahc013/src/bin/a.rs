@@ -9,7 +9,8 @@ use std::time::{Duration, Instant};
 // 種類数は小さめ
 const MAX_KIND_NUM: usize = 6;
 // 実行制限 3000ms に対し入出力の手間を省いてこれだけあれば余裕あるはず
-const LONGEST_EXEC_TIME_MS: u64 = 2850;
+// 時間を 10 倍にするとスコアも 20% くらい伸びる
+const LONGEST_EXEC_TIME_MS: u64 = 2900;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct Move(usize, usize, usize, usize);
@@ -84,7 +85,7 @@ fn calc_score(cnn: &[Vec<char>], conns: &[Connect]) -> i64 {
 }
 
 // 始点を固定して右/下方向を検索して同じやつが出る限り結ぶ
-fn greedy_ans(available_k: usize, cnn: &[Vec<char>]) -> (Vec<Connect>, Vec<Vec<char>>) {
+fn greedy_ans(available_k: usize, cnn: &[Vec<char>]) -> Vec<Connect> {
     let n = cnn[0].len();
     let mut y_connect = vec![];
     let mut cable = vec![vec!['0'; n]; n];
@@ -104,7 +105,6 @@ fn greedy_ans(available_k: usize, cnn: &[Vec<char>]) -> (Vec<Connect>, Vec<Vec<c
 
                 y_connect.push(Connect(i, prev_j, i, j));
                 for jj in prev_j..j + 1 {
-                    assert_ne!(cnn[i][j], '0');
                     cable[i][jj] = cnn[i][j];
                 }
                 cur_k += 1;
@@ -151,7 +151,7 @@ fn greedy_ans(available_k: usize, cnn: &[Vec<char>]) -> (Vec<Connect>, Vec<Vec<c
         }
     }
 
-    (y_connect, cable)
+    y_connect
 }
 
 fn main() {
@@ -177,27 +177,30 @@ fn main() {
     let mut x_move: Vec<Move> = vec![];
 
     // 初期状態
-    let (mut y_connect, _cable) = greedy_ans(max_k, &cnn);
+    let mut y_connect = greedy_ans(max_k, &cnn);
     let mut ans_score = calc_score(&cnn, &y_connect);
 
     // 山登り法: 適当に移動させてスコアが上がるようなら上げてやる
     // TODO: 無駄な移動を積み重ねてマージさせたほうが良くなる場合がある (焼きなまし)
     let time_limit_ms = Duration::from_millis(LONGEST_EXEC_TIME_MS);
     let mut rng = SmallRng::from_entropy();
-    while start_time.elapsed() < time_limit_ms {
-        let mut cur_cnn = cnn.clone();
-        let mut non_zeros: Vec<(usize, usize)> = vec![];
-        for i in 0..n {
-            for j in 0..n {
-                if cur_cnn[i][j] != '0' {
-                    non_zeros.push((i, j));
-                }
+    let mut non_zeros = vec![];
+    for i in 0..n {
+        for j in 0..n {
+            if cnn[i][j] != '0' {
+                non_zeros.push((i, j));
             }
         }
+    }
+    // let mut try_num = 0;
+    while start_time.elapsed() < time_limit_ms {
+        // try_num += 1;
+        let mut cur_cnn = cnn.clone();
 
         // 任意の非 0 マスを任意の 0 マスに動かす
         // 制約より non_zeros は空でない
-        let move_from: (usize, usize) = non_zeros[rng.gen::<usize>() % non_zeros.len()];
+        let moved_idx = rng.gen::<usize>() % non_zeros.len();
+        let move_from: (usize, usize) = non_zeros[moved_idx];
         let cur_dir: (isize, isize) = dir[rng.gen::<usize>() % dir.len()];
         let next_i_i = move_from.0 as isize + cur_dir.0;
         let next_j_i = move_from.1 as isize + cur_dir.1;
@@ -219,7 +222,7 @@ fn main() {
         cur_cnn[move_from.0][move_from.1] = '0';
 
         // スコアの計算と比較
-        let (cur_y_connect, _cable) = greedy_ans(max_k - cur_x_move.len(), &cur_cnn);
+        let cur_y_connect = greedy_ans(max_k - cur_x_move.len(), &cur_cnn);
         let cur_score = calc_score(&cur_cnn, &cur_y_connect);
         // 同点で接続数が減るなら良いスコア, 接続と移動は同コスト
         if cur_score > ans_score || (cur_score == ans_score && cur_y_connect.len() < y_connect.len() - 1) {
@@ -227,9 +230,11 @@ fn main() {
             cnn = cur_cnn;
             x_move = cur_x_move;
             y_connect = cur_y_connect;
+            non_zeros[moved_idx] = (next_i_u, next_j_u);
         }
     }
 
+    // println!("{}", try_num);
     println!("{}", x_move.len());
     for x in &x_move {
         println!("{}", x);
