@@ -180,11 +180,11 @@ fn main() {
     let mut ans_y_connect = greedy_ans(max_k, &cnn);
     let mut ans_score = calc_score(&cnn, &ans_y_connect);
     let init_x_move = ans_x_move.clone();
-    let init_y_connect = ans_y_connect.clone();
+    let init_y_connect_len = ans_y_connect.len();
     let init_score = ans_score;
     let mut hc_cnn = cnn.clone();
     let mut hc_x_move = ans_x_move.clone();
-    let mut hc_y_connect = ans_y_connect.clone();
+    let mut hc_y_connect_len = ans_y_connect.len();
     let mut hc_score = ans_score;
 
     // 山登り法: 適当に移動させてスコアが上がるようなら上げてやる
@@ -211,7 +211,7 @@ fn main() {
             // 一度下山する
             hc_cnn = cnn.clone();
             hc_x_move = init_x_move.clone();
-            hc_y_connect = init_y_connect.clone();
+            hc_y_connect_len = init_y_connect_len;
             hc_score = init_score;
 
             non_zeros.clear();
@@ -262,14 +262,14 @@ fn main() {
             hc_score = cur_score;
             hc_cnn = cur_cnn;
             hc_x_move = cur_x_move;
-            hc_y_connect = cur_y_connect;
+            hc_y_connect_len = cur_y_connect.len();
             non_zeros[moved_idx] = (next_i_u, next_j_u);
             same_score_streak = 0;
-        } else if cur_score > hc_score || (cur_score == hc_score && cur_y_connect.len() < hc_y_connect.len() - 1) {
+        } else if cur_score > hc_score || (cur_score == hc_score && cur_y_connect.len() < hc_y_connect_len - 1) {
             hc_score = cur_score;
             hc_cnn = cur_cnn;
             hc_x_move = cur_x_move;
-            hc_y_connect = cur_y_connect;
+            hc_y_connect_len = cur_y_connect.len();
             non_zeros[moved_idx] = (next_i_u, next_j_u);
             same_score_streak = 0;
         } else {
