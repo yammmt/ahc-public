@@ -1,0 +1,15 @@
+[package]
+name = "ahc029"
+version = "0.1.0"
+edition = "2021"
+
+# dependencies added to new project
+[dependencies]
+itertools = "=0.11.0"
+petgraph = "=0.6.3"
+permutohedron = "=0.2.4"
+proconio = { version = "=0.4.5", features = ["derive"] }
+
+[profile.release]
+lto = true
+panic = 'abort'
