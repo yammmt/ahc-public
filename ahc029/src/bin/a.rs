@@ -4,8 +4,8 @@ use std::io::{stdout, Write};
 // enum だと入力との変換がめんどそうだから妥協
 const NORMAL_WORK: usize = 0;
 const SUPER_WORK: usize = 1;
-const CANCEL: usize = 2;
-const CHANGE_ALL: usize = 3;
+const CANCEL_ONE: usize = 2;
+const CANCEL_ALL: usize = 3;
 const INCREASE: usize = 4;
 
 fn main() {
@@ -24,6 +24,7 @@ fn main() {
 
     // 勘
     let use_increase_turn_last = t * 9 / 10;
+    let use_cancel_turn_last = t * 95 / 100;
 
     // とりあえず貪欲に, 効率 (価値/残務量) 最大のものに挑む, を繰り返す
     // 増資があるなら使う. 残務量と労力を同じ数倍するわけで, ターン消費に対する獲得価値は上がるはず
@@ -57,6 +58,7 @@ fn main() {
             }
         };
         let mut work_cards = vec![];
+        let mut cancel_cards = vec![];
         let mut increase_cards = vec![];
         for (i, (t, w)) in twn.iter().enumerate() {
             match *t {
@@ -68,6 +70,13 @@ fn main() {
                     let cur = work_cost(hvm[wi_do].0, *w);
                     work_cards.push((cur, 0, i))
                 },
+                CANCEL_ONE => {
+                    cancel_cards.push(i);
+                }
+                CANCEL_ALL => {
+                    // /2: 勘
+                    cancel_cards.push(i);
+                }
                 INCREASE => {
                     increase_cards.push(i);
                 }
@@ -80,13 +89,25 @@ fn main() {
             println!("# increase");
             card_i_used = increase_cards[0];
             println!("{card_i_used} 0");
+        } else if work_efficiency[0].0 < 1.0 && !cancel_cards.is_empty() {
+            println!("# cancel");
+            card_i_used = cancel_cards[0];
+            println!(
+                "{card_i_used} {}",
+                if twn[cancel_cards[0]].1 == 0 {
+                    0
+                } else {
+                    wi_cancel
+                }
+            );
         } else if work_cards.is_empty() {
-            // 労働カードと増資カードが手元にないので適当に流す
+            // 労働カードと増資カードとキャンセルカードが手元にないので適当に流す
+            // そんなことある？
             // 現在最高効率の仕事を捨てるのはもったいないので, 最悪効率の仕事を捨てられるなら捨てる
             let mut could_cancel = false;
             for (i, (t, _w)) in twn.iter().enumerate() {
                 match *t {
-                    CANCEL => {
+                    CANCEL_ONE => {
                         println!("# cancel");
                         card_i_used = i;
                         println!("{i} {wi_cancel}");
@@ -124,11 +145,23 @@ fn main() {
         }
         hvm = hvm_nxt;
 
-        // 取得方針
+        // プロジェクトが全部非効率か？
+        let mut prj_all_bad = true;
+        for (h, v) in &hvm {
+            if v > h {
+                prj_all_bad = false;
+                break;
+            }
+        }
+
+        // 取得方針はこの順
         // - 増資があれば取る
+        // - 今のプロジェクトがすべて悪効率ならキャンセルを取る
+        //    - 全キャンセル > 個別キャンセル
         // - 労働力 >= 費用の札があれば取る
-        // - 今のプロジェクトが悪効率ならキャンセル取りたいけど
+        //    - 必ず消費 0 労力 1 が配られる
         let mut increases = vec![];
+        let mut cancels = vec![];
         let mut works = vec![];
         for (i, (t, w, p)) in twpk_nxt.iter().enumerate() {
             match *t {
@@ -142,22 +175,33 @@ fn main() {
                         works.push((w * n - p, 0, i));
                     }
                 }
+                CANCEL_ONE => {
+                    cancels.push((*w, 1, i));
+                }
+                CANCEL_ALL => {
+                    // /2: 勘
+                    cancels.push((*w / 2, 0, i));
+                }
                 INCREASE => {
                     if *p <= money {
                         increases.push((p, i));
                     }
                 }
-                _ => {},
+                _ => {}
             }
         }
         // 価格昇順
         increases.sort_unstable();
+        // 費用安い順
+        cancels.sort_unstable();
         // w-p 降順
         works.sort_unstable();
         works.reverse();
 
         let card_i_get = if ti <= use_increase_turn_last && !increases.is_empty() {
             increases[0].1
+        } else if ti <= use_cancel_turn_last && !cancels.is_empty() && prj_all_bad {
+            cancels[0].2
         } else {
             // "0" は労働力 1 という最弱手であり避けられるなら避けたい
             works[0].2
