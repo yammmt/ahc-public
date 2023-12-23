@@ -186,11 +186,15 @@ fn main() {
                     }
                 }
                 CANCEL_ONE => {
-                    cancels.push((*w, 1, i));
+                    if *p <= money {
+                        cancels.push((*w, 1, i));
+                    }
                 }
                 CANCEL_ALL => {
-                    // /2: 勘
-                    cancels.push((*w / 2, 0, i));
+                    if *p <= money {
+                        // /2: 勘
+                        cancels.push((*w / 2, 0, i));
+                    }
                 }
                 INCREASE => {
                     if *p <= money {
