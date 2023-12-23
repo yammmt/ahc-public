@@ -22,13 +22,17 @@ fn main() {
         mut hvm: [(usize, usize); m],
     }
 
-    // とりあえず貪欲に, 効率 (価値/残務量) 最大のものに挑む, を繰り返す
-    // TODO: 全力労働で潰せるなら潰す, そうでなければ通常労働のうちオーバーキルしない程度のもの？
-    // 増資はとっとと使ったほうがよい？残務量と労力を同じ数倍するわけで,
-    // ターン消費に対する獲得価値は上がるはず
+    // 勘
+    let use_increase_turn_last = t * 9 / 10;
 
-    for _i in 0..t {
-        // println!("turn: {i}");
+    // とりあえず貪欲に, 効率 (価値/残務量) 最大のものに挑む, を繰り返す
+    // 増資があるなら使う. 残務量と労力を同じ数倍するわけで, ターン消費に対する獲得価値は上がるはず
+    // TODO: 全力労働で潰せるなら潰す, そうでなければ通常労働のうちオーバーキルしない程度のもの？
+    // TODO: 価値/労働力 < 1 はとっとと捨てたほうがよさそう, 期待値が 1 になりそう
+    // FIXME: 1 ケース RE
+
+    for ti in 0..t {
+        println!("# turn: {ti}");
 
         // 効率順
         // (価値/残務量, i)
@@ -54,6 +58,7 @@ fn main() {
             }
         };
         let mut work_cards = vec![];
+        let mut increase_cards = vec![];
         for (i, (t, w)) in twn.iter().enumerate() {
             match *t {
                 NORMAL_WORK => {
@@ -63,19 +68,29 @@ fn main() {
                 SUPER_WORK => {
                     let cur = work_cost(hvm[wi_do].0, *w);
                     work_cards.push((cur, 0, i))
+                },
+                INCREASE => {
+                    increase_cards.push(i);
                 }
                 _ => {},
             }
         }
-        if work_cards.is_empty() {
-            // TODO: 労働カードが手元にないので適当に流す
-            // 常に 0 を選択している以上は初回以外ではここを通り得ない
+
+        let mut card_i_used = 0;
+        if !increase_cards.is_empty() {
+            println!("# increase");
+            card_i_used = increase_cards[0];
+            println!("{card_i_used} 0");
+        } else if work_cards.is_empty() {
+            // 労働カードと増資カードが手元にないので適当に流す
             // 現在最高効率の仕事を捨てるのはもったいないので, 最悪効率の仕事を捨てられるなら捨てる
             let mut could_cancel = false;
             for (i, (t, _w)) in twn.iter().enumerate() {
                 match *t {
                     CANCEL => {
-                        println!("{i} {wi_cancel}");
+                        println!("# cancel");
+                        card_i_used = wi_cancel;
+                        println!("{i} {card_i_used}");
                         could_cancel = true;
                         break;
                     },
@@ -84,12 +99,15 @@ fn main() {
             }
             if !could_cancel {
                 // 祈る
+                println!("# pray");
+                // card_i_used = 0;
                 println!("0 0");
             }
         } else {
+            println!("# work");
+            card_i_used = work_cards[0].2;
             println!(
-                "{} {}",
-                work_cards[0].2,
+                "{card_i_used} {}",
                 if work_cards[0].1 == 0 {
                     0
                 } else {
@@ -102,12 +120,31 @@ fn main() {
         input! {
             from &mut source,
             hvm_nxt: [(usize, usize); m],
-            _money: usize,
-            _twpk_nxt: [(usize, usize, usize); k],
+            money: usize,
+            twpk_nxt: [(usize, usize, usize); k],
         }
         hvm = hvm_nxt;
+        let mut increases = vec![];
+        for (i, (t, _w, p)) in twpk_nxt.iter().enumerate() {
+            match *t {
+                INCREASE => {
+                    if *p <= money {
+                        increases.push((p, i));
+                    }
+                }
+                _ => {},
+            }
+        }
+        increases.sort_unstable();
+        let card_i_get = if ti <= use_increase_turn_last && !increases.is_empty() {
+            increases[0].1
+        } else {
+            // TODO: "0" は労働力 1 という最弱手
+            0
+        };
+
+        println!("{card_i_get}");
+        twn[card_i_used] = (twpk_nxt[card_i_get].0, twpk_nxt[card_i_get].1);
         // println!("{:?}", twpk);
-        // TODO: "0" は労働力 1 という最弱手
-        println!("0");
     }
 }
