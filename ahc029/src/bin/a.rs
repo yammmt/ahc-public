@@ -50,7 +50,7 @@ fn main() {
         });
         work_efficiency.reverse();
         let wi_do = work_efficiency[0].2;
-        let wi_cancel = work_efficiency[m - 1].1;
+        let wi_cancel = work_efficiency[m - 1].2;
 
         // (最高効率の残務量 - w に重みをつけたもの, 全力？, i)
         // 重み: 絶対値を取った値に対し, 絶対値を取る前の値が非負であれば x2 する
