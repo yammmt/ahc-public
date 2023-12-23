@@ -123,9 +123,25 @@ fn main() {
             twpk_nxt: [(usize, usize, usize); k],
         }
         hvm = hvm_nxt;
+
+        // 取得方針
+        // - 増資があれば取る
+        // - 労働力 >= 費用の札があれば取る
+        // - 今のプロジェクトが悪効率ならキャンセル取りたいけど
         let mut increases = vec![];
-        for (i, (t, _w, p)) in twpk_nxt.iter().enumerate() {
+        let mut works = vec![];
+        for (i, (t, w, p)) in twpk_nxt.iter().enumerate() {
             match *t {
+                NORMAL_WORK => {
+                    if *p <= money && w >= p {
+                        works.push((w - p, 1, i));
+                    }
+                },
+                SUPER_WORK => {
+                    if *p <= money && w * n >= *p {
+                        works.push((w * n - p, 0, i));
+                    }
+                }
                 INCREASE => {
                     if *p <= money {
                         increases.push((p, i));
@@ -134,12 +150,17 @@ fn main() {
                 _ => {},
             }
         }
+        // 価格昇順
         increases.sort_unstable();
+        // w-p 降順
+        works.sort_unstable();
+        works.reverse();
+
         let card_i_get = if ti <= use_increase_turn_last && !increases.is_empty() {
             increases[0].1
         } else {
-            // TODO: "0" は労働力 1 という最弱手
-            0
+            // "0" は労働力 1 という最弱手であり避けられるなら避けたい
+            works[0].2
         };
 
         println!("{card_i_get}");
