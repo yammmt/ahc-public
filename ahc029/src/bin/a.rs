@@ -29,22 +29,27 @@ fn main() {
     // とりあえず貪欲に, 効率 (価値/残務量) 最大のものに挑む, を繰り返す
     // 増資があるなら使う. 残務量と労力を同じ数倍するわけで, ターン消費に対する獲得価値は上がるはず
     // TODO: 全力労働で潰せるなら潰す, そうでなければ通常労働のうちオーバーキルしない程度のもの？
-    // TODO: 価値/労働力 < 1 はとっとと捨てたほうがよさそう, 期待値が 1 になりそう
+    // FIXME: WA x 18 だし 0003 で score = 0 になる
 
     for ti in 0..t {
         println!("# turn: {ti}");
 
         // 効率順
-        // (価値/残務量, i)
+        // (価値/残務量, 残務量, i)
         let mut work_efficiency = vec![];
         for (i, (h, v)) in hvm.iter().enumerate() {
-            work_efficiency.push((*v as f32 / *h as f32, i));
+            work_efficiency.push((*v as f32 / *h as f32, *h, i));
         }
+        // 効率が変わらなければ, 残務量が小さいほどよい仕事
         work_efficiency.sort_unstable_by(|a, b| {
-            a.0.partial_cmp(&b.0).unwrap()
+            if a.0 != b.0 {
+                a.0.partial_cmp(&b.0).unwrap()
+            } else {
+                a.1.cmp(&b.1)
+            }
         });
         work_efficiency.reverse();
-        let wi_do = work_efficiency[0].1;
+        let wi_do = work_efficiency[0].2;
         let wi_cancel = work_efficiency[m - 1].1;
 
         // (最高効率の残務量 - w に重みをつけたもの, 全力？, i)
