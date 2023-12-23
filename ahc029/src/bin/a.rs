@@ -8,6 +8,8 @@ const CANCEL_ONE: usize = 2;
 const CANCEL_ALL: usize = 3;
 const INCREASE: usize = 4;
 
+const INCREASE_USE_MAX: usize = 20;
+
 fn main() {
     let stdin = std::io::stdin();
     let mut source = LineSource::new(stdin.lock());
@@ -32,6 +34,7 @@ fn main() {
     // 増資があるなら使う. 残務量と労力を同じ数倍するわけで, ターン消費に対する獲得価値は上がるはず
     // TODO: 全力労働で潰せるなら潰す, そうでなければ通常労働のうちオーバーキルしない程度のもの？
 
+    let mut increase_use_cnt = 0;
     for ti in 0..t {
         println!("# turn: {ti}");
 
@@ -91,9 +94,10 @@ fn main() {
         }
 
         let mut card_i_used = 0;
-        if !increase_cards.is_empty() {
+        if !increase_cards.is_empty() && increase_use_cnt < INCREASE_USE_MAX {
             println!("# increase");
             card_i_used = increase_cards[0];
+            increase_use_cnt += 1;
             println!("{card_i_used} 0");
         } else if work_efficiency[0].0 < 1.0 && !cancel_cards.is_empty() {
             println!("# cancel");
@@ -204,7 +208,10 @@ fn main() {
         works.sort_unstable();
         works.reverse();
 
-        let card_i_get = if ti <= use_increase_turn_last && !increases.is_empty() {
+        let card_i_get = if ti <= use_increase_turn_last
+            && !increases.is_empty()
+            && increase_use_cnt < INCREASE_USE_MAX
+        {
             increases[0].1
         } else if ti <= use_cancel_turn_last && !cancels.is_empty() && prj_all_bad {
             cancels[0].2
