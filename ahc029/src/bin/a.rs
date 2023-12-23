@@ -29,7 +29,6 @@ fn main() {
     // 増資があるなら使う. 残務量と労力を同じ数倍するわけで, ターン消費に対する獲得価値は上がるはず
     // TODO: 全力労働で潰せるなら潰す, そうでなければ通常労働のうちオーバーキルしない程度のもの？
     // TODO: 価値/労働力 < 1 はとっとと捨てたほうがよさそう, 期待値が 1 になりそう
-    // FIXME: 1 ケース RE
 
     for ti in 0..t {
         println!("# turn: {ti}");
@@ -89,8 +88,8 @@ fn main() {
                 match *t {
                     CANCEL => {
                         println!("# cancel");
-                        card_i_used = wi_cancel;
-                        println!("{i} {card_i_used}");
+                        card_i_used = i;
+                        println!("{i} {wi_cancel}");
                         could_cancel = true;
                         break;
                     },
