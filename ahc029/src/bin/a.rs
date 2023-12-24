@@ -6,9 +6,9 @@ const NORMAL_WORK: usize = 0;
 const SUPER_WORK: usize = 1;
 const CANCEL_ONE: usize = 2;
 const CANCEL_ALL: usize = 3;
-const INCREASE: usize = 4;
+const BOOST: usize = 4;
 
-const INCREASE_USE_MAX: usize = 20;
+const BOOST_USE_MAX: usize = 20;
 
 fn main() {
     let stdin = std::io::stdin();
@@ -27,14 +27,14 @@ fn main() {
     // 勘
     // そもそも一切のリスクを取らないほうが良いタイミングがありそうなもの
     // 手札を先読みできないので貪欲で回す方針は合理的なはず
-    let use_increase_turn_last = t * 9 / 10;
+    let use_boost_turn_last = t * 9 / 10;
     let use_cancel_turn_last = t * 80 / 100;
 
     // とりあえず貪欲に, 効率 (価値/残務量) 最大のものに挑む, を繰り返す
     // 増資があるなら使う. 残務量と労力を同じ数倍するわけで, ターン消費に対する獲得価値は上がるはず
     // TODO: 全力労働で潰せるなら潰す, そうでなければ通常労働のうちオーバーキルしない程度のもの？
 
-    let mut increase_use_cnt = 0;
+    let mut boost_use_cnt = 0;
     for ti in 0..t {
         println!("# turn: {ti}");
 
@@ -68,7 +68,7 @@ fn main() {
         };
         let mut work_cards = vec![];
         let mut cancel_cards = vec![];
-        let mut increase_cards = vec![];
+        let mut boost_cards = vec![];
         for (i, (t, w)) in twn.iter().enumerate() {
             match *t {
                 NORMAL_WORK => {
@@ -86,18 +86,18 @@ fn main() {
                     // /2: 勘
                     cancel_cards.push(i);
                 }
-                INCREASE => {
-                    increase_cards.push(i);
+                BOOST => {
+                    boost_cards.push(i);
                 }
                 _ => {},
             }
         }
 
         let mut card_i_used = 0;
-        if !increase_cards.is_empty() && increase_use_cnt < INCREASE_USE_MAX {
-            println!("# increase");
-            card_i_used = increase_cards[0];
-            increase_use_cnt += 1;
+        if !boost_cards.is_empty() && boost_use_cnt < BOOST_USE_MAX {
+            println!("# boost");
+            card_i_used = boost_cards[0];
+            boost_use_cnt += 1;
             println!("{card_i_used} 0");
         } else if work_efficiency[0].0 < 1.0 && !cancel_cards.is_empty() {
             println!("# cancel");
@@ -170,7 +170,7 @@ fn main() {
         //    - 全キャンセル > 個別キャンセル
         // - 労働力 >= 費用の札があれば取る
         //    - 必ず消費 0 労力 1 が配られる
-        let mut increases = vec![];
+        let mut boosts = vec![];
         let mut cancels = vec![];
         let mut works = vec![];
         for (i, (t, w, p)) in twpk_nxt.iter().enumerate() {
@@ -196,27 +196,27 @@ fn main() {
                         cancels.push((*w / 2, 0, i));
                     }
                 }
-                INCREASE => {
+                BOOST => {
                     if *p <= money {
-                        increases.push((p, i));
+                        boosts.push((p, i));
                     }
                 }
                 _ => {}
             }
         }
         // 価格昇順
-        increases.sort_unstable();
+        boosts.sort_unstable();
         // 費用安い順
         cancels.sort_unstable();
         // w-p 降順
         works.sort_unstable();
         works.reverse();
 
-        let card_i_get = if ti <= use_increase_turn_last
-            && !increases.is_empty()
-            && increase_use_cnt < INCREASE_USE_MAX
+        let card_i_get = if ti <= use_boost_turn_last
+            && !boosts.is_empty()
+            && boost_use_cnt < BOOST_USE_MAX
         {
-            increases[0].1
+            boosts[0].1
         } else if ti <= use_cancel_turn_last && !cancels.is_empty() && prj_all_bad {
             cancels[0].2
         } else {
