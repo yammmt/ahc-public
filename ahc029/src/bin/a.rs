@@ -269,7 +269,10 @@ fn main() {
         works.sort_unstable();
         works.reverse();
 
-        let card_i_get = if ti <= use_boost_turn_last
+        let card_i_get = if ti == t - 1 {
+            // 最終ターンにコストを払わない
+            0
+        } else if ti <= use_boost_turn_last
             && !boosts.is_empty()
             && boost_use_cnt < BOOST_USE_MAX
         {
