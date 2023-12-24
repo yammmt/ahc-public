@@ -85,6 +85,7 @@ fn main() {
     // 勘
     // そもそも一切のリスクを取らないほうが良いタイミングがありそうなもの
     // 手札を先読みできないので貪欲で回す方針は合理的なはず
+    let use_cost_turn_last = t * 95 / 100;
     let use_boost_turn_last = t * 9 / 10;
     let use_cancel_turn_last = t * 80 / 100;
 
@@ -269,8 +270,8 @@ fn main() {
         works.sort_unstable();
         works.reverse();
 
-        let card_i_get = if ti == t - 1 {
-            // 最終ターンにコストを払わない
+        let card_i_get = if ti > use_cost_turn_last {
+            // 最終ターン付近にコストを払わない
             0
         } else if ti <= use_boost_turn_last
             && !boosts.is_empty()
