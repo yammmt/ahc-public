@@ -1,4 +1,5 @@
 use proconio::{input, source::line::LineSource};
+use std::cmp::Ordering;
 use std::io::{stdout, Write};
 
 // enum だと入力との変換がめんどそうだから妥協
@@ -10,9 +11,62 @@ const BOOST: usize = 4;
 
 const BOOST_USE_MAX: usize = 20;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Project {
+    h: usize,
+    v: usize,
+}
+
+impl Project {
+    fn is_good(&self, boost_use_num: usize) -> bool {
+        let done_soon = {
+            self.h < 2usize.pow(boost_use_num as u32)
+        };
+        let good_efficiency = {
+            self.v as f32 / self.h as f32 >= 1.0
+        };
+
+        // TODO: comment-out
+        // done_soon || good_efficiency
+        good_efficiency
+    }
+
+    fn efficiency(&self) -> f32 {
+        // TODO: よい感じの効率指標を作るとよさそう
+        self.v as f32 / self.h as f32
+    }
+}
+
+impl Ord for Project {
+    fn cmp(&self, other: &Self) -> Ordering {
+        let a = self.efficiency();
+        let b = other.efficiency();
+        if a != b {
+            b.partial_cmp(&a).unwrap()
+        } else {
+            self.h.cmp(&other.h)
+        }
+    }
+}
+
+impl PartialOrd for Project {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 fn main() {
     let stdin = std::io::stdin();
     let mut source = LineSource::new(stdin.lock());
+
+    let is_all_bad_project = |vp: &Vec<Project>, boost_num: usize| {
+        for p in vp {
+            if p.is_good(boost_num) {
+                return false;
+            }
+        }
+        true
+    };
 
     input! {
         from &mut source,
@@ -21,7 +75,11 @@ fn main() {
         k: usize,
         t: usize,
         mut twn: [(usize, usize); n],
-        mut hvm: [(usize, usize); m],
+        hvm: [(usize, usize); m],
+    }
+    let mut projects = Vec::with_capacity(m);
+    for (h, v) in hvm {
+        projects.push(Project { h, v });
     }
 
     // 勘
@@ -38,27 +96,19 @@ fn main() {
     for ti in 0..t {
         println!("# turn: {ti}");
 
-        // 効率順
-        // (価値/残務量, 残務量, i)
-        let mut work_efficiency = vec![];
-        for (i, (h, v)) in hvm.iter().enumerate() {
-            work_efficiency.push((*v as f32 / *h as f32, *h, i));
+        let mut vp = Vec::with_capacity(m);
+        for (i, p) in projects.iter().enumerate() {
+            vp.push((*p, i));
         }
-        // 効率が変わらなければ, 残務量が小さいほどよい仕事
-        work_efficiency.sort_unstable_by(|a, b| {
-            if a.0 != b.0 {
-                a.0.partial_cmp(&b.0).unwrap()
-            } else {
-                a.1.cmp(&b.1)
-            }
-        });
-        work_efficiency.reverse();
-        let wi_do = work_efficiency[0].2;
-        let wi_cancel = work_efficiency[m - 1].2;
+        vp.sort_unstable();
+        // println!("# vp: {:?}", vp);
+        let wi_do = vp[0].1;
+        let wi_cancel = vp[m - 1].1;
 
         // (最高効率の残務量 - w に重みをつけたもの, 全力？, i)
         // 重み: 絶対値を取った値に対し, 絶対値を取る前の値が非負であれば x2 する
         //      過労働をちょっと防ぐ
+        // TODO: 過労働してでも先に終えたほうがよさそう
         let work_cost = |w_target, w_cur| {
             if w_target >= w_cur {
                 (w_target - w_cur) * 2
@@ -72,11 +122,11 @@ fn main() {
         for (i, (t, w)) in twn.iter().enumerate() {
             match *t {
                 NORMAL_WORK => {
-                    let cur = work_cost(hvm[wi_do].0, *w);
+                    let cur = work_cost(projects[wi_do].h, *w);
                     work_cards.push((cur, 1, i))
                 },
                 SUPER_WORK => {
-                    let cur = work_cost(hvm[wi_do].0, *w);
+                    let cur = work_cost(projects[wi_do].h, *w);
                     work_cards.push((cur, 0, i))
                 },
                 CANCEL_ONE => {
@@ -99,7 +149,7 @@ fn main() {
             card_i_used = boost_cards[0];
             boost_use_cnt += 1;
             println!("{card_i_used} 0");
-        } else if work_efficiency[0].0 < 1.0 && !cancel_cards.is_empty() {
+        } else if !projects[wi_do].is_good(boost_use_cnt) && !cancel_cards.is_empty() {
             println!("# cancel");
             card_i_used = cancel_cards[0];
             println!(
@@ -147,22 +197,29 @@ fn main() {
         }
         stdout().flush().unwrap();
 
+        // カード選択部
+
         input! {
             from &mut source,
             hvm_nxt: [(usize, usize); m],
             money: usize,
             twpk_nxt: [(usize, usize, usize); k],
         }
-        hvm = hvm_nxt;
-
         // プロジェクトが全部非効率か？
         let mut prj_all_bad = true;
-        for (h, v) in &hvm {
+        for (h, v) in &hvm_nxt {
             if v > h {
                 prj_all_bad = false;
                 break;
             }
         }
+
+        // いちいちインスタンス作り直すけれど, 乱択してないので時間には余裕がある
+        let mut projects_nxt = Vec::with_capacity(m);
+        for (h, v) in hvm_nxt {
+            projects_nxt.push(Project {h, v});
+        }
+        projects = projects_nxt;
 
         // 取得方針はこの順
         // - 増資があれば取る
