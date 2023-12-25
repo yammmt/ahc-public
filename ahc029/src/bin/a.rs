@@ -1,5 +1,5 @@
 use proconio::{input, source::line::LineSource};
-use std::cmp::Ordering;
+use std::cmp::{Ordering, Reverse};
 use std::io::{stdout, Write};
 
 // enum だと入力との変換がめんどそうだから妥協
@@ -23,17 +23,15 @@ impl Project {
             self.h < 2usize.pow(boost_use_num as u32)
         };
         let good_efficiency = {
-            self.v as f32 / self.h as f32 >= 1.0
+            self.v > self.h
         };
 
-        // TODO: comment-out
-        // done_soon || good_efficiency
-        good_efficiency
+        done_soon || good_efficiency
     }
 
-    fn efficiency(&self) -> f32 {
+    fn efficiency(&self) -> isize {
         // TODO: よい感じの効率指標を作るとよさそう
-        self.v as f32 / self.h as f32
+        self.v as isize - self.h as isize
     }
 }
 
@@ -42,6 +40,7 @@ impl Ord for Project {
         let a = self.efficiency();
         let b = other.efficiency();
         if a != b {
+            // v-h 降順
             b.partial_cmp(&a).unwrap()
         } else {
             self.h.cmp(&other.h)
@@ -58,15 +57,6 @@ impl PartialOrd for Project {
 fn main() {
     let stdin = std::io::stdin();
     let mut source = LineSource::new(stdin.lock());
-
-    let is_all_bad_project = |vp: &Vec<Project>, boost_num: usize| {
-        for p in vp {
-            if p.is_good(boost_num) {
-                return false;
-            }
-        }
-        true
-    };
 
     input! {
         from &mut source,
@@ -89,53 +79,66 @@ fn main() {
     let use_boost_turn_last = t * 9 / 10;
     let use_cancel_turn_last = t * 80 / 100;
 
-    // とりあえず貪欲に, 効率 (価値/残務量) 最大のものに挑む, を繰り返す
-    // 増資があるなら使う. 残務量と労力を同じ数倍するわけで, ターン消費に対する獲得価値は上がるはず
-    // TODO: 全力労働で潰せるなら潰す, そうでなければ通常労働のうちオーバーキルしない程度のもの？
+    // 平均値で考えると, 増資がなければ t=0 は平均で労働力コストともに 25
+    // プロジェクトは残務量価値ともに 32 となる
+    // 所持金 50 として, 労働 1 を 32 回続けると 32 ターン後に所持金 82
+    // 初手で (work, cost) = (25, 25) の労働を取り残り労働 1 を 7 回続けると 8 ターン後に所持金 57
+    // 前者は 32 ターンで価値 32, 後者は 8 ターンで価値 7 を取っている,
+    // とすると後者が悪効率となる
+    // つまりは終了間際を除き, 労働札は高効率札以外は取らない方がよい？
+    // 上の例では (26, 25) 以上であれば札を取ることで効率が上がる
+    // でも早期にはとりあえず所持金を得ることで選択肢が増えるわけで
 
     let mut boost_use_cnt = 0;
+    let sort_prj_w_idx = |vp: &[Project]| {
+        let mut ret = Vec::with_capacity(m);
+        for (i, &vp) in vp.iter().enumerate() {
+            ret.push((vp, i));
+        }
+        ret.sort_unstable();
+        ret
+    };
+    let mut vp = sort_prj_w_idx(&projects);
     for ti in 0..t {
         println!("# turn: {ti}");
 
-        let mut vp = Vec::with_capacity(m);
-        for (i, p) in projects.iter().enumerate() {
-            vp.push((*p, i));
-        }
-        vp.sort_unstable();
         // println!("# vp: {:?}", vp);
         let wi_do = vp[0].1;
         let wi_cancel = vp[m - 1].1;
 
-        // (最高効率の残務量 - w に重みをつけたもの, 全力？, i)
-        // 重み: 絶対値を取った値に対し, 絶対値を取る前の値が非負であれば x2 する
-        //      過労働をちょっと防ぐ
-        // TODO: 過労働してでも先に終えたほうがよさそう
+        // TODO: 過労働してでも先に終えたほうがよい？
+        // work_cost: 降順によい労働
         let work_cost = |w_target, w_cur| {
             if w_target >= w_cur {
-                (w_target - w_cur) * 2
+                w_cur as isize
             } else {
-                w_cur - w_target
+                // オーバーキルは無駄が出るけど...
+                w_cur as isize - (w_cur - w_target) as isize * 2
             }
         };
         let mut work_cards = vec![];
-        let mut cancel_cards = vec![];
+        let mut cancel_one_cards = vec![];
+        let mut cancel_all_cards = vec![];
         let mut boost_cards = vec![];
         for (i, (t, w)) in twn.iter().enumerate() {
             match *t {
                 NORMAL_WORK => {
                     let cur = work_cost(projects[wi_do].h, *w);
-                    work_cards.push((cur, 1, i))
+                    work_cards.push((Reverse(cur), 1, i))
                 },
                 SUPER_WORK => {
-                    let cur = work_cost(projects[wi_do].h, *w);
-                    work_cards.push((cur, 0, i))
+                    let mut cur = 0;
+                    for p in &projects {
+                        cur += work_cost(p.h, *w);
+                    }
+                    work_cards.push((Reverse(cur), 0, i))
                 },
                 CANCEL_ONE => {
-                    cancel_cards.push(i);
+                    cancel_one_cards.push(i);
                 }
                 CANCEL_ALL => {
                     // /2: 勘
-                    cancel_cards.push(i);
+                    cancel_all_cards.push(i);
                 }
                 BOOST => {
                     boost_cards.push(i);
@@ -143,6 +146,7 @@ fn main() {
                 _ => {},
             }
         }
+        work_cards.sort_unstable();
 
         let mut card_i_used = 0;
         if !boost_cards.is_empty() && boost_use_cnt < BOOST_USE_MAX {
@@ -150,20 +154,16 @@ fn main() {
             card_i_used = boost_cards[0];
             boost_use_cnt += 1;
             println!("{card_i_used} 0");
-        } else if !projects[wi_do].is_good(boost_use_cnt) && !cancel_cards.is_empty() {
-            println!("# cancel");
-            card_i_used = cancel_cards[0];
-            println!(
-                "{card_i_used} {}",
-                if twn[cancel_cards[0]].1 == 0 {
-                    0
-                } else {
-                    wi_cancel
-                }
-            );
+        } else if !projects[wi_do].is_good(boost_use_cnt) && !cancel_all_cards.is_empty() {
+            println!("# cancel all");
+            card_i_used = cancel_all_cards[0];
+            println!("{card_i_used} 0");
+        } else if !projects[wi_do].is_good(boost_use_cnt) && !cancel_one_cards.is_empty() {
+            println!("# cancel one");
+            card_i_used = cancel_one_cards[0];
+            println!("{card_i_used} {wi_cancel}");
         } else if work_cards.is_empty() {
-            // 労働カードと増資カードとキャンセルカードが手元にないので適当に流す
-            // そんなことある？
+            // 労働カードと増資カードが手元にないので適当に流す
             // 現在最高効率の仕事を捨てるのはもったいないので, 最悪効率の仕事を捨てられるなら捨てる
             let mut could_cancel = false;
             for (i, (t, _w)) in twn.iter().enumerate() {
@@ -221,6 +221,7 @@ fn main() {
             projects_nxt.push(Project {h, v});
         }
         projects = projects_nxt;
+        vp = sort_prj_w_idx(&projects);
 
         // 取得方針はこの順
         // - 増資があれば取る
