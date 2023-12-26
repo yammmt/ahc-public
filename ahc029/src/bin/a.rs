@@ -149,6 +149,8 @@ fn main() {
         work_cards.sort_unstable();
 
         let mut card_i_used = 0;
+        let mut have_work_card = !work_cards.is_empty();
+        let mut have_cancel_card = !cancel_one_cards.is_empty() || !cancel_all_cards.is_empty();
         if !boost_cards.is_empty() && boost_use_cnt < BOOST_USE_MAX {
             println!("# boost");
             card_i_used = boost_cards[0];
@@ -158,10 +160,16 @@ fn main() {
             println!("# cancel all");
             card_i_used = cancel_all_cards[0];
             println!("{card_i_used} 0");
+            if cancel_all_cards.len() == 1 && cancel_one_cards.is_empty() {
+                have_cancel_card = false;
+            }
         } else if !projects[wi_do].is_good(boost_use_cnt) && !cancel_one_cards.is_empty() {
             println!("# cancel one");
             card_i_used = cancel_one_cards[0];
             println!("{card_i_used} {wi_cancel}");
+            if cancel_one_cards.len() == 1 && cancel_all_cards.is_empty() {
+                have_cancel_card = false;
+            }
         } else if work_cards.is_empty() {
             // 労働カードと増資カードが手元にないので適当に流す
             // 現在最高効率の仕事を捨てるのはもったいないので, 最悪効率の仕事を捨てられるなら捨てる
@@ -195,6 +203,9 @@ fn main() {
                     wi_do
                 }
             );
+            if work_cards.len() == 1 {
+                have_work_card = false;
+            }
         }
         stdout().flush().unwrap();
 
@@ -225,10 +236,7 @@ fn main() {
 
         // 取得方針はこの順
         // - 増資があれば取る
-        // - 今のプロジェクトがすべて悪効率ならキャンセルを取る
-        //    - 全キャンセル > 個別キャンセル
-        // - 労働力 >= 費用の札があれば取る
-        //    - 必ず消費 0 労力 1 が配られる
+        // - 安いもの
         let mut boosts = vec![];
         let mut cancels = vec![];
         let mut works = vec![];
@@ -236,23 +244,23 @@ fn main() {
             match *t {
                 NORMAL_WORK => {
                     if *p <= money && w >= p {
-                        works.push((w - p, 1, i));
+                        works.push((p, Reverse(w - p), 1, i));
                     }
                 },
                 SUPER_WORK => {
                     if *p <= money && w * n >= *p {
-                        works.push((w * n - p, 0, i));
+                        works.push((p, Reverse(w * n - p), 0, i));
                     }
                 }
                 CANCEL_ONE => {
                     if *p <= money {
-                        cancels.push((*w, 1, i));
+                        cancels.push((*p, 1, i));
                     }
                 }
                 CANCEL_ALL => {
                     if *p <= money {
                         // /2: 勘
-                        cancels.push((*w / 2, 0, i));
+                        cancels.push((*p / 2, 0, i));
                     }
                 }
                 BOOST => {
@@ -269,7 +277,6 @@ fn main() {
         cancels.sort_unstable();
         // w-p 降順
         works.sort_unstable();
-        works.reverse();
 
         let card_i_get = if ti > use_cost_turn_last {
             // 最終ターン付近にコストを払わない
@@ -279,15 +286,30 @@ fn main() {
             && boost_use_cnt < BOOST_USE_MAX
         {
             boosts[0].1
-        } else if ti <= use_cancel_turn_last && !cancels.is_empty() && prj_all_bad {
+        } else if ti <= use_cancel_turn_last && !cancels.is_empty()
+            && (prj_all_bad || (have_work_card && !have_cancel_card && cancels[0].0 < 3 * 2usize.pow(boost_use_cnt as u32)))
+        {
             cancels[0].2
         } else {
             // "0" は労働力 1 という最弱手であり避けられるなら避けたい
-            works[0].2
+            if works.len() > 1 {
+                let wi = works[1].3;
+                if (works[1].2 == 1 && twpk_nxt[wi].1 > twpk_nxt[wi].2)
+                    || (works[1].2 == 0 && twpk_nxt[wi].1 * m > twpk_nxt[wi].2)
+                {
+                    works[1].3
+                } else {
+                    works[0].3
+                }
+            } else {
+                // コスト 0 札
+                works[0].3
+            }
         };
 
+        // println!("{:?}", twpk_nxt);
+        // println!("{:?}", works);
         println!("{card_i_get}");
         twn[card_i_used] = (twpk_nxt[card_i_get].0, twpk_nxt[card_i_get].1);
-        // println!("{:?}", twpk);
     }
 }
