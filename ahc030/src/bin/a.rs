@@ -1,4 +1,6 @@
 use proconio::{input, source::line::LineSource};
+use rand::rngs::SmallRng;
+use rand::{Rng, SeedableRng};
 use std::collections::{HashSet, VecDeque};
 use std::io::{stdout, Write};
 
@@ -77,6 +79,7 @@ fn main() {
     // ランダムケースならなんか間に合いそうだしええやろの精神で取り敢えず出したろ
     // HashSet 管理だと定数倍が重いが TLE したら考える
 
+    let mut rng = SmallRng::from_entropy();
     let mut reserves_sum = 0;
     for p in &unfound_polys {
         reserves_sum += p.len();
@@ -89,42 +92,18 @@ fn main() {
     let mut poly_cur = vec![];
     let mut could_answer = false;
 
-    let insert_beginning_point = |q: &mut VecDeque<(usize, usize)>,
-                                  map: &Vec<Vec<Option<usize>>>| {
-        // 重なっている可能性が高いのは中心部な気がする
-        let n = map.len() as isize;
-        let mut d: isize = 0;
-        loop {
-            // HACK: 探索済みの点を記憶していないので同じ点の判定を何度も行ってしまう
-            //       起動時に優先樹jんの配列を作って, 以後インデックスを更新していったほうがよい
-            for di in -d..=d {
-                let i = n / 2 + di;
-                if i < 0 || i >= n {
-                    continue;
-                }
-                let i = i as usize;
-
-                let dj = d - di.abs();
-                let jp = n / 2 + dj;
-                let jm = n / 2 - dj;
-                if !(jp < 0 || jp >= n ) {
-                    let j = jp as usize;
-                    if map[i][j].is_none() {
-                        q.push_back((i, j));
-                        return;
-                    }
-                }
-                if !(jm < 0 || jm >= n) {
-                    let j = jm as usize;
-                    if map[i][j].is_none() {
-                        q.push_back((i, j));
-                        return;
-                    }
+    let mut insert_beginning_point =
+        |q: &mut VecDeque<(usize, usize)>, map: &Vec<Vec<Option<usize>>>| {
+            // とりあえず乱択するが, 見なくても 0 とわかる点がありそう
+            loop {
+                let i = rng.gen_range(0..n);
+                let j = rng.gen_range(0..n);
+                if map[i][j].is_none() {
+                    q.push_back((i, j));
+                    return;
                 }
             }
-            d += 1;
-        }
-    };
+        };
 
     for turn_cur in 0..turn_max {
         println!("#c turn: {turn_cur}");
@@ -198,6 +177,7 @@ fn main() {
             // 探索続行判定
             // 既に探索手詰まりになっている可能性がある, ここで探索可能点が出るまで更新する
             // TODO: ポリオミノの向きがわかっているので, 埋まっている可能性がある探索の方向が絞れる
+            // TODO: 埋まっている率が高い点がわかると 0-1BFS で多少の高速化ができる
             let mut poly_search_completed = false;
             if que.is_empty() {
                 poly_search_completed = true;
@@ -217,8 +197,8 @@ fn main() {
 
             if poly_search_completed {
                 println!("#c   poly_search_completed");
-                // TODO: 一々見つかったポリオミノから全体図を作るのでは判定遅いけど間に合う？
-                //       正の得点は取れるけど TLE となりそう
+                // HACK: 一々見つかったポリオミノから全体図を作るのでは判定遅い
+                //       が, 実行時間にかなり余裕があるのでほっとく
                 let mut poly_cur_map = vec![vec![false; n]; n];
                 for &p in &poly_cur {
                     poly_cur_map[p.0][p.1] = true;
