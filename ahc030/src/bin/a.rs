@@ -156,28 +156,15 @@ fn main() {
             }
             could_answer = false;
         } else {
-            // 掘る
-            // TODO: 空判定は que 追加完了後にいれるべき
-            if que.is_empty() {
-                println!("#c  que is empty (l.165)");
-                insert_beginning_point(&mut que, &reserves);
-            }
-
-            let mut point_dig = que.pop_front().unwrap();
-            while reserves[point_dig.0][point_dig.1].is_some() {
-                if que.is_empty() {
-                    println!("#c  que is empty (l.172)");
-                    insert_beginning_point(&mut que, &reserves);
-                }
-                point_dig = que.pop_front().unwrap();
-            }
-
+            assert!(!que.is_empty());
             // 問う
+            let point_dig = que.pop_back().unwrap();
             let p_x = point_dig.0;
             let p_y = point_dig.1;
             println!("q 1 {p_x} {p_y}");
             stdout().flush().unwrap();
 
+            // 聞く
             input! {
                 from &mut source,
                 v: usize,
@@ -196,10 +183,27 @@ fn main() {
                 }
             }
 
-            // TODO: 既に探索手詰まりになっている可能性がある, ここで探索可能点が出るまで更新する
-
+            // 探索続行判定
+            // 既に探索手詰まりになっている可能性がある, ここで探索可能点が出るまで更新する
+            let mut poly_search_completed = false;
             if que.is_empty() {
-                println!("#c   que is empty");
+                poly_search_completed = true;
+                insert_beginning_point(&mut que, &reserves);
+            } else {
+                let mut point_dig = que.pop_front().unwrap();
+                while reserves[point_dig.0][point_dig.1].is_some() {
+                    if que.is_empty() {
+                        poly_search_completed = true;
+                        insert_beginning_point(&mut que, &reserves);
+                    }
+
+                    point_dig = que.pop_front().unwrap();
+                }
+                que.push_back(point_dig);
+            }
+
+            if poly_search_completed {
+                println!("#c   poly_search_completed");
                 // TODO: 一々見つかったポリオミノから全体図を作るのでは判定遅いけど間に合う？
                 //       正の得点は取れるけど TLE となりそう
                 let mut poly_cur_map = vec![vec![false; n]; n];
