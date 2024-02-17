@@ -109,14 +109,38 @@ fn main() {
 
     let insert_beginning_point = |q: &mut VecDeque<(usize, usize)>,
                                   map: &Vec<Vec<Option<usize>>>| {
-        // TODO: 重なっている可能性が高いのは中心部な気がする
-        for i in 0..n {
-            for j in 0..n {
-                if map[i][j].is_none() {
-                    q.push_back((i, j));
-                    return;
+        // 重なっている可能性が高いのは中心部な気がする
+        let n = map.len() as isize;
+        let mut d: isize = 0;
+        loop {
+            // HACK: 探索済みの点を記憶していないので同じ点の判定を何度も行ってしまう
+            //       起動時に優先樹jんの配列を作って, 以後インデックスを更新していったほうがよい
+            for di in -d..=d {
+                let i = n / 2 + di;
+                if i < 0 || i >= n {
+                    continue;
+                }
+                let i = i as usize;
+
+                let dj = d - di.abs();
+                let jp = n / 2 + dj;
+                let jm = n / 2 - dj;
+                if !(jp < 0 || jp >= n ) {
+                    let j = jp as usize;
+                    if map[i][j].is_none() {
+                        q.push_back((i, j));
+                        return;
+                    }
+                }
+                if !(jm < 0 || jm >= n) {
+                    let j = jm as usize;
+                    if map[i][j].is_none() {
+                        q.push_back((i, j));
+                        return;
+                    }
                 }
             }
+            d += 1;
         }
     };
 
