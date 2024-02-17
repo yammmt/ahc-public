@@ -101,7 +101,13 @@ fn main() {
     // ランダムケースならなんか間に合いそうだしええやろの精神で取り敢えず出したろ
     // HashSet 管理だと定数倍が重いが TLE したら考える
 
+    let mut reserves_sum = 0;
+    for p in &unfound_polys {
+        reserves_sum += p[0].len();
+    }
+
     let mut reserves = vec![vec![None; n]; n];
+    let mut reserves_found_sum = 0;
     let mut que = VecDeque::new();
     que.push_back((n / 2, n / 2));
     let mut poly_cur = vec![];
@@ -194,6 +200,12 @@ fn main() {
                 v: usize,
             }
             reserves[p_x][p_y] = Some(v);
+            reserves_found_sum += v;
+            if reserves_found_sum == reserves_sum {
+                // 全点拾えたので終わり, ちょっとの枝刈りにはなる
+                could_answer = true;
+                continue;
+            }
 
             // 探索候補を足す
             if v > 0 {
