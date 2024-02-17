@@ -72,7 +72,7 @@ fn main() {
     // q1 連打で最後 1 マスの値聞くくらいなら解答してよい, ノーリスクになる
     // が, 不明マス数が多くなると, 正答引くために 2 べき乗ガチャを回すことになる
 
-    // 方針: BFS で連結成分を抜き出す
+    // 方針: DFS で連結成分を抜き出す
     // ポリオミノは連結であるので, 一マス暴ければ上下左右を繋げていくと連鎖が取れそう
     // すべてのポリオミノを検出した可能性があるならば回答を試みる
     // すべてが検出できていない場合は回答しない, 2 べきガチャとなり不利
@@ -85,8 +85,8 @@ fn main() {
 
     let mut reserves = vec![vec![None; n]; n];
     let mut reserves_found_sum = 0;
-    let mut que = VecDeque::new();
-    que.push_back((n / 2, n / 2));
+    let mut stack = VecDeque::new();
+    stack.push_back((n / 2, n / 2));
     let mut poly_cur = vec![];
     let mut could_answer = false;
 
@@ -136,13 +136,13 @@ fn main() {
                 return;
             } else {
                 assert!(false);
-                insert_beginning_point(&mut que, &reserves);
+                insert_beginning_point(&mut stack, &reserves);
             }
             could_answer = false;
         } else {
-            assert!(!que.is_empty());
+            assert!(!stack.is_empty());
             // 問う
-            let point_dig = que.pop_back().unwrap();
+            let point_dig = stack.pop_back().unwrap();
             let p_x = point_dig.0;
             let p_y = point_dig.1;
             println!("q 1 {p_x} {p_y}");
@@ -169,7 +169,7 @@ fn main() {
                     let x_nxt = p_x.wrapping_add_signed(d.0);
                     let y_nxt = p_y.wrapping_add_signed(d.1);
                     if x_nxt < n && y_nxt < n && reserves[x_nxt][y_nxt].is_none() {
-                        que.push_back((x_nxt, y_nxt));
+                        stack.push_back((x_nxt, y_nxt));
                     }
                 }
             }
@@ -179,20 +179,20 @@ fn main() {
             // TODO: ポリオミノの向きがわかっているので, 埋まっている可能性がある探索の方向が絞れる
             // TODO: 埋まっている率が高い点がわかると 0-1BFS で多少の高速化ができる
             let mut poly_search_completed = false;
-            if que.is_empty() {
+            if stack.is_empty() {
                 poly_search_completed = true;
-                insert_beginning_point(&mut que, &reserves);
+                insert_beginning_point(&mut stack, &reserves);
             } else {
-                let mut point_dig = que.pop_front().unwrap();
+                let mut point_dig = stack.pop_back().unwrap();
                 while reserves[point_dig.0][point_dig.1].is_some() {
-                    if que.is_empty() {
+                    if stack.is_empty() {
                         poly_search_completed = true;
-                        insert_beginning_point(&mut que, &reserves);
+                        insert_beginning_point(&mut stack, &reserves);
                     }
 
-                    point_dig = que.pop_front().unwrap();
+                    point_dig = stack.pop_back().unwrap();
                 }
-                que.push_back(point_dig);
+                stack.push_back(point_dig);
             }
 
             if poly_search_completed {
