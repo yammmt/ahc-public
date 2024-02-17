@@ -13,45 +13,21 @@ fn main() {
         _eps: f64,
     }
     let mut unfound_polys = HashSet::new();
+    // 向きがわかっているので回転は不要
     for _ in 0..m {
         input! {
             from &mut source,
             d: usize,
         }
-        let mut v = Vec::with_capacity(4);
-        let mut vv = Vec::with_capacity(d);
+        let mut v = Vec::with_capacity(d);
         for _ in 0..d {
             input! {
                 from &mut source,
                 i: usize,
                 j: usize,
             }
-            vv.push((i, j));
+            v.push((i, j));
         }
-        v.push(vv);
-
-        // 90 度回転したものもいれる x3
-        for _ in 0..3 {
-            let mut poly_set = HashSet::new();
-            let mut xmin = isize::MAX / 2;
-            let mut ymin = isize::MAX / 2;
-            for a in v.last().unwrap() {
-                let mut x = a.0 as isize;
-                let mut y = a.1 as isize;
-                let tmp = x;
-                x = y;
-                y = -tmp;
-                poly_set.insert((x, y));
-                xmin = xmin.min(x);
-                ymin = ymin.min(y);
-            }
-            let poly_vec = poly_set
-                .iter()
-                .map(|a| ((a.0 - xmin) as usize, (a.1 - ymin) as usize))
-                .collect::<Vec<(usize, usize)>>();
-            v.push(poly_vec);
-        }
-
         unfound_polys.insert(v);
     }
 
@@ -103,7 +79,7 @@ fn main() {
 
     let mut reserves_sum = 0;
     for p in &unfound_polys {
-        reserves_sum += p[0].len();
+        reserves_sum += p.len();
     }
 
     let mut reserves = vec![vec![None; n]; n];
@@ -221,6 +197,7 @@ fn main() {
 
             // 探索続行判定
             // 既に探索手詰まりになっている可能性がある, ここで探索可能点が出るまで更新する
+            // TODO: ポリオミノの向きがわかっているので, 埋まっている可能性がある探索の方向が絞れる
             let mut poly_search_completed = false;
             if que.is_empty() {
                 poly_search_completed = true;
@@ -255,24 +232,22 @@ fn main() {
 
                 let mut found_polys = vec![];
                 for vpoly in &unfound_polys {
-                    'pt_loop: for poly_turned in vpoly {
-                        for i in 0..n {
-                            for j in 0..n {
-                                // 左上 (i, j)
-                                let mut contained = true;
-                                for p in poly_turned {
-                                    let i_cur = p.0 + i;
-                                    let j_cur = p.1 + j;
-                                    if i_cur >= n || j_cur >= n || !poly_cur_map[i_cur][j_cur] {
-                                        contained = false;
-                                        break;
-                                    }
+                    'i_loop: for i in 0..n {
+                        for j in 0..n {
+                            // 左上 (i, j)
+                            let mut contained = true;
+                            for p in vpoly {
+                                let i_cur = p.0 + i;
+                                let j_cur = p.1 + j;
+                                if i_cur >= n || j_cur >= n || !poly_cur_map[i_cur][j_cur] {
+                                    contained = false;
+                                    break;
                                 }
+                            }
 
-                                if contained {
-                                    found_polys.push(vpoly.clone());
-                                    break 'pt_loop;
-                                }
+                            if contained {
+                                found_polys.push(vpoly.clone());
+                                break 'i_loop;
                             }
                         }
                     }
