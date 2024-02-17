@@ -14,6 +14,7 @@ fn main() {
         m: usize,
         _eps: f64,
     }
+    let mut reserves_sum = 0;
     let mut unfound_polys = HashSet::new();
     // 向きがわかっているので回転は不要
     for _ in 0..m {
@@ -21,6 +22,7 @@ fn main() {
             from &mut source,
             d: usize,
         }
+        reserves_sum += d;
         let mut v = Vec::with_capacity(d);
         for _ in 0..d {
             input! {
@@ -80,10 +82,6 @@ fn main() {
     // HashSet 管理だと定数倍が重いが TLE したら考える
 
     let mut rng = SmallRng::from_entropy();
-    let mut reserves_sum = 0;
-    for p in &unfound_polys {
-        reserves_sum += p.len();
-    }
 
     let mut reserves = vec![vec![None; n]; n];
     let mut reserves_found_sum = 0;
@@ -137,6 +135,7 @@ fn main() {
             if is_true == 1 {
                 return;
             } else {
+                assert!(false);
                 insert_beginning_point(&mut que, &reserves);
             }
             could_answer = false;
@@ -157,7 +156,8 @@ fn main() {
             reserves[p_x][p_y] = Some(v);
             reserves_found_sum += v;
             if reserves_found_sum == reserves_sum {
-                // 全点拾えたので終わり, ちょっとの枝刈りにはなる
+                // この手法では全点見つければ確実に正答になる
+                // ここから下の処理は stack 処理部以外はいらない
                 could_answer = true;
                 continue;
             }
@@ -238,8 +238,6 @@ fn main() {
                     unfound_polys.remove(&fp);
                 }
 
-                // ポリオミノが全部含まれている可能性があれば, 次は回答する
-                could_answer = unfound_polys.is_empty();
                 poly_cur.clear();
             }
         }
