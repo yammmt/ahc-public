@@ -52,7 +52,7 @@ fn ptrn_map(
                                 break;
                             }
 
-                            candidate_cur[i_cur][j_cur] = 0;
+                            candidate_cur[i_cur][j_cur] += 1;
                         } else {
                             candidate_cur[i_cur][j_cur] += 1;
                         }
@@ -65,6 +65,24 @@ fn ptrn_map(
         }
         candidates = candidates_nxt;
     }
+
+    let mut candidates_nxt = vec![];
+    for c in &candidates {
+        let mut cur_pass = true;
+        for i in 0..n {
+            for j in 0..n {
+                if let Some(r) = reserves_map[i][j] {
+                    if c[i][j] != r {
+                        cur_pass = false;
+                    }
+                }
+            }
+        }
+        if cur_pass {
+            candidates_nxt.push(c.clone());
+        }
+    }
+    candidates = candidates_nxt;
 
     let mut ret = vec![vec![0; n]; n];
     for c in &candidates {
