@@ -12,8 +12,9 @@ fn could_enumerate(n: usize, p: &Vec<Vec<(usize, usize)>>) -> bool {
     for _pp in p {
         ptrn *= nn;
         // マス全通りに始点判定を入れるので, 1 ループあたり (n*n)^m だけかかる
-        // ループを最大 n*n 回問うとして 10^9 超えないように
-        if ptrn * nn > 1_000_000_000 {
+        // ループを最大 n*n 回問うとして 10^9 超えないように, そんなにループ回らないとは思うが
+        // でもジャッジ投げると TLE あるので計算間違ってるみたい
+        if ptrn * nn > 200_000_000 {
             return false;
         }
     }
