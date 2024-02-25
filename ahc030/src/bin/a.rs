@@ -4,6 +4,93 @@ use rand::{Rng, SeedableRng};
 use std::collections::VecDeque;
 use std::io::{stdout, Write};
 
+fn could_enumerate(n: usize, p: &Vec<Vec<(usize, usize)>>) -> bool {
+    let nn = n * n;
+    let mut ptrn = 1;
+
+    // TODO: ポリオミノのサイズも考慮すべきに聞こえる, が総和 n*n 以下だし...
+    for _pp in p {
+        ptrn *= nn;
+        // マス全通りに始点判定を入れるので, 1 ループあたり (n*n)^m だけかかる
+        // ループを最大 n*n 回問うとして 10^9 超えないように
+        if ptrn * nn > 1_000_000_000 {
+            return false;
+        }
+    }
+
+    true
+}
+
+// 取りうる状態の総数とそこに置かれる場合の数
+fn ptrn_map(
+    reserves_map: &Vec<Vec<Option<usize>>>,
+    polys: &Vec<Vec<(usize, usize)>>,
+) -> (usize, Vec<Vec<usize>>) {
+    let n = reserves_map.len();
+
+    let mut candidates = vec![];
+    candidates.push(vec![vec![0; n]; n]);
+    for p in polys {
+        let mut candidates_nxt = vec![];
+        for c in &candidates {
+            for i in 0..n {
+                for j in 0..n {
+                    let mut candidate_cur = c.clone();
+                    let mut cur_pass = true;
+                    for pp in p {
+                        let i_cur = i + pp.0;
+                        let j_cur = j + pp.1;
+                        if i_cur >= n || j_cur >= n {
+                            cur_pass = false;
+                            break;
+                        }
+
+                        if let Some(r) = reserves_map[i_cur][j_cur] {
+                            if candidate_cur[i_cur][j_cur] + 1 > r {
+                                cur_pass = false;
+                                break;
+                            }
+
+                            candidate_cur[i_cur][j_cur] = 0;
+                        } else {
+                            candidate_cur[i_cur][j_cur] += 1;
+                        }
+                    }
+                    if cur_pass {
+                        candidates_nxt.push(candidate_cur);
+                    }
+                }
+            }
+        }
+        candidates = candidates_nxt;
+    }
+
+    let mut ret = vec![vec![0; n]; n];
+    for c in &candidates {
+        for i in 0..n {
+            for j in 0..n {
+                if c[i][j] > 0 {
+                    ret[i][j] += 1;
+                }
+            }
+        }
+    }
+
+    (candidates.len(), ret)
+}
+
+fn could_answer_w_possible_map(candidates_num: usize, ptrn_map: &Vec<Vec<usize>>) -> bool {
+    let n = ptrn_map.len();
+    for i in 0..n {
+        for j in 0..n {
+            if ptrn_map[i][j] != 0 && ptrn_map[i][j] != candidates_num {
+                return false;
+            }
+        }
+    }
+    true
+}
+
 fn main() {
     let stdin = std::io::stdin();
     let mut source = LineSource::new(stdin.lock());
@@ -83,6 +170,7 @@ fn main() {
 
     let mut rng = SmallRng::from_entropy();
 
+    let use_short_method = could_enumerate(n, &polys);
     let mut reserves = vec![vec![None; n]; n];
     let mut reserves_found_sum = 0;
     let mut stack = VecDeque::new();
@@ -102,8 +190,82 @@ fn main() {
             }
         };
 
+    println!("#c use_short_method: {use_short_method}");
     for turn_cur in 0..turn_max {
         println!("#c turn: {turn_cur}, found: {reserves_found_sum}/{reserves_sum}");
+        if use_short_method {
+            let ptrn = ptrn_map(&reserves, &polys);
+            println!("#c ptrn.0: {:?}", ptrn.0);
+            // if turn_cur > 20 {
+            //     println!("#c ptrn.1: {:?}", ptrn.1);
+            // }
+
+            // 置き方が一意に絞れずとも埋まっているか否かに限ると絞れる場合がある (seed10)
+            if could_answer_w_possible_map(ptrn.0, &ptrn.1) {
+                // 答えが唯一
+                let mut ans = vec![];
+                for i in 0..n {
+                    for j in 0..n {
+                        if let Some(c) = reserves[i][j] {
+                            if c > 0 {
+                                ans.push((i, j));
+                            }
+                        } else if ptrn.1[i][j] > 0 {
+                            ans.push((i, j));
+                        }
+                    }
+                }
+
+                print!("a {} ", ans.len());
+                for (i, a) in ans.iter().enumerate() {
+                    print!("{} {}", a.0, a.1);
+                    if i == ans.len() - 1 {
+                        println!();
+                    } else {
+                        print!(" ");
+                    }
+                }
+                stdout().flush().unwrap();
+
+                input! {
+                    from &mut source,
+                    is_true: usize,
+                }
+                assert_eq!(is_true, 1);
+                return;
+            }
+
+            let mut p_x = 0;
+            let mut p_y = 0;
+            let mut p_prob = 10.0;
+            for i in 0..n {
+                for j in 0..n {
+                    if reserves[i][j].is_some() || ptrn.1[i][j] == 0 || ptrn.1[i][j] == ptrn.0 {
+                        continue;
+                    }
+
+                    let prob_cur = (ptrn.1[i][j] as f64 / ptrn.0 as f64 - 0.5).abs();
+                    if prob_cur < p_prob {
+                        p_x = i;
+                        p_y = j;
+                        p_prob = prob_cur;
+                    }
+                }
+            }
+            println!("#c  {} / {}", ptrn.1[p_x][p_y], ptrn.0);
+
+            println!("q 1 {p_x} {p_y}");
+            stdout().flush().unwrap();
+
+            // 聞く
+            input! {
+                from &mut source,
+                v: usize,
+            }
+            reserves[p_x][p_y] = Some(v);
+            reserves_found_sum += v;
+            continue;
+        }
 
         if could_answer {
             let mut ans = vec![];
