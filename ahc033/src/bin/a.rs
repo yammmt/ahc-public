@@ -1,6 +1,15 @@
 use proconio::fastout;
 use proconio::input;
 
+macro_rules! debug {
+    ($($arg:tt)*) => {
+        #[cfg(debug_assertions)]
+        {
+            println!($($arg)*);
+        }
+    };
+}
+
 // N 固定だから vec を回避すればちょっとだけ高速化できる
 const CRANE_NUM: usize = 5;
 const TURN_MAX: usize = 10000;
@@ -96,7 +105,7 @@ fn main() {
     let mut crane_strategies = vec![CraneStrategy::Wait; CRANE_NUM];
 
     while turn_cur <= TURN_MAX && container_goal_num < n * n {
-        // println!("turn: {turn_cur}");
+        debug!("turn: {turn_cur}");
         turn_cur += 1;
 
         // 流れてきたものを受け取る
@@ -127,14 +136,14 @@ fn main() {
                 continue;
             }
 
-            // println!("  strategy: {:?}", crane_strategies[i]);
-            // println!("  c: {:?}", c);
+            debug!("  strategy: {:?}", crane_strategies[i]);
+            debug!("  c: {:?}", c);
             match crane_strategies[i] {
                 CraneStrategy::Pick(cid) => {
                     match *c {
                         CraneStatus::BigEmpty(p0, p1) => {
                             if board[p0][p1] == BoardStatus::Container(cid) {
-                                // println!("p0: {p0}, p1: {p1}, cid: {cid}");
+                                debug!("p0: {p0}, p1: {p1}, cid: {cid}");
                                 // 現在位置があっていれば pick
                                 ans[i].push('P');
                                 *c = CraneStatus::BigLift(p0, p1);
@@ -184,7 +193,7 @@ fn main() {
                                     container_goal_num += 1;
                                 }
                             } else {
-                                // println!("  {p0},{p1} -> {goal_i},{goal_j}");
+                                debug!("  {p0},{p1} -> {goal_i},{goal_j}");
                                 // 近い側に動く
                                 // TODO: 近い側に動く操作は共通化したいが
                                 if p0 > goal_i {
