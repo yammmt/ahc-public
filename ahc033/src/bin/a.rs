@@ -75,6 +75,7 @@ fn main() {
     // 進捗管理
     let mut aidx = vec![0; n];
     let mut container_goal_num = 0;
+    let mut goal_want = [Some(0), Some(5), Some(10), Some(15), Some(20)];
 
     // とりあえず 3 列目までの 20 個を全部出して, 残りは %5 が小さいものから順に突っ込む
     // 搬出先と順番さえあっていれば, 大クレーンで一つずつ誘導するとして,
@@ -147,7 +148,30 @@ fn main() {
                                 // 現在位置があっていれば pick
                                 ans[i].push('P');
                                 *c = CraneStatus::BigLift(p0, p1);
-                                crane_strategies[i] = CraneStrategy::Move(cid, (cid / 5, 4));
+
+                                crane_strategies[i] = if goal_want[cid / 5] == Some(cid) {
+                                    // そのままゴールへ
+                                    CraneStrategy::Move(cid, (cid / 5, 4))
+                                } else {
+                                    // 適当な空きマスに置いて, コンテナを流してもらう
+                                    // TODO: 一時置きの先はゴールに近いほうがよい
+                                    let mut tmp_goal = (0, 0);
+                                    let mut tmp_goal_dist = usize::MAX / 2;
+                                    for ii in 0..n {
+                                        for jj in 0..n-1 {
+                                            if board[ii][jj] == BoardStatus::Empty {
+                                                let dist_x = p0.max(ii) - p0.min(ii);
+                                                let dist_y = p1.max(jj) - p1.min(jj);
+                                                if dist_x + dist_y <= tmp_goal_dist {
+                                                    tmp_goal = (ii, jj);
+                                                    tmp_goal_dist = dist_x + dist_y;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    CraneStrategy::Move(cid, (tmp_goal.0, tmp_goal.1))
+                                };
+
                                 // TODO: 大クレーン以外を考えるとエンバグするかも
                                 board[p0][p1] = BoardStatus::Empty;
                             } else {
@@ -181,7 +205,7 @@ fn main() {
                         _ => unreachable!(),
                     }
                 }
-                CraneStrategy::Move(_cid, (goal_i, goal_j)) => {
+                CraneStrategy::Move(cid, (goal_i, goal_j)) => {
                     match *c {
                         CraneStatus::BigLift(p0, p1) => {
                             if p0 == goal_i && p1 == goal_j {
@@ -191,6 +215,14 @@ fn main() {
                                 crane_strategies[i] = CraneStrategy::Wait;
                                 if p1 == 4 {
                                     container_goal_num += 1;
+                                    goal_want[goal_i] = if cid % 5 == 4 {
+                                        None
+                                    } else {
+                                        // FIXME: 転倒を許可する場合に詰む
+                                        Some(goal_want[goal_i].unwrap() + 1)
+                                    };
+                                } else {
+                                    board[p0][p1] = BoardStatus::Container(cid);
                                 }
                             } else {
                                 debug!("  {p0},{p1} -> {goal_i},{goal_j}");
@@ -223,13 +255,46 @@ fn main() {
                     for ii in 0..n {
                         for jj in 0..n {
                             if let BoardStatus::Container(cid) = board[ii][jj] {
-                                if next_cid.is_none() || cid % 5 < next_cid.unwrap() % 5 {
-                                    next_cid = Some(cid);
+                                for want in &goal_want {
+                                    if let Some(w) = want {
+                                        if cid == *w {
+                                            // 転倒数ペナルティが発生しない
+                                            next_cid = Some(cid);
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
-                    assert!(next_cid.is_some());
+                    if next_cid.is_none() {
+                        // 置いてもらうために一時置きする
+                        for ii in 0..n {
+                            if aidx[ii] == n {
+                                continue;
+                            }
+
+                            for want in &goal_want {
+                                if let Some(w) = want {
+                                    if ann[ii][aidx[ii]] == *w {
+                                        // これを置きたい
+                                        assert!(board[ii][0] != BoardStatus::Empty);
+
+                                        // 適当に周囲の空きマスにもっていかせる
+                                        // この書き方だと何度か上書きされ得るが,
+                                        // 実際の性能にはあまり効かないはず
+                                        if let BoardStatus::Container(cid) = board[ii][0] {
+                                            next_cid = Some(cid);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    // FIXME: 奥に 0, 5, ... が固まっていると動けなくなる
+                    //       このときは初手が今と同じ処理ではどうしようもない
+                    //       でも発生率 1/50000 くらいであり, 無視してもサンプル 100 入力は通る
+                    if next_cid.is_none() {
+                    }
 
                     crane_strategies[i] = CraneStrategy::Pick(next_cid.unwrap());
                 }
