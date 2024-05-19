@@ -33,8 +33,8 @@ enum CraneStatus {
 enum CraneStrategy {
     // container ID
     Pick(usize),
-    // goal (i, j)
-    Move(usize, usize),
+    // (container ID, goal (i, j))
+    Move(usize, (usize, usize)),
     Wait,
     Removed,
 }
@@ -147,7 +147,7 @@ fn main() {
                                 // 現在位置があっていれば pick
                                 ans[i].push('P');
                                 *c = CraneStatus::BigLift(p0, p1);
-                                crane_strategies[i] = CraneStrategy::Move(cid / 5, 4);
+                                crane_strategies[i] = CraneStrategy::Move(cid, (cid / 5, 4));
                                 // TODO: 大クレーン以外を考えるとエンバグするかも
                                 board[p0][p1] = BoardStatus::Empty;
                             } else {
@@ -181,7 +181,7 @@ fn main() {
                         _ => unreachable!(),
                     }
                 }
-                CraneStrategy::Move(goal_i, goal_j) => {
+                CraneStrategy::Move(_cid, (goal_i, goal_j)) => {
                     match *c {
                         CraneStatus::BigLift(p0, p1) => {
                             if p0 == goal_i && p1 == goal_j {
