@@ -60,6 +60,34 @@ impl CraneStatus {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[allow(dead_code)]
+enum CraneMove {
+    Lift,
+    Drop,
+    Up,
+    Down,
+    Left,
+    Right,
+    Wait,
+    Remove,
+}
+
+impl CraneMove {
+    fn to_ans(&self) -> char {
+        match self {
+            CraneMove::Lift => 'P',
+            CraneMove::Drop => 'Q',
+            CraneMove::Up => 'U',
+            CraneMove::Down => 'D',
+            CraneMove::Left => 'L',
+            CraneMove::Right => 'R',
+            CraneMove::Wait => '.',
+            CraneMove::Remove => 'B',
+        }
+    }
+}
+
 #[fastout]
 fn main() {
     input! {
@@ -154,7 +182,7 @@ fn main() {
             if i != 0 && *c != CraneStatus::Removed {
                 // めんどいので小クレーンは最初に爆破する
                 // TODO: 小クレーンは右端がどかせるならどかす, を初期状態だけでもすべき
-                ans[i].push('B');
+                ans[i].push(CraneMove::Remove.to_ans());
                 *c = CraneStatus::Removed;
                 crane_strategies[i] = CraneStrategy::Removed;
             }
@@ -173,7 +201,7 @@ fn main() {
                             if board[turn_cur][p0][p1] == BoardStatus::Container(cid) {
                                 debug!("p0: {p0}, p1: {p1}, cid: {cid}");
                                 // 現在位置があっていれば pick
-                                ans[i].push('P');
+                                ans[i].push(CraneMove::Lift.to_ans());
                                 *c = CraneStatus::BigLift(p0, p1);
 
                                 crane_strategies[i] = if goal_want[cid / 5] == Some(cid) {
@@ -215,16 +243,16 @@ fn main() {
                                     }
                                 }
                                 if p0 > cid_i {
-                                    ans[i].push('U');
+                                    ans[i].push(CraneMove::Up.to_ans());
                                     *c = CraneStatus::BigEmpty(p0 - 1, p1);
                                 } else if p0 < cid_i {
-                                    ans[i].push('D');
+                                    ans[i].push(CraneMove::Down.to_ans());
                                     *c = CraneStatus::BigEmpty(p0 + 1, p1);
                                 } else if p1 > cid_j {
-                                    ans[i].push('L');
+                                    ans[i].push(CraneMove::Left.to_ans());
                                     *c = CraneStatus::BigEmpty(p0, p1 - 1);
                                 } else {
-                                    ans[i].push('R');
+                                    ans[i].push(CraneMove::Right.to_ans());
                                     *c = CraneStatus::BigEmpty(p0, p1 + 1);
                                 }
                             }
@@ -237,7 +265,7 @@ fn main() {
                         CraneStatus::BigLift(p0, p1) => {
                             if p0 == goal_i && p1 == goal_j {
                                 // 現在位置があっていれば下ろす
-                                ans[i].push('Q');
+                                ans[i].push(CraneMove::Drop.to_ans());
                                 *c = CraneStatus::BigEmpty(p0, p1);
                                 crane_strategies[i] = CraneStrategy::Wait;
                                 if p1 == 4 {
@@ -256,16 +284,16 @@ fn main() {
                                 // 近い側に動く
                                 // TODO: 近い側に動く操作は共通化したいが
                                 if p0 > goal_i {
-                                    ans[i].push('U');
+                                    ans[i].push(CraneMove::Up.to_ans());
                                     *c = CraneStatus::BigLift(p0 - 1, p1);
                                 } else if p0 < goal_i {
-                                    ans[i].push('D');
+                                    ans[i].push(CraneMove::Down.to_ans());
                                     *c = CraneStatus::BigLift(p0 + 1, p1);
                                 } else if p1 > goal_j {
-                                    ans[i].push('L');
+                                    ans[i].push(CraneMove::Left.to_ans());
                                     *c = CraneStatus::BigLift(p0, p1 - 1);
                                 } else {
-                                    ans[i].push('R');
+                                    ans[i].push(CraneMove::Right.to_ans());
                                     *c = CraneStatus::BigLift(p0, p1 + 1);
                                 }
                             }
