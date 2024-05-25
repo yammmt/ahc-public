@@ -180,7 +180,6 @@ fn main() {
     //         - イレギュラー発生時には上書きされ得る, ターン数さほど多くないので間に合いそう
     //         - 拾いに行く/置きに行くで盤面変わる分考えると再計算入れたい, 一括ではない
     //     - クレーンの待機状態: 不要, "予定された今の行動が動く系で, 過去 m ターンの行動がすべて待機であれば", で取れる
-    // TODO: 次にほしいやつも準備させた方が良い？
     // FIXME: 0090 でたまに動けなくなって force drop する
     //        相手をどかす
     // 乱択を時間いっぱい繰り返すであればこのくらいの発生率のバグは消さなくて良いよね
@@ -572,6 +571,37 @@ fn main() {
 
                                 let mm = min_move(i, my_pos, (ii, 0));
                                 candidates.push((cid, mm));
+                            }
+                        }
+
+                        if candidates.is_empty() {
+                            // 左端をどかせるわけでもゴールにもっていけるものがあるわけでもない
+                            // 次に必要となるものを拾いに行ってみる
+                            for gw_o in &goal_want {
+                                let Some(cid_gw) = gw_o else { continue };
+
+                                let cid_gw_next = cid_gw + 1;
+                                if cid_gw_next % 5 == 0 {
+                                    // ゴールにもっていけるものが残り一つだから黙る
+                                    continue;
+                                }
+
+                                if containers[cid_gw_next] != ContainerStatus::Free {
+                                    continue;
+                                }
+
+                                for ii in 0..n {
+                                    for jj in 0..n {
+                                        if board[turn_cur][ii][jj]
+                                            == BoardStatus::Container(*cid_gw)
+                                        {
+                                            let mm = min_move(i, my_pos, (ii, jj));
+                                            candidates.push((*cid_gw, mm));
+                                        }
+                                    }
+                                }
+
+                                candidates.sort_unstable_by(|a, b| a.1.len().cmp(&b.1.len()));
                             }
                         }
 
