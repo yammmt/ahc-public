@@ -411,10 +411,17 @@ fn main() {
         ];
 
         // 大クレーンは爆破しない
-        let mut is_removed_first = vec![false];
-        for _ in 0..4 {
-            is_removed_first.push(rng.gen::<usize>() % 2 == 0);
-        }
+        // 小クレーンをある程度使ったほうがスコアが上がりそうだから,
+        // 必ず三つ以上を使うようにする
+        let mut is_removed_first = match rng.gen::<usize>() % 3 {
+            0 => vec![false, false, true, true],
+            1 => vec![false, false, false, true],
+            2 => vec![false, false, false, false],
+            _ => unreachable!(),
+        };
+        is_removed_first.shuffle(&mut rng);
+        is_removed_first.push(false);
+        is_removed_first.reverse();
 
         let mut turn_cur = init_move.len();
         'turn_loop: while turn_cur < TURN_MAX - 1 && goal_want.iter().any(|g| g.is_some()) {
