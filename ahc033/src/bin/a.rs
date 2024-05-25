@@ -174,9 +174,13 @@ fn main() {
     //         - イレギュラー発生時には上書きされ得る, ターン数さほど多くないので間に合いそう
     //         - 拾いに行く/置きに行くで盤面変わる分考えると再計算入れたい, 一括ではない
     //     - クレーンの待機状態: 不要, "予定された今の行動が動く系で, 過去 m ターンの行動がすべて待機であれば", で取れる
-    // TODO: 次にほしいやつも準備させた方が良い
+    // TODO: 次にほしいやつも準備させた方が良い？
     // FIXME: 0090 でたまに動けなくなって force drop する
     //        相手をどかす
+    // FIXME: 衝突起こり得る不具合を正す
+    // TODO: 時間余裕あるので爆破対象を変えつつ時間いっぱい回してもっともよかったもの
+    // 乱択を時間いっぱい繰り返すであればこのくらいの発生率のバグは消さなくて良いよね
+    // 初期解, 1 回目の計算をを大クレーンだけにしておけば
 
     let mut ans = vec![vec![]; CRANE_NUM];
     // 行動予定は処理の都合で逆順に突っ込む
@@ -349,6 +353,37 @@ fn main() {
         vec![]
     };
 
+    let mut do_random_move = |my_crane_id: usize,
+                              my_pos: (usize, usize),
+                              ans: &mut Vec<char>,
+                              scheduled_moves: &mut Vec<CraneMove>,
+                              cranes: &mut [CraneStatus],
+                              board: &mut Vec<Vec<BoardStatus>>,
+                              containers: &mut [ContainerStatus],
+                              rng: &mut SmallRng| {
+        random_move_array.shuffle(rng);
+        for mv in &random_move_array {
+            if could_move(my_crane_id, my_pos, *mv, board, cranes) {
+                ans.push(mv.to_ans());
+                let np = next_pos(my_pos, *mv);
+                cranes[my_crane_id] = match cranes[my_crane_id] {
+                    CraneStatus::BigEmpty(_) => CraneStatus::BigEmpty(np),
+                    CraneStatus::BigLift(_, c) => CraneStatus::BigLift(np, c),
+                    CraneStatus::SmallEmpty(_) => CraneStatus::SmallEmpty(np),
+                    CraneStatus::SmallLift(_, c) => CraneStatus::SmallLift(np, c),
+                    _ => unreachable!(),
+                };
+                scheduled_moves.clear();
+                for j in 0..n * n {
+                    if containers[j] == ContainerStatus::Accepted(my_crane_id) {
+                        containers[j] = ContainerStatus::Free;
+                    }
+                }
+                break;
+            }
+        }
+    };
+
     // とりあえず 3 列目までの 20 個を全部出して, 残りは %5 が小さいものから順に突っ込む
     // 搬出先と順番さえあっていれば, 大クレーンで一つずつ誘導するとして,
     // 高々往復 20 ターンを 25 回繰り返すだけだから 500 点を下回るくらいに落ち着くはず
@@ -500,30 +535,16 @@ fn main() {
                         // FIXME: ここで小クレーンが一生動けなくなる
                         // FIXME: break しちゃうと ans 入らない
                         debug!("    bar random");
-                        // scheduled_moves[i].push(random_move(rng.gen::<usize>()));
-                        random_move_array.shuffle(&mut rng);
-                        for mv in &random_move_array {
-                            if could_move(i, my_pos, *mv, &board[turn_cur], &cranes) {
-                                debug!("    mv: {:?}", mv);
-                                ans[i].push(mv.to_ans());
-                                let np = next_pos(my_pos, *mv);
-                                cranes[i] = match cranes[i] {
-                                    CraneStatus::BigEmpty(_) => CraneStatus::BigEmpty(np),
-                                    CraneStatus::SmallEmpty(_) => CraneStatus::SmallEmpty(np),
-                                    _ => unreachable!(),
-                                };
-                                scheduled_moves[i].clear();
-                                // TODO: 何狙いかも Crane に持たせたほうがよいかも
-                                for j in 0..n * n {
-                                    if containers[j] == ContainerStatus::Accepted(i) {
-                                        containers[j] = ContainerStatus::Free;
-                                    }
-                                }
-                                debug!("break01");
-                                break;
-                            }
-                        }
-
+                        do_random_move(
+                            i,
+                            my_pos,
+                            &mut ans[i],
+                            &mut scheduled_moves[i],
+                            &mut cranes,
+                            &mut board[turn_cur],
+                            &mut containers,
+                            &mut rng,
+                        );
                         debug!("continue");
                         continue;
                     }
@@ -673,29 +694,17 @@ fn main() {
                     } else {
                         debug!("    force drop rejected");
                         // 適当に動く
+                        do_random_move(
+                            i,
+                            my_pos,
+                            &mut ans[i],
+                            &mut scheduled_moves[i],
+                            &mut cranes,
+                            &mut board[turn_cur],
+                            &mut containers,
+                            &mut rng,
+                        );
                         scheduled_moves[i].push(CraneMove::Drop);
-                        random_move_array.shuffle(&mut rng);
-                        for mv in &random_move_array {
-                            if could_move(i, my_pos, *mv, &board[turn_cur], &cranes) {
-                                ans[i].push(mv.to_ans());
-                                let np = next_pos(my_pos, *mv);
-                                cranes[i] = match cranes[i] {
-                                    CraneStatus::BigEmpty(_) => CraneStatus::BigEmpty(np),
-                                    CraneStatus::BigLift(_, c) => CraneStatus::BigLift(np, c),
-                                    CraneStatus::SmallEmpty(_) => CraneStatus::SmallEmpty(np),
-                                    CraneStatus::SmallLift(_, c) => CraneStatus::SmallLift(np, c),
-                                    _ => unreachable!(),
-                                };
-                                scheduled_moves[i].clear();
-                                // TODO: 何狙いかも Crane に持たせたほうがよいかも
-                                for j in 0..n * n {
-                                    if containers[j] == ContainerStatus::Accepted(i) {
-                                        containers[j] = ContainerStatus::Free;
-                                    }
-                                }
-                                break;
-                            }
-                        }
                     }
                 }
                 CraneMove::Up | CraneMove::Down | CraneMove::Left | CraneMove::Right => {
@@ -713,36 +722,16 @@ fn main() {
                                 // 荷物を現在地に下ろす
                                 if my_pos.1 == 4 {
                                     // 失点するので適当に動く
-                                    random_move_array.shuffle(&mut rng);
-                                    for mv in &random_move_array {
-                                        if could_move(i, my_pos, *mv, &board[turn_cur], &cranes) {
-                                            ans[i].push(mv.to_ans());
-                                            let np = next_pos(my_pos, *mv);
-                                            cranes[i] = match cranes[i] {
-                                                CraneStatus::BigEmpty(_) => {
-                                                    CraneStatus::BigEmpty(np)
-                                                }
-                                                CraneStatus::BigLift(_, c) => {
-                                                    CraneStatus::BigLift(np, c)
-                                                }
-                                                CraneStatus::SmallEmpty(_) => {
-                                                    CraneStatus::SmallEmpty(np)
-                                                }
-                                                CraneStatus::SmallLift(_, c) => {
-                                                    CraneStatus::SmallLift(np, c)
-                                                }
-                                                _ => unreachable!(),
-                                            };
-                                            scheduled_moves[i].clear();
-                                            // TODO: 何狙いかも Crane に持たせたほうがよいかも
-                                            for j in 0..n * n {
-                                                if containers[j] == ContainerStatus::Accepted(i) {
-                                                    containers[j] = ContainerStatus::Free;
-                                                }
-                                            }
-                                            break;
-                                        }
-                                    }
+                                    do_random_move(
+                                        i,
+                                        my_pos,
+                                        &mut ans[i],
+                                        &mut scheduled_moves[i],
+                                        &mut cranes,
+                                        &mut board[turn_cur],
+                                        &mut containers,
+                                        &mut rng,
+                                    );
                                     // どうしても動けない
                                     assert!(scheduled_moves[i].is_empty());
                                 } else {
@@ -769,28 +758,16 @@ fn main() {
                                 // ans[i].push(CraneMove::Wait.to_ans());
                                 // scheduled_moves[i].push(CraneMove::Remove);
                                 // 動けるところに適当に動く
-                                random_move_array.shuffle(&mut rng);
-                                for mv in &random_move_array {
-                                    if could_move(i, my_pos, *mv, &board[turn_cur], &cranes) {
-                                        ans[i].push(mv.to_ans());
-                                        let np = next_pos(my_pos, *mv);
-                                        cranes[i] = match cranes[i] {
-                                            CraneStatus::BigEmpty(_) => CraneStatus::BigEmpty(np),
-                                            CraneStatus::SmallEmpty(_) => {
-                                                CraneStatus::SmallEmpty(np)
-                                            }
-                                            _ => unreachable!(),
-                                        };
-                                        scheduled_moves[i].clear();
-                                        // TODO: 何狙いかも Crane に持たせたほうがよいかも
-                                        for j in 0..n * n {
-                                            if containers[j] == ContainerStatus::Accepted(i) {
-                                                containers[j] = ContainerStatus::Free;
-                                            }
-                                        }
-                                        break;
-                                    }
-                                }
+                                do_random_move(
+                                    i,
+                                    my_pos,
+                                    &mut ans[i],
+                                    &mut scheduled_moves[i],
+                                    &mut cranes,
+                                    &mut board[turn_cur],
+                                    &mut containers,
+                                    &mut rng,
+                                );
                                 // if !move_decided {
                                 //     // しゃーなし
                                 //     ans[i].push(CraneMove::Remove.to_ans());
