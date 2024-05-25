@@ -184,7 +184,7 @@ fn main() {
     // FIXME: 0090 でたまに動けなくなって force drop する
     //        相手をどかす
     // FIXME: 衝突起こり得る不具合を正す
-    // TODO: 時間余裕あるので爆破対象を変えつつ時間いっぱい回してもっともよかったもの
+    // FIXME: コンテナ 25 が出てくるっぽい
     // 乱択を時間いっぱい繰り返すであればこのくらいの発生率のバグは消さなくて良いよね
     // 初期解, 1 回目の計算をを大クレーンだけにしておけば
 
@@ -417,6 +417,16 @@ fn main() {
             CraneStatus::SmallEmpty((4, 1)),
         ];
 
+        // 大クレーンは爆破しない
+        // FIXME: 複数クレーンが衝突するみたい, 暫定的に一つだけ活かす
+        // let mut is_removed_first = vec![false];
+        // for _ in 0..4 {
+        //     is_removed_first.push(rng.gen::<usize>() % 2 == 0);
+        // }
+        let mut is_removed_first = vec![false, true, true, true, true];
+        let r = rng.gen::<usize>();
+        is_removed_first[r % 4 + 1] = false;
+
         let mut turn_cur = init_move.len();
         'turn_loop: while turn_cur < TURN_MAX - 1 && goal_want.iter().any(|g| g.is_some()) {
             debug!("\nturn: {turn_cur}");
@@ -483,9 +493,8 @@ fn main() {
                     continue;
                 }
 
-                if i != 0 && i != 3 {
-                    // めんどいので小クレーンは最初に爆破する
-                    // TODO: 悪効率
+                if is_removed_first[i] {
+                    // TODO: 最初に爆破するのではなく
                     scheduled_moves[i].push(CraneMove::Remove);
                 }
 
