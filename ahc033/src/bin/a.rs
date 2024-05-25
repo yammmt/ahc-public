@@ -461,10 +461,17 @@ fn main() {
                     goal_want[i] = if c % 5 == 4 {
                         None
                     } else {
+                        // 意にそぐわぬものがきたら, 探索失敗として今のループを諦める
+                        // FIXME: %5=0 組が最奥の盤面だと一生無限ループ
                         if goal_want[i].is_none() {
                             break 'turn_loop;
                         } else {
-                            Some(goal_want[i].unwrap() + 1)
+                            let gw = goal_want[i].unwrap();
+                            if c != gw {
+                                break 'turn_loop;
+                            }
+
+                            Some(gw + 1)
                         }
                     };
                     board[turn_cur][i][4] = BoardStatus::Empty;
@@ -839,6 +846,7 @@ fn main() {
         }
     } // loop
 
+    // TODO: 答えが見つからなかった場合 (最奥に %5=0) は, 左から右に受け流すだけでもすべき？
     for a in ans_final {
         println!("{}", a.iter().collect::<String>());
     }
