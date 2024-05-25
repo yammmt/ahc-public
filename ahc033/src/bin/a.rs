@@ -183,10 +183,7 @@ fn main() {
     // TODO: 次にほしいやつも準備させた方が良い？
     // FIXME: 0090 でたまに動けなくなって force drop する
     //        相手をどかす
-    // FIXME: 衝突起こり得る不具合を正す
-    // FIXME: コンテナ 25 が出てくるっぽい
     // 乱択を時間いっぱい繰り返すであればこのくらいの発生率のバグは消さなくて良いよね
-    // 初期解, 1 回目の計算をを大クレーンだけにしておけば
 
     let mut ans_final: Vec<Vec<char>> = vec![vec![]; CRANE_NUM];
 
@@ -249,10 +246,12 @@ fn main() {
                       move_from: (usize, usize),
                       mv: CraneMove,
                       board: &Vec<Vec<BoardStatus>>,
-                      cranes: &[CraneStatus]| {
+                      cranes_now: &[CraneStatus],
+                      cranes_prev: &[CraneStatus]| {
         // 移動できる条件:
         //   - 移動先がグリッド外であると移動不可
         //   - 移動先に大小クレーンがいると移動不可
+        //   - すれ違う動きになる場合は移動不可
         //   - 小クレーンであれば, 自身が荷物持ち中かつ移動先に荷物がある場合は移動不可
         let np = match mv {
             CraneMove::Up => (move_from.0.wrapping_add_signed(-1), move_from.1),
@@ -268,21 +267,27 @@ fn main() {
         }
 
         // 他のクレーン
-        for (i, _c) in cranes.iter().enumerate() {
+        for i in 0..CRANE_NUM {
             if i == crane_id {
                 continue;
             }
 
-            if let Some(other_crane_pos) = cranes[i].pos() {
+            if let Some(other_crane_pos) = cranes_now[i].pos() {
                 if np == other_crane_pos {
+                    return false;
+                }
+            }
+            // すれ違い: 自身の移動先 == 相手の過去位置 && 自身の過去位置 == 相手の現在地
+            if let Some(other_crane_pos_prev) = cranes_prev[i].pos() {
+                if np == other_crane_pos_prev && Some(move_from) == cranes_now[i].pos() {
                     return false;
                 }
             }
         }
 
         // 小クレーン && 運送中 && 移動先にコンテナ
-        if !cranes[crane_id].is_big()
-            && cranes[crane_id].lifting_cid() != None
+        if !cranes_now[crane_id].is_big()
+            && cranes_now[crane_id].lifting_cid() != None
             && board[np.0][np.1] != BoardStatus::Empty
         {
             return false;
@@ -301,7 +306,8 @@ fn main() {
                                move_from: (usize, usize),
                                move_to: (usize, usize),
                                board: &Vec<Vec<BoardStatus>>,
-                               cranes: &[CraneStatus]| {
+                               cranes: &[CraneStatus],
+                               cranes_prev: &[CraneStatus]| {
         // BFS
         let dir = [
             CraneMove::Up,
@@ -324,7 +330,7 @@ fn main() {
 
             visited[cur_pos.0][cur_pos.1] = true;
             for &d in &dir {
-                if !could_move(crane_id, cur_pos, d, board, cranes) {
+                if !could_move(crane_id, cur_pos, d, board, cranes, cranes_prev) {
                     // 移動先に元々自分がいた場合も false になるが, 目的上問題ないので放置
                     continue;
                 }
@@ -345,12 +351,14 @@ fn main() {
                               ans: &mut Vec<char>,
                               scheduled_moves: &mut Vec<CraneMove>,
                               cranes: &mut [CraneStatus],
+                              cranes_prev: &[CraneStatus],
                               board: &mut Vec<Vec<BoardStatus>>,
                               containers: &mut [ContainerStatus],
                               rng: &mut SmallRng| {
         random_move_array.shuffle(rng);
         for mv in &random_move_array {
-            if could_move(my_crane_id, my_pos, *mv, board, cranes) {
+            if could_move(my_crane_id, my_pos, *mv, board, cranes, cranes_prev) {
+                debug!("  decided random move: {:?}", mv);
                 ans.push(mv.to_ans());
                 let np = next_pos(my_pos, *mv);
                 cranes[my_crane_id] = match cranes[my_crane_id] {
@@ -418,14 +426,10 @@ fn main() {
         ];
 
         // 大クレーンは爆破しない
-        // FIXME: 複数クレーンが衝突するみたい, 暫定的に一つだけ活かす
-        // let mut is_removed_first = vec![false];
-        // for _ in 0..4 {
-        //     is_removed_first.push(rng.gen::<usize>() % 2 == 0);
-        // }
-        let mut is_removed_first = vec![false, true, true, true, true];
-        let r = rng.gen::<usize>();
-        is_removed_first[r % 4 + 1] = false;
+        let mut is_removed_first = vec![false];
+        for _ in 0..4 {
+            is_removed_first.push(rng.gen::<usize>() % 2 == 0);
+        }
 
         let mut turn_cur = init_move.len();
         'turn_loop: while turn_cur < TURN_MAX - 1 && goal_want.iter().any(|g| g.is_some()) {
@@ -478,6 +482,10 @@ fn main() {
                     // containers[c] = ContainerStatus::Completed;
                 }
             }
+
+            // 移動前のクレーン状態を控える
+            let cranes_prev = cranes.clone();
+
             debug!("  cranes:");
             for c in &cranes {
                 debug!("    {:?}", c);
@@ -498,6 +506,13 @@ fn main() {
                 debug!("  ### crane {i}");
                 if cranes[i].is_removed() {
                     continue;
+                }
+
+                // assert_eq!(ans[i].len(), turn_cur - 1);
+                // TODO: 暫定処置
+                while ans[i].len() < turn_cur - 1 {
+                    debug!("    [ERROR] invalid ans length");
+                    ans[i].push(CraneMove::Wait.to_ans());
                 }
 
                 if is_removed_first[i] {
@@ -568,6 +583,7 @@ fn main() {
                                 &mut ans[i],
                                 &mut scheduled_moves[i],
                                 &mut cranes,
+                                &cranes_prev,
                                 &mut board[turn_cur],
                                 &mut containers,
                                 &mut rng,
@@ -615,6 +631,7 @@ fn main() {
                                     (cid_lifting / 5, 4),
                                     &board[turn_cur],
                                     &cranes,
+                                    &cranes_prev,
                                 );
                                 if !mm.is_empty() {
                                     candidates.push((cid_lifting, mm));
@@ -640,6 +657,7 @@ fn main() {
                                                 (ii, jj),
                                                 &board[turn_cur],
                                                 &cranes,
+                                                &cranes_prev,
                                             )
                                         };
                                         if !mm.is_empty() {
@@ -683,7 +701,6 @@ fn main() {
                 debug!("    [{i}] move_ideal: {:?}", cur_move);
                 match cur_move {
                     CraneMove::Lift => {
-                        // FIXME:
                         let BoardStatus::Container(c) = board[turn_cur][my_pos.0][my_pos.1] else { break 'turn_loop };
                         ans[i].push(cur_move.to_ans());
                         board[turn_cur][my_pos.0][my_pos.1] = BoardStatus::Empty;
@@ -725,6 +742,7 @@ fn main() {
                                 &mut ans[i],
                                 &mut scheduled_moves[i],
                                 &mut cranes,
+                                &cranes_prev,
                                 &mut board[turn_cur],
                                 &mut containers,
                                 &mut rng,
@@ -737,7 +755,9 @@ fn main() {
                         // - 大クレーンなら問答無用で待つ
                         // - 小クレーンであれば, 荷物をおろして適当に動く
                         //    - 適当に散らさないと同じものを狙いに行くので
-                        if !could_move(i, my_pos, cur_move, &board[turn_cur], &cranes) {
+                        //    - 動けなければ待つ
+                        if !could_move(i, my_pos, cur_move, &board[turn_cur], &cranes, &cranes_prev)
+                        {
                             debug!("  could not move");
                             if cranes[i].is_big() {
                                 ans[i].push(CraneMove::Wait.to_ans());
@@ -752,6 +772,7 @@ fn main() {
                                         &mut ans[i],
                                         &mut scheduled_moves[i],
                                         &mut cranes,
+                                        &cranes_prev,
                                         &mut board[turn_cur],
                                         &mut containers,
                                         &mut rng,
@@ -785,18 +806,19 @@ fn main() {
                                     &mut ans[i],
                                     &mut scheduled_moves[i],
                                     &mut cranes,
+                                    &cranes_prev,
                                     &mut board[turn_cur],
                                     &mut containers,
                                     &mut rng,
                                 );
-                                // if !move_decided {
-                                //     // しゃーなし
-                                //     ans[i].push(CraneMove::Remove.to_ans());
-                                // }
+                                if ans[i].len() < turn_cur {
+                                    // 動ける方法がなかった
+                                    ans[i].push(CraneMove::Wait.to_ans());
+                                }
                             }
                         } else {
                             // 動ける
-                            debug!("    can move");
+                            debug!("    can move: {:?}", cur_move);
                             ans[i].push(cur_move.to_ans());
                             let np = next_pos(my_pos, cur_move);
                             cranes[i] = cranes[i].move_to(np);
