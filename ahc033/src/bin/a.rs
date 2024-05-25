@@ -180,30 +180,15 @@ fn main() {
     //         - イレギュラー発生時には上書きされ得る, ターン数さほど多くないので間に合いそう
     //         - 拾いに行く/置きに行くで盤面変わる分考えると再計算入れたい, 一括ではない
     //     - クレーンの待機状態: 不要, "予定された今の行動が動く系で, 過去 m ターンの行動がすべて待機であれば", で取れる
-    // FIXME: 0090 でたまに動けなくなって force drop する
-    //        相手をどかす
+
     // 乱択を時間いっぱい繰り返すであればこのくらいの発生率のバグは消さなくて良いよね
 
     let mut ans_final: Vec<Vec<char>> = vec![vec![]; CRANE_NUM];
 
-    // 大クレーンが運ぶ数字を五択
-    // 大クレーン最短経路中に小クレーンも左端を空ける or 次の数字を準備するをする
-    // 大クレーンゴール時に盤面のスコアを出す
-    // 大クレーンをなるべく使わない方がよい気がするな
     // 一気に全部吐き出すと小クレーンの経路が大きく制限されてしまう
     // 初期に吐き出すパスを偶数 or 奇数行にすれば, 必ず 0 を引ける？
-    // 一ターンずつ操作を決定するより, 一つのクレーンを決める => 余った経路でうまく残りのクレーンを動かす,
+    // 一ターンずつ操作を決定するより, 一つのクレーンを決める => 余った経路でうまく残りのクレーンを遡って動かす,
     // とした方がトータルでは賢いみたい
-
-    // 0-origin 偶数行目に idx-0 があれば, 0 列目登場時点で小さいレーン 1 or 3 をゴールまで導く
-    // 偶数レーンは四列目埋まるまでは何も考えず掃き出す
-
-    // 四列掃き出し後に最もゴールに近いものを運ぶ
-    // 0000 を手計算してもどうにも大クレーン依存が強く前半ほぼほぼ動けない
-    // とはいえども後半はそこそこ改善できる
-    //     => 一旦実装する？
-    // なんいせよ全手の盤面を保存しないとだめっぽい
-    // 最終的な盤面の状態を記憶しておき, 遡って動かす
 
     // 移動
     let next_pos = |pos_from: (usize, usize), mv: CraneMove| match mv {
@@ -465,7 +450,6 @@ fn main() {
                         None
                     } else {
                         // 意にそぐわぬものがきたら, 探索失敗として今のループを諦める
-                        // FIXME: %5=0 組が最奥の盤面だと一生無限ループ
                         if goal_want[i].is_none() {
                             break 'turn_loop;
                         } else {
@@ -478,7 +462,6 @@ fn main() {
                         }
                     };
                     board[turn_cur][i][4] = BoardStatus::Empty;
-                    // containers[c] = ContainerStatus::Completed;
                 }
             }
             if containers.iter().all(|&c| c == ContainerStatus::Completed) {
@@ -503,7 +486,6 @@ fn main() {
             }
 
             // クレーンを動かす
-            // FIXME: Accepted が勝手にクリアされる
             for i in 0..CRANE_NUM {
                 debug!("  ### crane {i}");
                 if cranes[i].is_removed() {
@@ -518,7 +500,8 @@ fn main() {
                 }
 
                 if is_removed_first[i] {
-                    // TODO: 最初に爆破するのではなく
+                    // TODO: 最初に爆破するのではなく後で爆破したほうがよい可能性がある
+                    // 後半使い道のなくなったやつとか
                     scheduled_moves[i].push(CraneMove::Remove);
                 }
 
@@ -527,7 +510,6 @@ fn main() {
 
                 if scheduled_moves[i].is_empty() {
                     // 予定された動きがない場合, ここで動けるか再判定を入れる
-                    // TODO: クレーン大小で処理を分ける？最短経路だけなら変わらんが
                     // (対象, 行動群)
                     let mut candidates = vec![];
                     if cranes[i].is_empty() {
@@ -540,8 +522,6 @@ fn main() {
                                 continue;
                             }
 
-                            // FIXME: なぜか同じターンに同じものを狙いに行く
-                            // でもここではないみたい
                             debug!(
                                 "  candidate: containers[{cid_gw}], {:?}",
                                 containers[*cid_gw]
@@ -607,8 +587,7 @@ fn main() {
 
                         // ゴール後には空になる
                         if candidates.is_empty() {
-                            // FIXME: ここで小クレーンが一生動けなくなる
-                            // FIXME: break しちゃうと ans 入らない
+                            // FIXME: 中途半端な `continue` で動けなくなる？
                             debug!("    bar random");
                             do_random_move(
                                 i,
@@ -701,7 +680,6 @@ fn main() {
                             }
                         }
 
-                        // FIXME: 初手 %5=0 組がすべ最奥にいる場合に詰む, 確率 1/50000 程度?
                         debug!("  candidates: {:?}", candidates);
                         if candidates.is_empty() {
                             candidates.push((cid_lifting, vec![]));
