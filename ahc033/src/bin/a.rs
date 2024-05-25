@@ -5,6 +5,7 @@ use rand::rngs::SmallRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 use std::collections::VecDeque;
+use std::time::{Duration, Instant};
 
 macro_rules! debug {
     ($($arg:tt)*) => {
@@ -18,6 +19,9 @@ macro_rules! debug {
 // N 固定だから vec を回避すればちょっとだけ高速化できる
 const CRANE_NUM: usize = 5;
 const TURN_MAX: usize = 1000;
+// TODO: 提出時は伸ばそう
+const RUN_TIME_MAX_MS: u64 = if cfg!(debug_assertions) { 500 } else { 2970 };
+// const RUN_TIME_MAX_MS: u64 = if cfg!(debug_assertions) { 500 } else { 1000 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum BoardStatus {
@@ -129,6 +133,9 @@ impl CraneMove {
 }
 
 fn main() {
+    let start_time = Instant::now();
+    let break_time = Duration::from_millis(RUN_TIME_MAX_MS);
+
     input! {
         n: usize,
         ann: [[usize; n]; n],
@@ -181,26 +188,7 @@ fn main() {
     // 乱択を時間いっぱい繰り返すであればこのくらいの発生率のバグは消さなくて良いよね
     // 初期解, 1 回目の計算をを大クレーンだけにしておけば
 
-    let mut ans = vec![vec![]; CRANE_NUM];
-    // 行動予定は処理の都合で逆順に突っ込む
-    let mut scheduled_moves = vec![vec![]; CRANE_NUM];
-    let mut schedule_decided_turn = vec![0; CRANE_NUM];
-
-    // 盤面管理
-    let mut board = vec![vec![vec![BoardStatus::Empty; 5]; 5]; TURN_MAX];
-    // 本来ここで定義すべきだが, 今は初手を 4x4 掃き出しで固定しているのでコメントアウト
-    // let mut cranes = [
-    //     CraneStatus::BigEmpty((0, 0)),
-    //     CraneStatus::SmallEmpty((1, 0)),
-    //     CraneStatus::SmallEmpty((2, 0)),
-    //     CraneStatus::SmallEmpty((3, 0)),
-    //     CraneStatus::SmallEmpty((4, 0)),
-    // ];
-    let mut containers = vec![ContainerStatus::Free; n * n];
-
-    // 進捗管理
-    let mut aidx = vec![0; n];
-    let mut goal_want = [Some(0), Some(5), Some(10), Some(15), Some(20)];
+    let mut ans_final: Vec<Vec<char>> = vec![vec![]; CRANE_NUM];
 
     // 大クレーンが運ぶ数字を五択
     // 大クレーン最短経路中に小クレーンも左端を空ける or 次の数字を準備するをする
@@ -383,341 +371,362 @@ fn main() {
         }
     };
 
-    // とりあえず 3 列目までの 20 個を全部出して, 残りは %5 が小さいものから順に突っ込む
-    // 搬出先と順番さえあっていれば, 大クレーンで一つずつ誘導するとして,
-    // 高々往復 20 ターンを 25 回繰り返すだけだから 500 点を下回るくらいに落ち着くはず
+    while start_time.elapsed() < break_time {
+        let mut ans = vec![vec![]; CRANE_NUM];
+        // 行動予定は処理の都合で逆順に突っ込む
+        let mut scheduled_moves = vec![vec![]; CRANE_NUM];
+        let mut schedule_decided_turn = vec![0; CRANE_NUM];
 
-    // 三列目まで全部出す
-    // TODO: 固定操作を置き換えられれば, 列 1 はこの時点で sorted にできる
-    let init_move = "PRRRQLLLPRRQLLPRQ".chars().collect::<Vec<char>>();
-    for i in 0..5 {
-        for c in &init_move {
-            ans[i].push(*c);
-        }
-        board[init_move.len()][i][3] = BoardStatus::Container(ann[i][0]);
-        board[init_move.len()][i][2] = BoardStatus::Container(ann[i][1]);
-        board[init_move.len()][i][1] = BoardStatus::Container(ann[i][2]);
-        aidx[i] = 3;
-    }
-    // 前処理のため開始位置が固定
-    let mut cranes = [
-        CraneStatus::BigEmpty((0, 1)),
-        CraneStatus::SmallEmpty((1, 1)),
-        CraneStatus::SmallEmpty((2, 1)),
-        CraneStatus::SmallEmpty((3, 1)),
-        CraneStatus::SmallEmpty((4, 1)),
-    ];
+        // 盤面管理
+        let mut board = vec![vec![vec![BoardStatus::Empty; 5]; 5]; TURN_MAX];
+        // 本来ここで定義すべきだが, 今は初手を 4x4 掃き出しで固定しているのでコメントアウト
+        // let mut cranes = [
+        //     CraneStatus::BigEmpty((0, 0)),
+        //     CraneStatus::SmallEmpty((1, 0)),
+        //     CraneStatus::SmallEmpty((2, 0)),
+        //     CraneStatus::SmallEmpty((3, 0)),
+        //     CraneStatus::SmallEmpty((4, 0)),
+        // ];
+        let mut containers = vec![ContainerStatus::Free; n * n];
 
-    let mut turn_cur = init_move.len();
-    while turn_cur <= TURN_MAX && goal_want.iter().any(|g| g.is_some()) {
-        debug!("\nturn: {turn_cur}");
-        turn_cur += 1;
-        // 盤面の状態は前回のもの
-        for i in 0..n {
-            for j in 0..n {
-                board[turn_cur][i][j] = board[turn_cur - 1][i][j];
+        // 進捗管理
+        let mut aidx = vec![0; n];
+        let mut goal_want = [Some(0), Some(5), Some(10), Some(15), Some(20)];
+
+        // とりあえず 3 列目までの 20 個を全部出して, 残りは %5 が小さいものから順に突っ込む
+        // 搬出先と順番さえあっていれば, 大クレーンで一つずつ誘導するとして,
+        // 高々往復 20 ターンを 25 回繰り返すだけだから 500 点を下回るくらいに落ち着くはず
+
+        // 三列目まで全部出す
+        let init_move = "PRRRQLLLPRRQLLPRQ".chars().collect::<Vec<char>>();
+        for i in 0..5 {
+            for c in &init_move {
+                ans[i].push(*c);
             }
+            board[init_move.len()][i][3] = BoardStatus::Container(ann[i][0]);
+            board[init_move.len()][i][2] = BoardStatus::Container(ann[i][1]);
+            board[init_move.len()][i][1] = BoardStatus::Container(ann[i][2]);
+            aidx[i] = 3;
         }
+        // 前処理のため開始位置が固定
+        let mut cranes = [
+            CraneStatus::BigEmpty((0, 1)),
+            CraneStatus::SmallEmpty((1, 1)),
+            CraneStatus::SmallEmpty((2, 1)),
+            CraneStatus::SmallEmpty((3, 1)),
+            CraneStatus::SmallEmpty((4, 1)),
+        ];
 
-        // 流れてきたものを受け取る
-        for i in 0..n {
-            if board[turn_cur - 1][i][0] != BoardStatus::Empty
-                || cranes
-                    .iter()
-                    .any(|&c| !c.is_empty() && c.pos().unwrap() == (i, 0))
-                || aidx[i] >= n
-            {
-                // コンテナが存在するので受け取れない (lift 中含め)
-                continue;
-            }
-
-            board[turn_cur][i][0] = BoardStatus::Container(ann[i][aidx[i]]);
-            aidx[i] += 1;
-        }
-
-        // 回収されたものを消す
-        for i in 0..n {
-            // debug!("  board[][{i}][4] = {:?}", board[turn_cur][i][4]);
-            if let BoardStatus::Container(c) = board[turn_cur][i][4] {
-                goal_want[i] = if c % 5 == 4 {
-                    None
-                } else {
-                    Some(goal_want[i].unwrap() + 1)
-                };
-                board[turn_cur][i][4] = BoardStatus::Empty;
-                // containers[c] = ContainerStatus::Completed;
-            }
-        }
-        debug!("  cranes:");
-        for c in &cranes {
-            debug!("    {:?}", c);
-        }
-        debug!("  containers:");
-        for (i, c) in containers.iter().enumerate() {
-            debug! {"    {i}: {:?}", c}
-        }
-
-        debug!("  goal_want: {:?}", goal_want);
-        for i in 0..n {
-            debug!("  {:?}", board[turn_cur][i]);
-        }
-
-        // クレーンを動かす
-        // FIXME: Accepted が勝手にクリアされる
-        for i in 0..CRANE_NUM {
-            debug!("  ### crane {i}");
-            if cranes[i].is_removed() {
-                continue;
+        let mut turn_cur = init_move.len();
+        'turn_loop: while turn_cur < TURN_MAX - 1 && goal_want.iter().any(|g| g.is_some()) {
+            debug!("\nturn: {turn_cur}");
+            turn_cur += 1;
+            // 盤面の状態は前回のもの
+            for i in 0..n {
+                for j in 0..n {
+                    board[turn_cur][i][j] = board[turn_cur - 1][i][j];
+                }
             }
 
-            if i != 0 && i != 3 {
-                // めんどいので小クレーンは最初に爆破する
-                // TODO: 悪効率
-                scheduled_moves[i].push(CraneMove::Remove);
+            // 流れてきたものを受け取る
+            for i in 0..n {
+                if board[turn_cur - 1][i][0] != BoardStatus::Empty
+                    || cranes
+                        .iter()
+                        .any(|&c| !c.is_empty() && c.pos().unwrap() == (i, 0))
+                    || aidx[i] >= n
+                {
+                    // コンテナが存在するので受け取れない (lift 中含め)
+                    continue;
+                }
+
+                board[turn_cur][i][0] = BoardStatus::Container(ann[i][aidx[i]]);
+                aidx[i] += 1;
             }
 
-            let my_pos = cranes[i].pos().unwrap();
-            debug!("  crane[{i}], scheduled_moves: {:?}", scheduled_moves[i]);
-
-            if scheduled_moves[i].is_empty() {
-                // 予定された動きがない場合, ここで動けるか再判定を入れる
-                // TODO: クレーン大小で処理を分ける？最短経路だけなら変わらんが
-                // (対象, 行動群)
-                let mut candidates = vec![];
-                if cranes[i].is_empty() {
-                    // なにももっていないので拾いに行く
-                    for gw_o in &goal_want {
-                        // ゴールに持っていけるものがあれば優先する
-                        let Some(cid_gw) = gw_o else { continue };
-
-                        if containers[*cid_gw] != ContainerStatus::Free {
-                            continue;
+            // 回収されたものを消す
+            for i in 0..n {
+                // debug!("  board[][{i}][4] = {:?}", board[turn_cur][i][4]);
+                if let BoardStatus::Container(c) = board[turn_cur][i][4] {
+                    goal_want[i] = if c % 5 == 4 {
+                        None
+                    } else {
+                        if goal_want[i].is_none() {
+                            break 'turn_loop;
+                        } else {
+                            Some(goal_want[i].unwrap() + 1)
                         }
+                    };
+                    board[turn_cur][i][4] = BoardStatus::Empty;
+                    // containers[c] = ContainerStatus::Completed;
+                }
+            }
+            debug!("  cranes:");
+            for c in &cranes {
+                debug!("    {:?}", c);
+            }
+            debug!("  containers:");
+            for (i, c) in containers.iter().enumerate() {
+                debug! {"    {i}: {:?}", c}
+            }
 
-                        // FIXME: なぜか同じターンに同じものを狙いに行く
-                        // でもここではないみたい
-                        debug!(
-                            "  candidate: containers[{cid_gw}], {:?}",
-                            containers[*cid_gw]
-                        );
-                        for ii in 0..n {
-                            for jj in 0..n {
-                                if board[turn_cur][ii][jj] == BoardStatus::Container(*cid_gw) {
-                                    let mm = min_move(i, my_pos, (ii, jj));
-                                    candidates.push((*cid_gw, mm));
-                                }
-                            }
-                        }
+            debug!("  goal_want: {:?}", goal_want);
+            for i in 0..n {
+                debug!("  {:?}", board[turn_cur][i]);
+            }
 
-                        candidates.sort_unstable_by(|a, b| a.1.len().cmp(&b.1.len()));
-                    }
-                    debug!("    foo, {:?}", candidates);
+            // クレーンを動かす
+            // FIXME: Accepted が勝手にクリアされる
+            for i in 0..CRANE_NUM {
+                debug!("  ### crane {i}");
+                if cranes[i].is_removed() {
+                    continue;
+                }
 
-                    if candidates.is_empty() {
-                        // ゴールにもっていけるものがない
-                        // とりあえず左端 ([*][0]) を開けて新しいコンテナを引き出す
-                        for ii in 0..n {
-                            let BoardStatus::Container(cid) = board[turn_cur][ii][0] else { continue };
+                if i != 0 && i != 3 {
+                    // めんどいので小クレーンは最初に爆破する
+                    // TODO: 悪効率
+                    scheduled_moves[i].push(CraneMove::Remove);
+                }
 
-                            if containers[cid] != ContainerStatus::Free {
+                let my_pos = cranes[i].pos().unwrap();
+                debug!("  crane[{i}], scheduled_moves: {:?}", scheduled_moves[i]);
+
+                if scheduled_moves[i].is_empty() {
+                    // 予定された動きがない場合, ここで動けるか再判定を入れる
+                    // TODO: クレーン大小で処理を分ける？最短経路だけなら変わらんが
+                    // (対象, 行動群)
+                    let mut candidates = vec![];
+                    if cranes[i].is_empty() {
+                        // なにももっていないので拾いに行く
+                        for gw_o in &goal_want {
+                            // ゴールに持っていけるものがあれば優先する
+                            let Some(cid_gw) = gw_o else { continue };
+
+                            if containers[*cid_gw] != ContainerStatus::Free {
                                 continue;
                             }
 
-                            let mm = min_move(i, my_pos, (ii, 0));
-                            candidates.push((cid, mm));
+                            // FIXME: なぜか同じターンに同じものを狙いに行く
+                            // でもここではないみたい
+                            debug!(
+                                "  candidate: containers[{cid_gw}], {:?}",
+                                containers[*cid_gw]
+                            );
+                            for ii in 0..n {
+                                for jj in 0..n {
+                                    if board[turn_cur][ii][jj] == BoardStatus::Container(*cid_gw) {
+                                        let mm = min_move(i, my_pos, (ii, jj));
+                                        candidates.push((*cid_gw, mm));
+                                    }
+                                }
+                            }
+
+                            candidates.sort_unstable_by(|a, b| a.1.len().cmp(&b.1.len()));
                         }
-                    }
+                        debug!("    foo, {:?}", candidates);
 
-                    // ゴール後には空になる
-                    // assert!(!candidates.is_empty());
-                    if candidates.is_empty() {
-                        // FIXME: ここで小クレーンが一生動けなくなる
-                        // FIXME: break しちゃうと ans 入らない
-                        debug!("    bar random");
-                        do_random_move(
-                            i,
-                            my_pos,
-                            &mut ans[i],
-                            &mut scheduled_moves[i],
-                            &mut cranes,
-                            &mut board[turn_cur],
-                            &mut containers,
-                            &mut rng,
-                        );
-                        debug!("continue");
-                        continue;
-                    }
-                    debug!("    {:?}", candidates);
-                    if containers[candidates[0].0] != ContainerStatus::Free {
-                        ans[i].push(CraneMove::Remove.to_ans());
-                        scheduled_moves[i].clear();
-                        cranes[i] = CraneStatus::Removed;
-                        break;
-                    }
+                        if candidates.is_empty() {
+                            // ゴールにもっていけるものがない
+                            // とりあえず左端 ([*][0]) を開けて新しいコンテナを引き出す
+                            for ii in 0..n {
+                                let BoardStatus::Container(cid) = board[turn_cur][ii][0] else { continue };
 
-                    candidates[0].1.push(CraneMove::Lift);
-                    candidates[0].1.reverse();
-                    scheduled_moves[i] = candidates[0].1.clone();
-                    schedule_decided_turn[i] = turn_cur;
-                    // ここで変えないと同じものを複数クレーンが狙いに行ってしまう
-                    // FIXME: なぜか同じものを
-                    containers[candidates[0].0] = ContainerStatus::Accepted(i);
-                    debug!(
-                        "  A, containers[{}], {:?}",
-                        candidates[0].0, containers[candidates[0].0]
-                    );
-                } else {
-                    // なにかをもっているので置きに行く
-                    // TODO: 小クレーンは動ける範囲が限定されるので
-                    let cid_lifting = cranes[i].lifting_cid().unwrap();
-                    for gw_o in &goal_want {
-                        // ゴールできるならゴールへ
-                        let Some(cid_gw) = gw_o else { continue; };
+                                if containers[cid] != ContainerStatus::Free {
+                                    continue;
+                                }
 
-                        if *cid_gw != cid_lifting {
-                            continue;
+                                let mm = min_move(i, my_pos, (ii, 0));
+                                candidates.push((cid, mm));
+                            }
                         }
 
-                        if cranes[i].is_big() {
-                            let mm = min_move(i, my_pos, (cid_lifting / 5, 4));
-                            candidates.push((cid_lifting, mm));
-                            break;
-                        } else {
-                            let mm = min_move_small_lift(
+                        // ゴール後には空になる
+                        if candidates.is_empty() {
+                            // FIXME: ここで小クレーンが一生動けなくなる
+                            // FIXME: break しちゃうと ans 入らない
+                            debug!("    bar random");
+                            do_random_move(
                                 i,
                                 my_pos,
-                                (cid_lifting / 5, 4),
-                                &board[turn_cur],
-                                &cranes,
+                                &mut ans[i],
+                                &mut scheduled_moves[i],
+                                &mut cranes,
+                                &mut board[turn_cur],
+                                &mut containers,
+                                &mut rng,
                             );
-                            if !mm.is_empty() {
-                                candidates.push((cid_lifting, mm));
-                            }
+                            debug!("continue");
+                            continue;
+                        }
+                        debug!("    {:?}", candidates);
+                        if containers[candidates[0].0] != ContainerStatus::Free {
+                            ans[i].push(CraneMove::Remove.to_ans());
+                            scheduled_moves[i].clear();
+                            cranes[i] = CraneStatus::Removed;
                             break;
                         }
-                    }
 
-                    if candidates.is_empty() {
-                        // ゴールに置けないので一時的に適当なところに置く
-                        // - 左端を空けるため, [*][0] には置かない
-                        // - 右端に置くと失点するので, [*][4] には置かない
-                        // TODO: 一時置きの先はゴールに近いほうがよい
-                        for ii in 0..n {
-                            for jj in 1..n - 1 {
-                                if board[turn_cur][ii][jj] == BoardStatus::Empty {
-                                    let mm = if cranes[i].is_big() {
-                                        min_move(i, my_pos, (ii, jj))
-                                    } else {
-                                        min_move_small_lift(
-                                            i,
-                                            my_pos,
-                                            (ii, jj),
-                                            &board[turn_cur],
-                                            &cranes,
-                                        )
-                                    };
-                                    if !mm.is_empty() {
-                                        candidates.push((cid_lifting, mm));
+                        candidates[0].1.push(CraneMove::Lift);
+                        candidates[0].1.reverse();
+                        scheduled_moves[i] = candidates[0].1.clone();
+                        schedule_decided_turn[i] = turn_cur;
+                        // ここで変えないと同じものを複数クレーンが狙いに行ってしまう
+                        containers[candidates[0].0] = ContainerStatus::Accepted(i);
+                        debug!(
+                            "  A, containers[{}], {:?}",
+                            candidates[0].0, containers[candidates[0].0]
+                        );
+                    } else {
+                        // なにかをもっているので置きに行く
+                        let cid_lifting = cranes[i].lifting_cid().unwrap();
+                        for gw_o in &goal_want {
+                            // ゴールできるならゴールへ
+                            let Some(cid_gw) = gw_o else { continue; };
+
+                            if *cid_gw != cid_lifting {
+                                continue;
+                            }
+
+                            if cranes[i].is_big() {
+                                let mm = min_move(i, my_pos, (cid_lifting / 5, 4));
+                                candidates.push((cid_lifting, mm));
+                                break;
+                            } else {
+                                let mm = min_move_small_lift(
+                                    i,
+                                    my_pos,
+                                    (cid_lifting / 5, 4),
+                                    &board[turn_cur],
+                                    &cranes,
+                                );
+                                if !mm.is_empty() {
+                                    candidates.push((cid_lifting, mm));
+                                }
+                                break;
+                            }
+                        }
+
+                        if candidates.is_empty() {
+                            // ゴールに置けないので一時的に適当なところに置く
+                            // - 左端を空けるため, [*][0] には置かない
+                            // - 右端に置くと失点するので, [*][4] には置かない
+                            // TODO: 一時置きの先はゴールに近いほうがよい
+                            for ii in 0..n {
+                                for jj in 1..n - 1 {
+                                    if board[turn_cur][ii][jj] == BoardStatus::Empty {
+                                        let mm = if cranes[i].is_big() {
+                                            min_move(i, my_pos, (ii, jj))
+                                        } else {
+                                            min_move_small_lift(
+                                                i,
+                                                my_pos,
+                                                (ii, jj),
+                                                &board[turn_cur],
+                                                &cranes,
+                                            )
+                                        };
+                                        if !mm.is_empty() {
+                                            candidates.push((cid_lifting, mm));
+                                        }
                                     }
                                 }
                             }
                         }
-                    }
 
-                    // FIXME: 初手 %5=0 組がすべ最奥にいる場合に詰む, 確率 1/50000 程度?
-                    debug!("  candidates: {:?}", candidates);
-                    if candidates.is_empty() {
-                        candidates.push((cid_lifting, vec![]));
-                    }
-                    candidates.sort_unstable_by(|a, b| a.1.len().cmp(&b.1.len()));
-                    candidates[0].1.push(CraneMove::Drop);
-                    if candidates[0].1.len() == 1 {
-                        // 連続して Lift/Drop させないため, 適当に動く
-                        debug!("    add random x2");
-                        let mv = random_move(rng.gen::<usize>());
-                        for _ in 0..2 {
-                            candidates[0].1.push(mv);
+                        // FIXME: 初手 %5=0 組がすべ最奥にいる場合に詰む, 確率 1/50000 程度?
+                        debug!("  candidates: {:?}", candidates);
+                        if candidates.is_empty() {
+                            candidates.push((cid_lifting, vec![]));
                         }
+                        candidates.sort_unstable_by(|a, b| a.1.len().cmp(&b.1.len()));
+                        candidates[0].1.push(CraneMove::Drop);
+                        if candidates[0].1.len() == 1 {
+                            // 連続して Lift/Drop させないため, 適当に動く
+                            debug!("    add random x2");
+                            let mv = random_move(rng.gen::<usize>());
+                            for _ in 0..2 {
+                                candidates[0].1.push(mv);
+                            }
+                        }
+                        candidates[0].1.reverse();
+                        scheduled_moves[i] = candidates[0].1.clone();
+                        schedule_decided_turn[i] = turn_cur;
+                        containers[candidates[0].0] = ContainerStatus::Accepted(i);
+                        debug!("  B, containers[{}]", candidates[0].0);
                     }
-                    candidates[0].1.reverse();
-                    scheduled_moves[i] = candidates[0].1.clone();
-                    schedule_decided_turn[i] = turn_cur;
-                    containers[candidates[0].0] = ContainerStatus::Accepted(i);
-                    debug!("  B, containers[{}]", candidates[0].0);
                 }
-            }
 
-            debug!("    schedule decided: {:?}", scheduled_moves[i]);
-            if scheduled_moves[i].is_empty() {
-                ans[i].push(CraneMove::Wait.to_ans());
-                continue;
-            }
-
-            let cur_move = scheduled_moves[i].pop().unwrap();
-            debug!("    [{i}] move_ideal: {:?}", cur_move);
-            match cur_move {
-                CraneMove::Lift => {
-                    // FIXME:
-                    let BoardStatus::Container(c) = board[turn_cur][my_pos.0][my_pos.1] else { unreachable!() };
-                    ans[i].push(cur_move.to_ans());
-                    board[turn_cur][my_pos.0][my_pos.1] = BoardStatus::Empty;
-                    cranes[i] = match cranes[i] {
-                        CraneStatus::BigEmpty(p) => CraneStatus::BigLift(p, c),
-                        CraneStatus::SmallEmpty(p) => CraneStatus::SmallLift(p, c),
-                        _ => unreachable!(),
-                    };
-                    containers[c] = ContainerStatus::BeingMoved(i);
+                debug!("    schedule decided: {:?}", scheduled_moves[i]);
+                if scheduled_moves[i].is_empty() {
+                    ans[i].push(CraneMove::Wait.to_ans());
+                    continue;
                 }
-                CraneMove::Drop => {
-                    let Some(c) = cranes[i].lifting_cid() else { unreachable!() };
-                    if could_drop(my_pos, &board[turn_cur]) {
-                        debug!("    force drop accepted");
+
+                let cur_move = scheduled_moves[i].pop().unwrap();
+                debug!("    [{i}] move_ideal: {:?}", cur_move);
+                match cur_move {
+                    CraneMove::Lift => {
+                        // FIXME:
+                        let BoardStatus::Container(c) = board[turn_cur][my_pos.0][my_pos.1] else { break 'turn_loop };
                         ans[i].push(cur_move.to_ans());
-                        // board は empty のまま
-                        // 回収と目標更新処理はターン頭で処理する,
-                        // 同じところに連投されるリスクがあるため (バグがなければないが)
+                        board[turn_cur][my_pos.0][my_pos.1] = BoardStatus::Empty;
                         cranes[i] = match cranes[i] {
-                            CraneStatus::BigLift(p, _c) => CraneStatus::BigEmpty(p),
-                            CraneStatus::SmallLift(p, _c) => CraneStatus::SmallEmpty(p),
-                            _ => unreachable!(),
+                            CraneStatus::BigEmpty(p) => CraneStatus::BigLift(p, c),
+                            CraneStatus::SmallEmpty(p) => CraneStatus::SmallLift(p, c),
+                            _ => break 'turn_loop,
                         };
-                        board[turn_cur][my_pos.0][my_pos.1] = BoardStatus::Container(c);
-                        containers[c] = match my_pos.1 {
-                            4 => ContainerStatus::Completed,
-                            _ => ContainerStatus::Free,
-                        };
-
-                        if !cranes[i].is_big() && my_pos.1 != 4 {
-                            debug!("  small crane, not goal");
-                        }
-                    } else {
-                        debug!("    force drop rejected");
-                        // 適当に動く
-                        do_random_move(
-                            i,
-                            my_pos,
-                            &mut ans[i],
-                            &mut scheduled_moves[i],
-                            &mut cranes,
-                            &mut board[turn_cur],
-                            &mut containers,
-                            &mut rng,
-                        );
-                        scheduled_moves[i].push(CraneMove::Drop);
+                        containers[c] = ContainerStatus::BeingMoved(i);
                     }
-                }
-                CraneMove::Up | CraneMove::Down | CraneMove::Left | CraneMove::Right => {
-                    // 移動できなかった場合
-                    // - 大クレーンなら問答無用で待つ
-                    // - 小クレーンであれば, 荷物をおろして適当に動く
-                    //    - 適当に散らさないと同じものを狙いに行くので
-                    if !could_move(i, my_pos, cur_move, &board[turn_cur], &cranes) {
-                        debug!("  could not move");
-                        if cranes[i].is_big() {
-                            ans[i].push(CraneMove::Wait.to_ans());
-                            scheduled_moves[i].push(cur_move);
+                    CraneMove::Drop => {
+                        let Some(c) = cranes[i].lifting_cid() else { break 'turn_loop };
+                        if could_drop(my_pos, &board[turn_cur]) {
+                            debug!("    force drop accepted");
+                            ans[i].push(cur_move.to_ans());
+                            // board は empty のまま
+                            // 回収と目標更新処理はターン頭で処理する,
+                            // 同じところに連投されるリスクがあるため (バグがなければないが)
+                            cranes[i] = match cranes[i] {
+                                CraneStatus::BigLift(p, _c) => CraneStatus::BigEmpty(p),
+                                CraneStatus::SmallLift(p, _c) => CraneStatus::SmallEmpty(p),
+                                _ => break 'turn_loop,
+                            };
+                            board[turn_cur][my_pos.0][my_pos.1] = BoardStatus::Container(c);
+                            containers[c] = match my_pos.1 {
+                                4 => ContainerStatus::Completed,
+                                _ => ContainerStatus::Free,
+                            };
+
+                            if !cranes[i].is_big() && my_pos.1 != 4 {
+                                debug!("  small crane, not goal");
+                            }
                         } else {
-                            if let Some(cid) = cranes[i].lifting_cid() {
+                            debug!("    force drop rejected");
+                            // 適当に動く
+                            do_random_move(
+                                i,
+                                my_pos,
+                                &mut ans[i],
+                                &mut scheduled_moves[i],
+                                &mut cranes,
+                                &mut board[turn_cur],
+                                &mut containers,
+                                &mut rng,
+                            );
+                            scheduled_moves[i].push(CraneMove::Drop);
+                        }
+                    }
+                    CraneMove::Up | CraneMove::Down | CraneMove::Left | CraneMove::Right => {
+                        // 移動できなかった場合
+                        // - 大クレーンなら問答無用で待つ
+                        // - 小クレーンであれば, 荷物をおろして適当に動く
+                        //    - 適当に散らさないと同じものを狙いに行くので
+                        if !could_move(i, my_pos, cur_move, &board[turn_cur], &cranes) {
+                            debug!("  could not move");
+                            if cranes[i].is_big() {
+                                ans[i].push(CraneMove::Wait.to_ans());
+                                scheduled_moves[i].push(cur_move);
+                            } else if let Some(cid) = cranes[i].lifting_cid() {
                                 // 荷物を現在地に下ろす
                                 if my_pos.1 == 4 {
                                     // 失点するので適当に動く
@@ -732,7 +741,9 @@ fn main() {
                                         &mut rng,
                                     );
                                     // どうしても動けない
-                                    assert!(scheduled_moves[i].is_empty());
+                                    if scheduled_moves[i].is_empty() {
+                                        break 'turn_loop;
+                                    }
                                 } else {
                                     // FIXME: 列 4 だと辛い
                                     debug!("    force drop");
@@ -740,22 +751,17 @@ fn main() {
                                     cranes[i] = match cranes[i] {
                                         CraneStatus::BigLift(p, _) => CraneStatus::BigEmpty(p),
                                         CraneStatus::SmallLift(p, _) => CraneStatus::SmallEmpty(p),
-                                        _ => unreachable!(),
+                                        _ => break 'turn_loop,
                                     };
                                     board[turn_cur][my_pos.0][my_pos.1] =
                                         BoardStatus::Container(cid);
                                     containers[cid] = ContainerStatus::Free;
                                     scheduled_moves[i].clear();
                                 }
-                                // dbg
                                 // debug!("  schedule remove");
-                                // scheduled_moves[i].push(CraneMove::Remove);
                             } else {
                                 // 荷物なし
-                                // dbg
                                 // debug!("  debug remove");
-                                // ans[i].push(CraneMove::Wait.to_ans());
-                                // scheduled_moves[i].push(CraneMove::Remove);
                                 // 動けるところに適当に動く
                                 do_random_move(
                                     i,
@@ -772,42 +778,59 @@ fn main() {
                                 //     ans[i].push(CraneMove::Remove.to_ans());
                                 // }
                             }
-                        }
-                    } else {
-                        // 動ける
-                        debug!("    can move");
-                        ans[i].push(cur_move.to_ans());
-                        let np = next_pos(my_pos, cur_move);
-                        cranes[i] = cranes[i].move_to(np);
-                    }
-                }
-                CraneMove::Wait => ans[i].push(CraneMove::Wait.to_ans()),
-                CraneMove::Remove => {
-                    ans[i].push(CraneMove::Remove.to_ans());
-                    cranes[i] = CraneStatus::Removed;
-                    // Accepted 状態のままだと動けなくなる
-                    for container_id in 0..n * n {
-                        if Some(i) == containers[container_id].moved_by() {
-                            containers[container_id] = ContainerStatus::Free;
+                        } else {
+                            // 動ける
+                            debug!("    can move");
+                            ans[i].push(cur_move.to_ans());
+                            let np = next_pos(my_pos, cur_move);
+                            cranes[i] = cranes[i].move_to(np);
                         }
                     }
+                    CraneMove::Wait => ans[i].push(CraneMove::Wait.to_ans()),
+                    CraneMove::Remove => {
+                        ans[i].push(CraneMove::Remove.to_ans());
+                        cranes[i] = CraneStatus::Removed;
+                        // Accepted 状態のままだと動けなくなる
+                        for container_id in 0..n * n {
+                            if Some(i) == containers[container_id].moved_by() {
+                                containers[container_id] = ContainerStatus::Free;
+                            }
+                        }
+                    }
+                } // match
+                if ans[i].len() == turn_cur {
+                    debug!("    ans: {:?}", ans[i][turn_cur - 1]);
                 }
-            } // match
-            if ans[i].len() == turn_cur {
-                debug!("    ans: {:?}", ans[i][turn_cur - 1]);
+                debug!("    scheduled_moves[{i}]: {:?}", scheduled_moves[i]);
+            } // crane
+            debug!("  containers:");
+            for (i, c) in containers.iter().enumerate() {
+                debug! {"    {i}: {:?}", c}
             }
-            debug!("    scheduled_moves[{i}]: {:?}", scheduled_moves[i]);
-        } // crane
-        debug!("  containers:");
-        for (i, c) in containers.iter().enumerate() {
-            debug! {"    {i}: {:?}", c}
+        } // turn
+
+        // 探索失敗時は破棄
+        let mut is_valid_ans = true;
+        for &c in &containers {
+            if c != ContainerStatus::Completed {
+                is_valid_ans = false;
+                break;
+            }
         }
-    } // turn
+        if !is_valid_ans {
+            continue;
+        }
 
-    // 一応
-    assert!(containers.iter().all(|&c| c == ContainerStatus::Completed));
+        let max_ans_len = ans.iter().map(|a| a.len()).max().unwrap();
+        let max_ans_final_len = ans_final.iter().map(|a| a.len()).max().unwrap_or(0);
+        if max_ans_final_len == 0 || max_ans_len < max_ans_final_len {
+            for i in 0..CRANE_NUM {
+                ans_final[i] = ans[i].clone();
+            }
+        }
+    } // loop
 
-    for a in ans {
+    for a in ans_final {
         println!("{}", a.iter().collect::<String>());
     }
 }
