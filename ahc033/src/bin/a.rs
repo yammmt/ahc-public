@@ -222,6 +222,15 @@ fn main() {
     // なんいせよ全手の盤面を保存しないとだめっぽい
     // 最終的な盤面の状態を記憶しておき, 遡って動かす
 
+    // 移動
+    let next_pos = |pos_from: (usize, usize), mv: CraneMove| match mv {
+        CraneMove::Up => (pos_from.0 - 1, pos_from.1),
+        CraneMove::Down => (pos_from.0 + 1, pos_from.1),
+        CraneMove::Left => (pos_from.0, pos_from.1 - 1),
+        CraneMove::Right => (pos_from.0, pos_from.1 + 1),
+        _ => unreachable!(),
+    };
+
     // 最短移動経路をまとめて返す
     let min_move = |_turn_from: usize, move_from: (usize, usize), move_to: (usize, usize)| {
         let mut ret = vec![];
@@ -254,12 +263,11 @@ fn main() {
                       mv: CraneMove,
                       board: &Vec<Vec<BoardStatus>>,
                       cranes: &[CraneStatus]| {
-        let Some(my_pos) = cranes[crane_id].pos() else { unreachable!() };
         // 移動できる条件:
         //   - 移動先がグリッド外であると移動不可
         //   - 移動先に大小クレーンがいると移動不可
         //   - 小クレーンであれば, 自身が荷物持ち中かつ移動先に荷物がある場合は移動不可
-        let next_pos = match mv {
+        let np = match mv {
             CraneMove::Up => (move_from.0.wrapping_add_signed(-1), move_from.1),
             CraneMove::Down => (move_from.0 + 1, move_from.1),
             CraneMove::Left => (move_from.0, move_from.1.wrapping_add_signed(-1)),
@@ -268,7 +276,7 @@ fn main() {
         };
 
         // グリッド外
-        if next_pos.0 >= 5 || next_pos.1 >= 5 {
+        if np.0 >= 5 || np.1 >= 5 {
             return false;
         }
 
@@ -279,7 +287,7 @@ fn main() {
             }
 
             if let Some(other_crane_pos) = cranes[i].pos() {
-                if next_pos == other_crane_pos {
+                if np == other_crane_pos {
                     return false;
                 }
             }
@@ -288,7 +296,7 @@ fn main() {
         // 小クレーン && 運送中 && 移動先にコンテナ
         if !cranes[crane_id].is_big()
             && cranes[crane_id].lifting_cid() != None
-            && board[next_pos.0][next_pos.1] != BoardStatus::Empty
+            && board[np.0][np.1] != BoardStatus::Empty
         {
             return false;
         }
@@ -298,14 +306,6 @@ fn main() {
 
     let could_drop = |pos: (usize, usize), board: &Vec<Vec<BoardStatus>>| {
         board[pos.0][pos.1] == BoardStatus::Empty
-    };
-
-    let next_pos = |pos_from: (usize, usize), mv: CraneMove| match mv {
-        CraneMove::Up => (pos_from.0 - 1, pos_from.1),
-        CraneMove::Down => (pos_from.0 + 1, pos_from.1),
-        CraneMove::Left => (pos_from.0, pos_from.1 - 1),
-        CraneMove::Right => (pos_from.0, pos_from.1 + 1),
-        _ => unreachable!(),
     };
 
     // 小クレーン荷物持ち状態での最短経路をまとめて返す
