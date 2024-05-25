@@ -482,6 +482,9 @@ fn main() {
                     // containers[c] = ContainerStatus::Completed;
                 }
             }
+            if containers.iter().all(|&c| c == ContainerStatus::Completed) {
+                break;
+            }
 
             // 移動前のクレーン状態を控える
             let cranes_prev = cranes.clone();
