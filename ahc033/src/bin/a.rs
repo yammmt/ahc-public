@@ -18,7 +18,8 @@ macro_rules! debug {
 
 // N 固定だから vec を回避すればちょっとだけ高速化できる
 const CRANE_NUM: usize = 5;
-const TURN_MAX: usize = 1000;
+// サンプルケース見る限りでは, 答えは最大でも 230 かそこらには収まる
+const TURN_MAX: usize = 350;
 // TODO: 提出時は伸ばそう
 const RUN_TIME_MAX_MS: u64 = if cfg!(debug_assertions) { 500 } else { 2970 };
 // const RUN_TIME_MAX_MS: u64 = if cfg!(debug_assertions) { 500 } else { 1000 };
