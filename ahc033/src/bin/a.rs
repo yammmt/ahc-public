@@ -868,8 +868,15 @@ fn main() {
         }
     } // loop
 
-    // TODO: 答えが見つからなかった場合 (最奥に %5=0) は, 左から右に受け流すだけでもすべき？
-    for a in ans_final {
-        println!("{}", a.iter().collect::<String>());
+    if ans_final[0].is_empty() {
+        // 答えが見つからなかった場合 (最奥に %5=0) は, 左から右に受け流すだけにする
+        // エラー回避分くらいの点数はもらえる
+        for _ in 0..CRANE_NUM {
+            println!("PRRRRQLLLLPRRRRQLLLLPRRRRQLLLLPRRRRQLLLLPRRRRQ");
+        }
+    } else {
+        for a in ans_final {
+            println!("{}", a.iter().collect::<String>());
+        }
     }
 }
