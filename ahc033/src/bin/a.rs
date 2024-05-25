@@ -18,7 +18,6 @@ macro_rules! debug {
 // N 固定だから vec を回避すればちょっとだけ高速化できる
 const CRANE_NUM: usize = 5;
 const TURN_MAX: usize = 1000;
-const TURN_WAIT_LONGEST: usize = 3;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum BoardStatus {
