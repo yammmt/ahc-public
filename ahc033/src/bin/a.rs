@@ -686,7 +686,12 @@ fn main() {
                             // - 右端に置くと失点するので, [*][4] には置かない
                             // "適当なところ" の評価値は sort 時に考慮する
                             for ii in 0..n {
-                                for jj in 1..n - 1 {
+                                for jj in 0..n - 1 {
+                                    if jj == 0 && aidx[i] < n {
+                                        // 出切っていなければ置かない
+                                        continue;
+                                    }
+
                                     if board[turn_cur][ii][jj] == BoardStatus::Empty {
                                         let mm = if cranes[i].is_big() {
                                             min_move(i, my_pos, (ii, jj))
