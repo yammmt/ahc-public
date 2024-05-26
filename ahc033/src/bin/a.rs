@@ -613,9 +613,14 @@ fn main() {
                         }
                         debug!("    {:?}", candidates);
                         if containers[candidates[0].0] != ContainerStatus::Free {
-                            ans[i].push(CraneMove::Remove.to_ans());
-                            scheduled_moves[i].clear();
-                            cranes[i] = CraneStatus::Removed;
+                            if cranes[i].is_big() {
+                                ans[i].push(CraneMove::Wait.to_ans());
+                                scheduled_moves[i].clear();
+                            } else {
+                                ans[i].push(CraneMove::Remove.to_ans());
+                                scheduled_moves[i].clear();
+                                cranes[i] = CraneStatus::Removed;
+                            }
                             break;
                         }
 
