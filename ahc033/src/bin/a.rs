@@ -502,6 +502,11 @@ fn main() {
                     } else {
                         // 意にそぐわぬものがきたら, 探索失敗として今のループを諦める
                         if goal_want[i].is_none() {
+                            // 最終ターンに選択を誤った場合には, ここで break しても
+                            // ゴール判定が通り, スコアが 10,000 点悪化してしまう.
+                            // これの対策として, ゴールを無効にする.
+                            // 本来はすべてのゴールを操作すべきだが, 高速化のため割愛
+                            containers[0] = ContainerStatus::Free;
                             break 'turn_loop;
                         } else {
                             let gw = goal_want[i].unwrap();

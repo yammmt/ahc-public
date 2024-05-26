@@ -12,5 +12,9 @@ File.open(OUT_FILE, 'w') do |fout|
         s = `../target/release/a < #{fin} > #{MY_ANS_FILE} && ../target/release/vis #{fin} #{MY_ANS_FILE}`
         # remove 8 characters ("score = ")
         fout.write(s.slice(8, s.length))
+        if s.length > 12
+            puts '[ERROR] Score is no less than 1,000'
+            return
+        end
     end
 end
