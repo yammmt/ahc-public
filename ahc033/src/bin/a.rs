@@ -17,7 +17,9 @@ macro_rules! debug {
 }
 
 // N 固定だから vec を回避すればちょっとだけ高速化できる
+const GRID_SIZE: usize = 5;
 const CRANE_NUM: usize = 5;
+const CONTAINER_NUM: usize = 25;
 // サンプルケース見る限りでは, 答えは最大でも 230 かそこらには収まる
 const TURN_MAX: usize = 350;
 // TODO: 提出時は伸ばそう
@@ -138,8 +140,8 @@ fn main() {
     let break_time = Duration::from_millis(RUN_TIME_MAX_MS);
 
     input! {
-        n: usize,
-        ann: [[usize; n]; n],
+        _n: usize,
+        ann: [[usize; GRID_SIZE]; GRID_SIZE],
     }
     let mut rng = SmallRng::from_entropy();
     let random_move = |a: usize| {
@@ -247,7 +249,7 @@ fn main() {
         };
 
         // グリッド外
-        if np.0 >= 5 || np.1 >= 5 {
+        if np.0 >= GRID_SIZE || np.1 >= GRID_SIZE {
             return false;
         }
 
@@ -301,8 +303,7 @@ fn main() {
             CraneMove::Right,
         ];
         let mut que = VecDeque::new();
-        let n = board.len();
-        let mut visited = vec![vec![false; n]; n];
+        let mut visited = vec![vec![false; GRID_SIZE]; GRID_SIZE];
         que.push_back((move_from, vec![]));
         while let Some((cur_pos, vpath)) = que.pop_front() {
             if visited[cur_pos.0][cur_pos.1] {
@@ -354,7 +355,7 @@ fn main() {
                     _ => unreachable!(),
                 };
                 scheduled_moves.clear();
-                for j in 0..n * n {
+                for j in 0..CONTAINER_NUM {
                     if containers[j] == ContainerStatus::Accepted(my_crane_id) {
                         containers[j] = ContainerStatus::Free;
                     }
@@ -388,7 +389,7 @@ fn main() {
         let mut schedule_decided_turn = vec![0; CRANE_NUM];
 
         // 盤面管理
-        let mut board = vec![vec![vec![BoardStatus::Empty; 5]; 5]; TURN_MAX];
+        let mut board = vec![vec![vec![BoardStatus::Empty; GRID_SIZE]; GRID_SIZE]; TURN_MAX];
         let mut cranes = [
             CraneStatus::BigEmpty((0, 0)),
             CraneStatus::SmallEmpty((1, 0)),
@@ -396,10 +397,10 @@ fn main() {
             CraneStatus::SmallEmpty((3, 0)),
             CraneStatus::SmallEmpty((4, 0)),
         ];
-        let mut containers = vec![ContainerStatus::Free; n * n];
+        let mut containers = vec![ContainerStatus::Free; CONTAINER_NUM];
 
         // 進捗管理
-        let mut aidx = vec![0; n];
+        let mut aidx = vec![0; GRID_SIZE];
         let mut goal_want = [Some(0), Some(5), Some(10), Some(15), Some(20)];
 
         // 初手は三列目まで全行掃き出す or 同じく偶数行目だけ掃き出すの二択
@@ -428,7 +429,7 @@ fn main() {
             ];
         } else {
             // E 字をスケジュールだけ
-            for i in 0..5 {
+            for i in 0..CRANE_NUM {
                 if i % 2 == 0 {
                     let mut mv = vec![
                         CraneMove::Lift,
@@ -471,19 +472,20 @@ fn main() {
             debug!("\nturn: {turn_cur}");
             turn_cur += 1;
             // 盤面の状態は前回のもの
-            for i in 0..n {
-                for j in 0..n {
+            for i in 0..GRID_SIZE {
+                for j in 0..GRID_SIZE {
                     board[turn_cur][i][j] = board[turn_cur - 1][i][j];
                 }
             }
 
             // 流れてきたものを受け取る
-            for i in 0..n {
+            for i in 0..GRID_SIZE {
+                // "5" 埋め込みだが実害なく *短い* 定義名が浮かばなかったので放置
                 if board[turn_cur - 1][i][0] != BoardStatus::Empty
                     || cranes
                         .iter()
                         .any(|&c| !c.is_empty() && c.pos().unwrap() == (i, 0))
-                    || aidx[i] >= n
+                    || aidx[i] >= 5
                 {
                     // コンテナが存在するので受け取れない (lift 中含め)
                     continue;
@@ -494,7 +496,7 @@ fn main() {
             }
 
             // 回収されたものを消す
-            for i in 0..n {
+            for i in 0..GRID_SIZE {
                 // debug!("  board[][{i}][4] = {:?}", board[turn_cur][i][4]);
                 if let BoardStatus::Container(c) = board[turn_cur][i][4] {
                     goal_want[i] = if c % 5 == 4 {
@@ -537,7 +539,7 @@ fn main() {
             }
 
             debug!("  goal_want: {:?}", goal_want);
-            for i in 0..n {
+            for i in 0..GRID_SIZE {
                 debug!("  {:?}", board[turn_cur][i]);
             }
 
@@ -582,8 +584,8 @@ fn main() {
                                 "  candidate: containers[{cid_gw}], {:?}",
                                 containers[*cid_gw]
                             );
-                            for ii in 0..n {
-                                for jj in 0..n {
+                            for ii in 0..GRID_SIZE {
+                                for jj in 0..GRID_SIZE {
                                     if board[turn_cur][ii][jj] == BoardStatus::Container(*cid_gw) {
                                         let mm = min_move(i, my_pos, (ii, jj));
                                         candidates.push((*cid_gw, mm));
@@ -596,7 +598,7 @@ fn main() {
                         if candidates.is_empty() {
                             // ゴールにもっていけるものがない
                             // とりあえず左端 ([*][0]) を開けて新しいコンテナを引き出す
-                            for ii in 0..n {
+                            for ii in 0..GRID_SIZE {
                                 let BoardStatus::Container(cid) = board[turn_cur][ii][0] else { continue };
 
                                 if containers[cid] != ContainerStatus::Free {
@@ -624,8 +626,8 @@ fn main() {
                                     continue;
                                 }
 
-                                for ii in 0..n {
-                                    for jj in 0..n {
+                                for ii in 0..GRID_SIZE {
+                                    for jj in 0..GRID_SIZE {
                                         if board[turn_cur][ii][jj]
                                             == BoardStatus::Container(*cid_gw)
                                         {
@@ -716,9 +718,9 @@ fn main() {
                             // - 左端を空けるため, [*][0] には置かない
                             // - 右端に置くと失点するので, [*][4] には置かない
                             // "適当なところ" の評価値は sort 時に考慮する
-                            for ii in 0..n {
-                                for jj in 0..n - 1 {
-                                    if jj == 0 && aidx[i] < n {
+                            for ii in 0..GRID_SIZE {
+                                for jj in 0..GRID_SIZE - 1 {
+                                    if jj == 0 && aidx[i] < GRID_SIZE {
                                         // 出切っていなければ置かない
                                         continue;
                                     }
@@ -909,7 +911,7 @@ fn main() {
                         ans[i].push(CraneMove::Remove.to_ans());
                         cranes[i] = CraneStatus::Removed;
                         // Accepted 状態のままだと動けなくなる
-                        for container_id in 0..n * n {
+                        for container_id in 0..CONTAINER_NUM {
                             if Some(i) == containers[container_id].moved_by() {
                                 containers[container_id] = ContainerStatus::Free;
                             }
