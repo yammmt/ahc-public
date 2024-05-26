@@ -21,10 +21,8 @@ const GRID_SIZE: usize = 5;
 const CRANE_NUM: usize = 5;
 const CONTAINER_NUM: usize = 25;
 // サンプルケース見る限りでは, 答えは最大でも 230 かそこらには収まる
-const TURN_MAX: usize = 350;
-// TODO: 提出時は伸ばそう
-const RUN_TIME_MAX_MS: u64 = if cfg!(debug_assertions) { 500 } else { 2970 };
-// const RUN_TIME_MAX_MS: u64 = if cfg!(debug_assertions) { 500 } else { 1000 };
+const TURN_MAX: usize = 250;
+const RUN_TIME_MAX_MS: u64 = if cfg!(debug_assertions) { 500 } else { 2990 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum BoardStatus {
