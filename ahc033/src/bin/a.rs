@@ -788,7 +788,7 @@ fn main() {
                     }
                     CraneMove::Drop => {
                         let Some(c) = cranes[i].lifting_cid() else { break 'turn_loop };
-                        if could_drop(my_pos, &board[turn_cur]) {
+                        if could_drop(my_pos, &board[turn_cur]) && !(my_pos.0 != c / 5 && my_pos.1 == 4) {
                             debug!("    force drop accepted");
                             ans[i].push(cur_move.to_ans());
                             // board は empty のまま
