@@ -389,43 +389,69 @@ fn main() {
 
         // 盤面管理
         let mut board = vec![vec![vec![BoardStatus::Empty; 5]; 5]; TURN_MAX];
-        // 本来ここで定義すべきだが, 今は初手を 4x4 掃き出しで固定しているのでコメントアウト
-        // let mut cranes = [
-        //     CraneStatus::BigEmpty((0, 0)),
-        //     CraneStatus::SmallEmpty((1, 0)),
-        //     CraneStatus::SmallEmpty((2, 0)),
-        //     CraneStatus::SmallEmpty((3, 0)),
-        //     CraneStatus::SmallEmpty((4, 0)),
-        // ];
+        let mut cranes = [
+            CraneStatus::BigEmpty((0, 0)),
+            CraneStatus::SmallEmpty((1, 0)),
+            CraneStatus::SmallEmpty((2, 0)),
+            CraneStatus::SmallEmpty((3, 0)),
+            CraneStatus::SmallEmpty((4, 0)),
+        ];
         let mut containers = vec![ContainerStatus::Free; n * n];
 
         // 進捗管理
         let mut aidx = vec![0; n];
         let mut goal_want = [Some(0), Some(5), Some(10), Some(15), Some(20)];
 
-        // とりあえず 3 列目までの 20 個を全部出して, 残りは %5 が小さいものから順に突っ込む
-        // 搬出先と順番さえあっていれば, 大クレーンで一つずつ誘導するとして,
-        // 高々往復 20 ターンを 25 回繰り返すだけだから 500 点を下回るくらいに落ち着くはず
-
-        // 三列目まで全部出す
-        let init_move = "PRRRQLLLPRRQLLPRQ".chars().collect::<Vec<char>>();
-        for i in 0..5 {
-            for c in &init_move {
-                ans[i].push(*c);
+        // 初手は三列目まで全行掃き出す or 同じく偶数行目だけ掃き出すの二択
+        // 後者は小クレーンが動き易い盤面
+        // 前者だけ or 後者だけより, 両方混ぜた方が手元で見る限りはよいスコアだったので
+        let mut init_move = vec![];
+        if rng.gen::<usize>() % 2 == 0 {
+            // 三列目まで全部出す
+            init_move = "PRRRQLLLPRRQLLPRQ".chars().collect::<Vec<char>>();
+            for i in 0..5 {
+                for c in &init_move {
+                    ans[i].push(*c);
+                }
+                board[init_move.len()][i][3] = BoardStatus::Container(ann[i][0]);
+                board[init_move.len()][i][2] = BoardStatus::Container(ann[i][1]);
+                board[init_move.len()][i][1] = BoardStatus::Container(ann[i][2]);
+                aidx[i] = 3;
             }
-            board[init_move.len()][i][3] = BoardStatus::Container(ann[i][0]);
-            board[init_move.len()][i][2] = BoardStatus::Container(ann[i][1]);
-            board[init_move.len()][i][1] = BoardStatus::Container(ann[i][2]);
-            aidx[i] = 3;
+            // 前処理のため開始位置が固定
+            cranes = [
+                CraneStatus::BigEmpty((0, 1)),
+                CraneStatus::SmallEmpty((1, 1)),
+                CraneStatus::SmallEmpty((2, 1)),
+                CraneStatus::SmallEmpty((3, 1)),
+                CraneStatus::SmallEmpty((4, 1)),
+            ];
+        } else {
+            // E 字をスケジュールだけ
+            for i in 0..5 {
+                if i % 2 == 0 {
+                    let mut mv = vec![
+                        CraneMove::Lift,
+                        CraneMove::Right,
+                        CraneMove::Right,
+                        CraneMove::Right,
+                        CraneMove::Drop,
+                        CraneMove::Left,
+                        CraneMove::Left,
+                        CraneMove::Left,
+                        CraneMove::Lift,
+                        CraneMove::Right,
+                        CraneMove::Right,
+                        CraneMove::Drop,
+                        CraneMove::Left,
+                        CraneMove::Left,
+                        CraneMove::Lift,
+                    ];
+                    mv.reverse();
+                    scheduled_moves[i].append(&mut mv);
+                }
+            }
         }
-        // 前処理のため開始位置が固定
-        let mut cranes = [
-            CraneStatus::BigEmpty((0, 1)),
-            CraneStatus::SmallEmpty((1, 1)),
-            CraneStatus::SmallEmpty((2, 1)),
-            CraneStatus::SmallEmpty((3, 1)),
-            CraneStatus::SmallEmpty((4, 1)),
-        ];
 
         // 大クレーンは爆破しない
         // 小クレーンをある程度使ったほうがスコアが上がりそうだから,
