@@ -559,8 +559,6 @@ fn main() {
                                     }
                                 }
                             }
-
-                            candidates.sort_unstable_by(|a, b| a.1.len().cmp(&b.1.len()));
                         }
                         debug!("    foo, {:?}", candidates);
 
@@ -605,8 +603,6 @@ fn main() {
                                         }
                                     }
                                 }
-
-                                candidates.sort_unstable_by(|a, b| a.1.len().cmp(&b.1.len()));
                             }
                         }
 
@@ -628,6 +624,8 @@ fn main() {
                             debug!("continue");
                             continue;
                         }
+
+                        candidates.sort_unstable_by(|a, b| a.1.len().cmp(&b.1.len()));
                         debug!("    {:?}", candidates);
                         if containers[candidates[0].0] != ContainerStatus::Free {
                             if cranes[i].is_big() {
