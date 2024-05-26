@@ -364,6 +364,23 @@ fn main() {
         }
     };
 
+    // ゴールまでの距離が変化することを考慮した, パスの評価値を返す
+    // 通行不能状態は考慮しない
+    let path_cost = |
+        container_id: usize,
+        move_from: (usize, usize),
+        vpath: &[CraneMove]
+    | {
+        let goal_i = container_id % 5;
+        let mut pos = move_from;
+        for &mv in vpath {
+            pos = next_pos(pos, mv);
+        }
+        let diff_i = goal_i.max(pos.0) - goal_i.min(pos.0);
+        let diff_j = 4 - pos.1;
+        vpath.len() + diff_i + diff_j
+    };
+
     while start_time.elapsed() < break_time {
         let mut ans = vec![vec![]; CRANE_NUM];
         // 行動予定は処理の都合で逆順に突っ込む
@@ -669,7 +686,7 @@ fn main() {
                             // ゴールに置けないので一時的に適当なところに置く
                             // - 左端を空けるため, [*][0] には置かない
                             // - 右端に置くと失点するので, [*][4] には置かない
-                            // TODO: 一時置きの先はゴールに近いほうがよい
+                            // "適当なところ" の評価値は sort 時に考慮する
                             for ii in 0..n {
                                 for jj in 1..n - 1 {
                                     if board[turn_cur][ii][jj] == BoardStatus::Empty {
@@ -697,7 +714,12 @@ fn main() {
                         if candidates.is_empty() {
                             candidates.push((cid_lifting, vec![]));
                         }
-                        candidates.sort_unstable_by(|a, b| a.1.len().cmp(&b.1.len()));
+                        // 単純な手数に加え, 移動長に移動先がゴールから遠くなる分の評価を乗せる
+                        candidates.sort_unstable_by(|a, b| {
+                            let a_cost = path_cost(a.0, my_pos, &a.1);
+                            let b_cost = path_cost(b.0, my_pos, &b.1);
+                            a_cost.cmp(&b_cost)
+                        });
                         candidates[0].1.push(CraneMove::Drop);
                         if candidates[0].1.len() == 1 {
                             // 連続して Lift/Drop させないため, 適当に動く
