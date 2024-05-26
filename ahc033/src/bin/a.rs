@@ -380,7 +380,6 @@ fn main() {
         let mut ans = vec![vec![]; CRANE_NUM];
         // 行動予定は処理の都合で逆順に突っ込む
         let mut scheduled_moves = vec![vec![]; CRANE_NUM];
-        let mut schedule_decided_turn = vec![0; CRANE_NUM];
 
         // 盤面管理
         let mut board = vec![vec![vec![BoardStatus::Empty; GRID_SIZE]; GRID_SIZE]; TURN_MAX];
@@ -396,6 +395,7 @@ fn main() {
         // 進捗管理
         let mut aidx = vec![0; GRID_SIZE];
         let mut goal_want = [Some(0), Some(5), Some(10), Some(15), Some(20)];
+        let mut complete_num = 0;
 
         // 初手は三列目まで全行掃き出す or 同じく偶数行目だけ掃き出すの二択
         // 後者は小クレーンが動き易い盤面
@@ -462,7 +462,7 @@ fn main() {
         is_removed_first.reverse();
 
         let mut turn_cur = init_move.len();
-        'turn_loop: while turn_cur < TURN_MAX - 1 && goal_want.iter().any(|g| g.is_some()) {
+        'turn_loop: while turn_cur < TURN_MAX - 1 {
             debug!("\nturn: {turn_cur}");
             turn_cur += 1;
             // 盤面の状態は前回のもの
@@ -514,9 +514,10 @@ fn main() {
                         }
                     };
                     board[turn_cur][i][4] = BoardStatus::Empty;
+                    complete_num += 1;
                 }
             }
-            if containers.iter().all(|&c| c == ContainerStatus::Completed) {
+            if complete_num == CONTAINER_NUM {
                 break;
             }
 
@@ -669,7 +670,6 @@ fn main() {
                         candidates[0].1.push(CraneMove::Lift);
                         candidates[0].1.reverse();
                         scheduled_moves[i] = candidates[0].1.clone();
-                        schedule_decided_turn[i] = turn_cur;
                         // ここで変えないと同じものを複数クレーンが狙いに行ってしまう
                         containers[candidates[0].0] = ContainerStatus::Accepted(i);
                         debug!(
@@ -761,7 +761,6 @@ fn main() {
                         }
                         candidates[0].1.reverse();
                         scheduled_moves[i] = candidates[0].1.clone();
-                        schedule_decided_turn[i] = turn_cur;
                         containers[candidates[0].0] = ContainerStatus::Accepted(i);
                         debug!("  B, containers[{}]", candidates[0].0);
                     }
@@ -924,6 +923,7 @@ fn main() {
         } // turn
 
         // 探索失敗時は破棄
+        // `complete_num` で判定すると最後の一つが誤って回収された場合を検出できない
         let mut is_valid_ans = true;
         for &c in &containers {
             if c != ContainerStatus::Completed {
