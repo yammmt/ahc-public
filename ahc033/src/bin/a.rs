@@ -367,11 +367,7 @@ fn main() {
 
     // ゴールまでの距離が変化することを考慮した, パスの評価値を返す
     // 通行不能状態は考慮しない
-    let path_cost = |
-        container_id: usize,
-        move_from: (usize, usize),
-        vpath: &[CraneMove]
-    | {
+    let path_cost = |container_id: usize, move_from: (usize, usize), vpath: &[CraneMove]| {
         let goal_i = container_id % 5;
         let mut pos = move_from;
         for &mv in vpath {
