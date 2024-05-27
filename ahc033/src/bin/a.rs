@@ -376,7 +376,9 @@ fn main() {
         vpath.len() + diff_i + diff_j
     };
 
+    let mut cnt = 0;
     while start_time.elapsed() < break_time {
+        cnt += 1;
         let mut ans = vec![vec![]; CRANE_NUM];
         // 行動予定は処理の都合で逆順に突っ込む
         let mut scheduled_moves = vec![vec![]; CRANE_NUM];
@@ -462,7 +464,10 @@ fn main() {
         is_removed_first.reverse();
 
         let mut turn_cur = init_move.len();
-        'turn_loop: while turn_cur < TURN_MAX - 1 {
+        // 終了条件後半は枝刈り, スコア更新見込みがなくなった時点で切る
+        // 毎度ループ内で判定されてしまう分は遅くなるが, 一度のループ内の処理のほうがよほど重いので
+        // トータルでは (私のローカル環境では) 反復回数が二割くらい増えた.
+        'turn_loop: while turn_cur < TURN_MAX - 1 && !(ans_final[0].len() > 0 && turn_cur > ans_final[0].len()) {
             debug!("\nturn: {turn_cur}");
             turn_cur += 1;
             // 盤面の状態は前回のもの
@@ -944,6 +949,7 @@ fn main() {
         }
     } // loop
 
+    debug!("cnt: {:?}", cnt);
     if ans_final[0].is_empty() {
         // 答えが見つからなかった場合 (最奥に %5=0) は, 左から右に受け流すだけにする
         // エラー回避分くらいの点数はもらえる
