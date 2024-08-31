@@ -1,14 +1,9 @@
-// use ordered_float::NotNan;
 use proconio::fastout;
 use proconio::input;
 use rand::rngs::SmallRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
-// use std::cmp::Ordering;
-// use std::cmp::Reverse;
-// use std::collections::BinaryHeap;
 use std::collections::HashSet;
-// use std::collections::HashMap;
 use std::collections::VecDeque;
 
 #[allow(unused_macros)]
