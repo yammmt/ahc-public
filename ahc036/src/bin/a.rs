@@ -1,8 +1,9 @@
 // use ordered_float::NotNan;
 use proconio::fastout;
 use proconio::input;
-// use rand::rngs::SmallRng;
-// use rand::{Rng, SeedableRng};
+use rand::rngs::SmallRng;
+use rand::seq::SliceRandom;
+use rand::{Rng, SeedableRng};
 // use std::cmp::Ordering;
 // use std::cmp::Reverse;
 // use std::collections::BinaryHeap;
@@ -49,6 +50,8 @@ fn main() {
         edges[u].push(v);
         edges[v].push(u);
     }
+
+    let mut rng = SmallRng::from_entropy();
 
     // なんもわからん 2024
     // 時間いっぱい L_A 乱択でビームサーチでそれっぽいスコアになりそうだけど
@@ -142,12 +145,18 @@ fn main() {
     }
     debug!("paths: {:?}", paths);
     debug!("edges_used: {:?}", edges_used);
+    let edges_used = edges_used.into_iter().collect::<Vec<usize>>();
 
     // 信号操作用の配列 A
     let mut a = vec![0; la];
-    for i in 0..n {
-        a[i] = i;
+    for i in 0..la {
+        a[i] = if i < edges_used.len() {
+            edges_used[i]
+        } else {
+            edges_used[rng.gen::<usize>() % edges_used.len()]
+        };
     }
+    a.shuffle(&mut rng);
     for (i, a) in a.iter().enumerate() {
         print!("{a}");
         if i == la - 1 {
