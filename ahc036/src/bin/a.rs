@@ -25,7 +25,7 @@ const OPERATION_CNT_LIMIT: usize = 100_000;
 const RUN_TIME_LIMIT_MS: u64 = if cfg!(debug_assertions) { 100 } else { 2800 };
 
 const B_UPDATE_BEGIN_PTRN_NUM: usize = 5;
-const B_UPDATE_LEN_MAX: usize = 4;
+const B_UPDATE_LEN_MAX: usize = 8;
 
 #[derive(Clone, Debug)]
 enum Operation {
