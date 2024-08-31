@@ -26,6 +26,9 @@ const OPERATION_CNT_LIMIT: usize = 100_000;
 #[allow(dead_code)]
 const RUN_TIME_LIMIT_MS: usize = 2800;
 
+const B_UPDATE_BEGIN_PTRN_NUM: usize = 5;
+const B_UPDATE_LEN_MAX: usize = 4;
+
 // #[fastout]
 fn main() {
     // 入力時点で 0-origin
@@ -140,7 +143,6 @@ fn main() {
     debug!("paths: {:?}", paths);
     debug!("edges_used: {:?}", edges_used);
 
-    // 雑に最短経路を進むだけの愚直解, 通過先が青か否かの判定だけはする
     // 信号操作用の配列 A
     let mut a = vec![0; la];
     for i in 0..n {
@@ -154,24 +156,100 @@ fn main() {
             print!(" ");
         }
     }
+    let mut v_to_a_idx = vec![vec![]; n];
+    for (i, &a) in a.iter().enumerate() {
+        v_to_a_idx[a].push(i);
+    }
+
     // 青信号管理用の配列 B, 問題文準拠の初期値 -1 だと型変換が面倒だから別のダミー値にする
-    // 信号操作が一つずつだからスコアは非常に悪い
     let mut b = vec![DUMMY; lb];
     let mut b_idx = 0;
-    let mut is_open = vec![false; n];
+    // 一つの信号を重複してもったほうがよい可能性がある
+    let mut open_cnt = vec![0; n];
     let mut operation_cnt = 0;
     for path_cur in paths {
-        for &v_nxt in &path_cur {
-            if is_open[v_nxt] {
+        for (path_cur_idx, &v_nxt) in path_cur.iter().enumerate() {
+            if open_cnt[v_nxt] > 0 {
                 println!("m {v_nxt}");
                 operation_cnt += 1;
             } else {
-                if b[b_idx] != DUMMY {
-                    is_open[b[b_idx]] = false;
+                // A の長さが最大 1200
+                // B の始点/終点の選び方が最大 24*23=552
+                // 愚直だと信号操作数/移動数が共に高々 10000 くらい？
+                // A の始点を次に行くマスに固定すると計算が絞れる, 一旦 1 にする
+                // 書き換える長さも高々 4 (L_B 下限) にしてしまえば,
+                // 10000*4*24 程度の計算回数になるので TLE は回避できるはず
+                // これに B の書き換え基準位置も 4 通りくらい見せて合計 4e6 くらい
+
+                // 効率判定及び信号変化に必要な情報は
+                // - A の使用開始地点
+                // - B の書き換え開始地点
+                // - 書き換えの長さ
+                // - 今の最高スコア (直近の行動予定の内, 書き換え後に通れるマスの数)
+                let mut a_idx_update = 0;
+                let mut b_idx_update = 0;
+                let mut update_len = 0;
+                let mut score_max = 0;
+                let mut v_nearby = HashSet::new();
+                for i in 0..B_UPDATE_LEN_MAX {
+                    let j = path_cur_idx + i;
+                    if j >= path_cur.len() {
+                        break;
+                    }
+
+                    v_nearby.insert(path_cur[j]);
                 }
-                is_open[v_nxt] = true;
-                b[b_idx] = v_nxt;
-                println!("s 1 {v_nxt} {b_idx}");
+                let v_nearby = v_nearby;
+
+                for idx_diff in 0..B_UPDATE_BEGIN_PTRN_NUM {
+                    debug!("b_idx: {b_idx}, idx_diff: {idx_diff}");
+                    let b_idx_begin = (lb + b_idx + idx_diff - B_UPDATE_BEGIN_PTRN_NUM / 2) % lb;
+                    debug!("b_idx_begin: {b_idx_begin}");
+                    for idx_from_begin in 0..B_UPDATE_LEN_MAX {
+                        // additional_update_len + 1 個のマスを書き換える
+                        if b_idx_begin + idx_from_begin >= lb {
+                            continue;
+                        }
+
+                        for &a_idx_begin in &v_to_a_idx[v_nxt] {
+                            if a_idx_begin + idx_from_begin >= la {
+                                continue;
+                            }
+
+                            // TODO: 連続した書き換えでありループを跨いで高速化できる
+                            let mut b_candidate = b.clone();
+                            for i in 0..idx_from_begin + 1 {
+                                b_candidate[b_idx_begin + i] = a[a_idx_begin + i];
+                            }
+
+                            let mut score_cur = 0;
+                            for bb in &b_candidate {
+                                if v_nearby.contains(bb) {
+                                    score_cur += 1;
+                                }
+                            }
+                            if score_cur > score_max {
+                                a_idx_update = a_idx_begin;
+                                b_idx_update = b_idx_begin;
+                                update_len = idx_from_begin + 1;
+                                score_max = score_cur;
+                            }
+                        }
+                    }
+                }
+
+
+                for i in 0..update_len {
+                    if b[b_idx_update + i] != DUMMY {
+                        open_cnt[b[b_idx_update + i]] -= 1;
+                    }
+
+                    b[b_idx_update + i] = a[a_idx_update + i];
+                    open_cnt[b[b_idx_update + i]] += 1;
+                }
+                b_idx = (b_idx + update_len + 1) % lb;
+
+                println!("s {update_len} {a_idx_update} {b_idx_update}");
                 b_idx = (b_idx + 1) % lb;
                 println!("m {v_nxt}");
                 operation_cnt += 2;
