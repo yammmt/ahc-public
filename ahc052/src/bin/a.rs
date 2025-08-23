@@ -155,7 +155,7 @@ fn main() {
     while start_time.elapsed() < break_time {
         // 変数初期化
         // ボタン割り当てを決めつけ
-        for i in 0..K {
+        for i in 0..4 {
             for j in 1..M {
                 controllers[i][j] = match rng.gen::<usize>() % 5 {
                     0 => 'L',
