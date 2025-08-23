@@ -98,7 +98,7 @@ fn main() {
     const TURN_MAX: usize = 2 * 30 * 30;
 
     // 2 sec
-    const RUN_TIME_MAX_MS: u64 = 1950;
+    const RUN_TIME_MAX_MS: u64 = 1990;
 
     let start_time = Instant::now();
     let break_time = Duration::from_millis(RUN_TIME_MAX_MS);
