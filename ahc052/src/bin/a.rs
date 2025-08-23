@@ -40,24 +40,35 @@ impl Operation {
     }
 }
 
-fn dir_has_unvisited(vcur: (usize, usize), dij: (isize, isize), visited: &Vec<Vec<bool>>, vn: &Vec<Vec<char>>, hn: &Vec<Vec<char>>) -> bool {
-    let n = visited[0].len();
+fn could_move(vcur: (usize, usize), dij: (isize, isize), vn: &Vec<Vec<char>>, hn: &Vec<Vec<char>>) -> bool {
+    let n = vn[0].len();
     let (di, dj) = dij;
+    let ni = vcur.0.wrapping_add_signed(di);
+    let nj = vcur.1.wrapping_add_signed(dj);
+    if ni >= n || nj >= n {
+        return false;
+    }
+
+    let is = vcur.0.min(ni);
+    let ib = vcur.0.max(ni);
+    let js = vcur.1.min(nj);
+    let jb = vcur.1.max(nj);
+    if (is != ib && hn[is][js] == '1') || (js != jb && vn[is][js] == '1') {
+        return false;
+    }
+
+    true
+}
+
+fn dir_has_unvisited(vcur: (usize, usize), dij: (isize, isize), visited: &Vec<Vec<bool>>, vn: &Vec<Vec<char>>, hn: &Vec<Vec<char>>) -> bool {
     let mut cur = vcur;
     loop {
-        let ni = cur.0.wrapping_add_signed(di);
-        let nj = cur.1.wrapping_add_signed(dj);
-        if ni >= n || nj >= n {
+        if !could_move(cur, dij, vn, hn) {
             return false;
         }
 
-        let is = cur.0.min(ni);
-        let ib = cur.0.max(ni);
-        let js = cur.1.min(nj);
-        let jb = cur.1.max(nj);
-        if (is != ib && hn[is][js] == '1') || (js != jb && vn[is][js] == '1') {
-            return false;
-        }
+        let ni = cur.0.wrapping_add_signed(dij.0);
+        let nj = cur.1.wrapping_add_signed(dij.1);
 
         if !visited[ni][nj] {
             return true;
@@ -68,24 +79,13 @@ fn dir_has_unvisited(vcur: (usize, usize), dij: (isize, isize), visited: &Vec<Ve
 }
 
 fn move_pos(vcur: (usize, usize), dij: (isize, isize), vn: &Vec<Vec<char>>, hn: &Vec<Vec<char>>) -> (usize, usize) {
-    let n = vn[0].len() + 1;
-    let (di, dj) = dij;
-    let ni = vcur.0.wrapping_add_signed(di);
-    let nj = vcur.1.wrapping_add_signed(dj);
-    if ni >= n || nj >= n {
+    if !could_move(vcur, dij, vn, hn) {
         return vcur;
     }
 
-    let is = vcur.0.min(ni);
-    let ib = vcur.0.max(ni);
-    let js = vcur.1.min(nj);
-    let jb = vcur.1.max(nj);
-    // println!("{:?} -> {:?}", vcur, (ni, nj));
-    if (is != ib && hn[is][js] == '1') || (js != jb && vn[is][js] == '1') {
-        return vcur;
-    }
-
-    return (ni, nj);
+    let ni = vcur.0.wrapping_add_signed(dij.0);
+    let nj = vcur.1.wrapping_add_signed(dij.1);
+    (ni, nj)
 }
 
 #[fastout]
