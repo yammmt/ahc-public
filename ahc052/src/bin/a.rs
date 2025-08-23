@@ -14,6 +14,7 @@ fn char_to_dir(c: char) -> (isize, isize) {
         'R' => (0, 1),
         'U' => (-1, 0),
         'D' => (1, 0),
+        'S' => (0, 0),
         _ => unreachable!(),
     };
 }
@@ -24,6 +25,7 @@ fn char_to_operation_idx(c: char) -> usize {
         'R' => 1,
         'U' => 2,
         'D' => 3,
+        'S' => 4,
         _ => unreachable!(),
     }
 }
@@ -34,6 +36,7 @@ fn operation_idx_to_dir(i: usize) -> (isize, isize) {
         1 => (0, 1),
         2 => (-1, 0),
         3 => (1, 0),
+        4 => (0, 0),
         _ => unreachable!(),
     }
 }
@@ -154,11 +157,12 @@ fn main() {
         // ボタン割り当てを決めつけ
         for i in 0..K {
             for j in 1..M {
-                controllers[i][j] = match rng.gen::<usize>() % 4 {
+                controllers[i][j] = match rng.gen::<usize>() % 5 {
                     0 => 'L',
                     1 => 'R',
                     2 => 'U',
                     3 => 'D',
+                    4 => 'S',
                     _ => unreachable!(),
                 };
             }
