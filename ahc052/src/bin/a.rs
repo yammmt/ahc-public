@@ -7,43 +7,42 @@ use rand::{Rng, SeedableRng};
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
-// TODO: 諸々 enum に impl すべき
-fn char_to_dir(c: char) -> (isize, isize) {
-    return match c {
-        'L' => (0, -1),
-        'R' => (0, 1),
-        'U' => (-1, 0),
-        'D' => (1, 0),
-        'S' => (0, 0),
-        _ => unreachable!(),
-    };
+#[derive(Clone, Debug)]
+enum Operation {
+    L,
+    R,
+    U,
+    D,
+    S,
 }
 
-fn char_to_operation_idx(c: char) -> usize {
-    match c {
-        'L' => 0,
-        'R' => 1,
-        'U' => 2,
-        'D' => 3,
-        'S' => 4,
-        _ => unreachable!(),
+impl std::fmt::Display for Operation {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Operation::L => write!(f, "L"),
+            Operation::R => write!(f, "R"),
+            Operation::U => write!(f, "U"),
+            Operation::D => write!(f, "D"),
+            Operation::S => write!(f, "S"),
+        }
     }
 }
 
-fn operation_idx_to_dir(i: usize) -> (isize, isize) {
-    match i {
-        0 => (0, -1),
-        1 => (0, 1),
-        2 => (-1, 0),
-        3 => (1, 0),
-        4 => (0, 0),
-        _ => unreachable!(),
+impl Operation {
+    fn dir(&self) -> (isize, isize) {
+        match self {
+            Operation::L => (0, -1),
+            Operation::R => (0, 1),
+            Operation::U => (-1, 0),
+            Operation::D => (1, 0),
+            Operation::S => (0, 0),
+        }
     }
 }
 
-fn dir_has_unvisited(vcur: (usize, usize), dir: usize, visited: &Vec<Vec<bool>>, vn: &Vec<Vec<char>>, hn: &Vec<Vec<char>>) -> bool {
+fn dir_has_unvisited(vcur: (usize, usize), dij: (isize, isize), visited: &Vec<Vec<bool>>, vn: &Vec<Vec<char>>, hn: &Vec<Vec<char>>) -> bool {
     let n = visited[0].len();
-    let (di, dj) = operation_idx_to_dir(dir);
+    let (di, dj) = dij;
     let mut cur = vcur;
     loop {
         let ni = cur.0.wrapping_add_signed(di);
@@ -68,9 +67,9 @@ fn dir_has_unvisited(vcur: (usize, usize), dir: usize, visited: &Vec<Vec<bool>>,
     }
 }
 
-fn move_pos(vcur: (usize, usize), dir_char: char, vn: &Vec<Vec<char>>, hn: &Vec<Vec<char>>) -> (usize, usize) {
+fn move_pos(vcur: (usize, usize), dij: (isize, isize), vn: &Vec<Vec<char>>, hn: &Vec<Vec<char>>) -> (usize, usize) {
     let n = vn[0].len() + 1;
-    let (di, dj) = char_to_dir(dir_char);
+    let (di, dj) = dij;
     let ni = vcur.0.wrapping_add_signed(di);
     let nj = vcur.1.wrapping_add_signed(dj);
     if ni >= n || nj >= n {
@@ -143,15 +142,15 @@ fn main() {
     // TODO: サイズ固定で高速化になる部分がありそう
     let mut ans_score = 0;
     // c[i][j]: i 番目のボタン押下時のロボット j の動作
-    let mut ans_controller = vec![vec![' '; M]; K];
+    let mut ans_button = vec![vec![Operation::S; M]; K];
     let mut ans_operation = vec![];
 
-    let mut controllers = vec![vec!['S'; M]; K];
-    let mut operations = vec![];
-    controllers[0][0] = 'L';
-    controllers[1][0] = 'R';
-    controllers[2][0] = 'U';
-    controllers[3][0] = 'D';
+    let mut buttons = vec![vec![Operation::S; M]; K];
+    let mut operations: Vec<usize> = vec![];
+    buttons[0][0] = Operation::L;
+    buttons[1][0] = Operation::R;
+    buttons[2][0] = Operation::U;
+    buttons[3][0] = Operation::D;
     let mut robots_pos = vec![(0, 0); m];
     let mut unvisited = HashSet::new();
     let mut visited = vec![vec![false; N]; N];
@@ -160,12 +159,12 @@ fn main() {
         // ボタン割り当てを決めつけ
         for i in 0..4 {
             for j in 1..M {
-                controllers[i][j] = match rng.gen::<usize>() % 5 {
-                    0 => 'L',
-                    1 => 'R',
-                    2 => 'U',
-                    3 => 'D',
-                    4 => 'S',
+                buttons[i][j] = match rng.gen::<usize>() % 5 {
+                    0 => Operation::L,
+                    1 => Operation::R,
+                    2 => Operation::U,
+                    3 => Operation::D,
+                    4 => Operation::S,
                     _ => unreachable!(),
                 };
             }
@@ -190,12 +189,12 @@ fn main() {
         while !unvisited.is_empty() && turn_current < TURN_MAX {
             // println!("turn: {turn_current}/{TURN_MAX}");
 
-            if dir_has_unvisited(robots_pos[0], current_dir_idx, &visited, &vn, &hn) {
+            if dir_has_unvisited(robots_pos[0], buttons[current_dir_idx][0].dir(), &visited, &vn, &hn) {
                 operations.push(current_dir_idx);
             } else {
                 let mut found= false;
                 for i in 0..4 {
-                    if dir_has_unvisited(robots_pos[0], i, &visited, &vn, &hn) {
+                    if dir_has_unvisited(robots_pos[0], buttons[current_dir_idx][0].dir(), &visited, &vn, &hn) {
                         found = true;
                         operations.push(i);
                         break;
@@ -212,7 +211,7 @@ fn main() {
             let &operation_selected = operations.last().unwrap();
             // 現在位置と到達更新
             for i in 0..m {
-                robots_pos[i] = move_pos(robots_pos[i], controllers[operation_selected][i], &vn, &hn);
+                robots_pos[i] = move_pos(robots_pos[i], buttons[operation_selected][i].dir(), &vn, &hn);
                 let ii = robots_pos[i].0;
                 let jj = robots_pos[i].1;
                 visited[ii][jj] = true;
@@ -232,7 +231,7 @@ fn main() {
         };
         if score > ans_score {
             ans_score = score;
-            ans_controller = controllers.clone();
+            ans_button = buttons.clone();
             ans_operation = operations.clone();
         }
 
@@ -240,7 +239,7 @@ fn main() {
         // break;
     }
 
-    for ac in ans_controller {
+    for ac in ans_button {
         println!("{}", ac.iter().join(" "));
     }
     for ao in ans_operation {
