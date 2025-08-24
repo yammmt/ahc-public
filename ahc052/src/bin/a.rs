@@ -7,6 +7,11 @@ use rand::{Rng, SeedableRng};
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
+// 固定
+const N: usize = 30;
+const M: usize = 10;
+const K: usize = 10;
+
 #[derive(Clone, Debug)]
 enum Operation {
     L,
@@ -41,11 +46,10 @@ impl Operation {
 }
 
 fn could_move(vcur: (usize, usize), dij: (isize, isize), vn: &Vec<Vec<char>>, hn: &Vec<Vec<char>>) -> bool {
-    let n = vn[0].len();
     let (di, dj) = dij;
     let ni = vcur.0.wrapping_add_signed(di);
     let nj = vcur.1.wrapping_add_signed(dj);
-    if ni >= n || nj >= n {
+    if ni >= N || nj >= N {
         return false;
     }
 
@@ -90,10 +94,6 @@ fn move_pos(vcur: (usize, usize), dij: (isize, isize), vn: &Vec<Vec<char>>, hn: 
 
 #[fastout]
 fn main() {
-    // 固定
-    const N: usize = 30;
-    const M: usize = 10;
-    const K: usize = 10;
     const TURN_MAX: usize = 2 * 30 * 30;
 
     // 2 sec
