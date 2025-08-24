@@ -114,12 +114,45 @@ fn shortest_path(vbegin: (usize, usize), vn: &Vec<Vec<char>>, hn: &Vec<Vec<char>
     ret
 }
 
+fn goal_order(vbegin: (usize, usize), dir: (isize, isize)) -> Option<Vec<(usize, usize)>> {
+    let ni = vbegin.0.wrapping_add_signed(dir.0);
+    let nj = vbegin.1.wrapping_add_signed(dir.1);
+    if ni >= N || nj >= N {
+        return None;
+    }
+
+    let mut ret = Vec::with_capacity(N * N);
+    let perp = (dir.1, dir.0);
+    for i in 0..N {
+        for j in 0..N {
+            // 奇数行のときは j を反転
+            let jj = if i % 2 == 0 { j } else { N - 1 - j };
+
+            // 基準点 vbegin + dir*jj + perp*i
+            let p0 = vbegin.0
+                .wrapping_add_signed(dir.0 * jj as isize + perp.0 * i as isize);
+            let p1 = vbegin.1
+                .wrapping_add_signed(dir.1 * jj as isize + perp.1 * i as isize);
+
+            // 範囲外なら None
+            // FIXME: None がかえるわけがない
+            if p0 >= N || p1 >= N {
+                return None;
+            }
+
+            ret.push((p0, p1));
+        }
+    }
+
+    Some(ret)
+}
+
 #[fastout]
 fn main() {
     const TURN_MAX: usize = 2 * 30 * 30;
 
     // 2 sec
-    const RUN_TIME_MAX_MS: u64 = 1990;
+    const RUN_TIME_MAX_MS: u64 = 1900;
 
     let start_time = Instant::now();
     let break_time = Duration::from_millis(RUN_TIME_MAX_MS);
@@ -200,97 +233,107 @@ fn main() {
     // println!("{:?}", start_time.elapsed());
     // return;
 
+    let mut goal_orders = vec![];
+    let vbegins = [(0, 0), (0, N - 1), (N - 1, 0), (N - 1, N - 1)];
+    for vbegin in vbegins {
+        for op in &[Operation::L, Operation::R, Operation::U, Operation::D] {
+            // Option 使わず判定できるが, 大して時間かからないので実装の楽さを優先する
+            if let Some(goal_order) = goal_order(vbegin, op.dir()) {
+                goal_orders.push(goal_order);
+            }
+        }
+    }
+
     while start_time.elapsed() < break_time {
-        // 変数初期化
-        // ボタン割り当てを決めつけ
-        operations = vec![];
-        unvisited.clear();
-        for i in 0..N {
-            for j in 0..N {
-                unvisited.insert((i, j));
-            }
-        }
-        for i in 0..m {
-            robots_pos[i] = (ijm[i].0, ijm[i].1);
-        }
-        for &(i, j) in &ijm {
-            unvisited.remove(&(i, j));
-            visited[i][j] = true;
-        }
-
-        let mut goal_order = vec![];
-        for i in 0..n {
-            for j in 0..n {
-                goal_order.push(if i % 2 == 0 {
-                    (i, j)
-                } else {
-                    (i, n - j - 1)
-                });
-            }
-        }
-        let mut idx_goal = 0;
-
-        let mut turn_current = 0;
-        while !unvisited.is_empty() && turn_current < TURN_MAX {
-            // println!("turn: {turn_current}/{TURN_MAX}");
-
-            // 目標位置を決める
-            while visited[goal_order[idx_goal].0][goal_order[idx_goal].1] {
-                idx_goal += 1;
-            }
-            let i_goal = goal_order[idx_goal].0;
-            let j_goal = goal_order[idx_goal].1;
-
-            // 目標に最も近いロボットを求める
-            let mut shortest_path_robot = 0;
-            let mut shortest_path_len = shortest_paths[robots_pos[0].0][robots_pos[0].1][i_goal][j_goal].len();
-            for i in 1..M {
-                let cur_len = shortest_paths[robots_pos[i].0][robots_pos[i].1][i_goal][j_goal].len();
-                if cur_len < shortest_path_len {
-                    shortest_path_robot = i;
-                    shortest_path_len = cur_len;
+        for goal_order in &goal_orders {
+            // 変数初期化
+            // ボタン割り当てを決めつけ
+            operations = vec![];
+            unvisited.clear();
+            for i in 0..N {
+                for j in 0..N {
+                    unvisited.insert((i, j));
                 }
             }
-            // println!("goal: {:?}", goal_order[idx_goal]);
-            // println!("  from robot[{}]", shortest_path_robot);
-            // println!("  path: {:?}", shortest_paths[robots_pos[shortest_path_robot].0][robots_pos[shortest_path_robot].1][i_goal][j_goal]);
-
-            for cur_op in & shortest_paths[robots_pos[shortest_path_robot].0][robots_pos[shortest_path_robot].1][i_goal][j_goal] {
-                operations.push(op_to_num(*cur_op));
-
-                // ロボット現在位置の更新
-                for i in 0..M {
-                    robots_pos[i] = move_pos(robots_pos[i], cur_op.dir(), &vn, &hn);
-                    let ii = robots_pos[i].0;
-                    let jj = robots_pos[i].1;
-                    visited[ii][jj] = true;
-                    unvisited.remove(&(ii, jj));
-                }
-
-                turn_current += 1;
-                if turn_current == TURN_MAX {
-                    // 手数超過により強制終了
-                    break;
+            for i in 0..m {
+                robots_pos[i] = (ijm[i].0, ijm[i].1);
+            }
+            for i in 0..N {
+                for j in 0..N {
+                    visited[i][j] = false;
                 }
             }
-        }
-        // println!("{:?}", unvisited);
-        // println!("{:?}", robots_pos);
+            for &(i, j) in &ijm {
+                unvisited.remove(&(i, j));
+                visited[i][j] = true;
+            }
 
-        // 記録更新判定
-        let score = if unvisited.is_empty() {
-            3 * N * N - operations.len()
-        } else {
-            N * N - unvisited.len()
-        };
-        if score > ans_score {
-            ans_score = score;
-            ans_button = buttons.clone();
-            ans_operation = operations.clone();
-        }
+            // println!("goal_order: {goal_order:?}");
+            let mut idx_goal = 0;
+            let mut turn_current = 0;
+            while !unvisited.is_empty() && turn_current < TURN_MAX {
+                // println!("  turn: {turn_current}/{TURN_MAX}");
 
-        // 乱択部分がなく一度やって終わりであるため
-        break;
+                // 目標位置を決める
+                // println!("  idx_goal: {idx_goal}");
+                // println!("  unvisited: {unvisited:?}");
+                while visited[goal_order[idx_goal].0][goal_order[idx_goal].1] {
+                    idx_goal += 1;
+                }
+                let i_goal = goal_order[idx_goal].0;
+                let j_goal = goal_order[idx_goal].1;
+
+                // 目標に最も近いロボットを求める
+                let mut shortest_path_robot = 0;
+                let mut shortest_path_len = shortest_paths[robots_pos[0].0][robots_pos[0].1][i_goal][j_goal].len();
+                for i in 1..M {
+                    let cur_len = shortest_paths[robots_pos[i].0][robots_pos[i].1][i_goal][j_goal].len();
+                    if cur_len < shortest_path_len {
+                        shortest_path_robot = i;
+                        shortest_path_len = cur_len;
+                    }
+                }
+                // println!("goal: {:?}", goal_order[idx_goal]);
+                // println!("  from robot[{}]", shortest_path_robot);
+                // println!("  path: {:?}", shortest_paths[robots_pos[shortest_path_robot].0][robots_pos[shortest_path_robot].1][i_goal][j_goal]);
+
+                for cur_op in & shortest_paths[robots_pos[shortest_path_robot].0][robots_pos[shortest_path_robot].1][i_goal][j_goal] {
+                    operations.push(op_to_num(*cur_op));
+
+                    // ロボット現在位置の更新
+                    for i in 0..M {
+                        robots_pos[i] = move_pos(robots_pos[i], cur_op.dir(), &vn, &hn);
+                        let ii = robots_pos[i].0;
+                        let jj = robots_pos[i].1;
+                        visited[ii][jj] = true;
+                        unvisited.remove(&(ii, jj));
+                    }
+
+                    turn_current += 1;
+                    if turn_current == TURN_MAX {
+                        // 手数超過により強制終了
+                        break;
+                    }
+                }
+            }
+            // println!("{:?}", unvisited);
+            // println!("{:?}", robots_pos);
+
+            // 記録更新判定
+            let score = if unvisited.is_empty() {
+                3 * N * N - operations.len()
+            } else {
+                N * N - unvisited.len()
+            };
+            if score > ans_score {
+                ans_score = score;
+                ans_button = buttons.clone();
+                ans_operation = operations.clone();
+            }
+
+            // TODO: DEBUG
+            // break;
+        }
     }
 
     for ac in ans_button {
