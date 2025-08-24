@@ -4,7 +4,7 @@ use proconio::input;
 use proconio::marker::Chars;
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::time::{Duration, Instant};
 
 // 固定
@@ -12,7 +12,7 @@ const N: usize = 30;
 const M: usize = 10;
 const K: usize = 10;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 enum Operation {
     L,
     R,
@@ -92,6 +92,28 @@ fn move_pos(vcur: (usize, usize), dij: (isize, isize), vn: &Vec<Vec<char>>, hn: 
     (ni, nj)
 }
 
+fn shortest_path(vbegin: (usize, usize), vn: &Vec<Vec<char>>, hn: &Vec<Vec<char>>) -> Vec<Vec<Vec<Operation>>> {
+    let ops = [Operation::L, Operation::R, Operation::U, Operation::D];
+    let mut ret = vec![vec![vec![]; N]; N];
+    let mut que = VecDeque::new();
+    que.push_back(vbegin);
+    while let Some(vcur) = que.pop_front() {
+        for op in &ops {
+            let vnext = move_pos(vcur, op.dir(), vn, hn);
+            if vnext == vcur || vnext == vbegin || !ret[vnext.0][vnext.1].is_empty() {
+                continue;
+            }
+
+            let mut pathnext = ret[vcur.0][vcur.1].clone();
+            pathnext.push(*op);
+            ret[vnext.0][vnext.1] = pathnext;
+            que.push_back(vnext);
+        }
+    }
+
+    ret
+}
+
 #[fastout]
 fn main() {
     const TURN_MAX: usize = 2 * 30 * 30;
@@ -146,29 +168,41 @@ fn main() {
     let mut ans_operation = vec![];
 
     let mut buttons = vec![vec![Operation::S; M]; K];
+    for i in 0..M {
+        buttons[0][i] = Operation::L;
+        buttons[1][i] = Operation::R;
+        buttons[2][i] = Operation::U;
+        buttons[3][i] = Operation::D;
+    }
+    let op_to_num = |op: Operation| {
+        match op {
+            Operation::L => 0,
+            Operation::R => 1,
+            Operation::U => 2,
+            Operation::D => 3,
+            _ => unreachable!(),
+        }
+    };
+
     let mut operations: Vec<usize> = vec![];
-    buttons[0][0] = Operation::L;
-    buttons[1][0] = Operation::R;
-    buttons[2][0] = Operation::U;
-    buttons[3][0] = Operation::D;
     let mut robots_pos = vec![(0, 0); m];
     let mut unvisited = HashSet::new();
     let mut visited = vec![vec![false; N]; N];
+
+    // 処理時間よい？
+    let mut shortest_paths = vec![vec![vec![vec![]; n]; n]; n];
+    for i in 0..N {
+        for j in 0..N {
+            shortest_paths[i][j] = shortest_path((i, j), &vn, &hn);
+        }
+    }
+    // debug で 822 ms, release で 170 ms くらいかかっている, 遅い
+    // println!("{:?}", start_time.elapsed());
+    // return;
+
     while start_time.elapsed() < break_time {
         // 変数初期化
         // ボタン割り当てを決めつけ
-        for i in 0..4 {
-            for j in 1..M {
-                buttons[i][j] = match rng.gen::<usize>() % 5 {
-                    0 => Operation::L,
-                    1 => Operation::R,
-                    2 => Operation::U,
-                    3 => Operation::D,
-                    4 => Operation::S,
-                    _ => unreachable!(),
-                };
-            }
-        }
         operations = vec![];
         unvisited.clear();
         for i in 0..N {
@@ -184,41 +218,61 @@ fn main() {
             visited[i][j] = true;
         }
 
+        let mut goal_order = vec![];
+        for i in 0..n {
+            for j in 0..n {
+                goal_order.push(if i % 2 == 0 {
+                    (i, j)
+                } else {
+                    (i, n - j - 1)
+                });
+            }
+        }
+        let mut idx_goal = 0;
+
         let mut turn_current = 0;
-        let mut current_dir_idx = 0;
         while !unvisited.is_empty() && turn_current < TURN_MAX {
             // println!("turn: {turn_current}/{TURN_MAX}");
 
-            if dir_has_unvisited(robots_pos[0], buttons[current_dir_idx][0].dir(), &visited, &vn, &hn) {
-                operations.push(current_dir_idx);
-            } else {
-                let mut found= false;
-                for i in 0..4 {
-                    if dir_has_unvisited(robots_pos[0], buttons[current_dir_idx][0].dir(), &visited, &vn, &hn) {
-                        found = true;
-                        operations.push(i);
-                        break;
-                    }
-                }
-                if !found {
-                    // 現在位置から上下左右方向には空きマスがない, 斜め方向やら壁回った先にはあり得る
-                    // その場でくるくる回りうる事象への雑対策としての rand
-                    current_dir_idx = rng.gen::<usize>() % 4;
-                    operations.push(current_dir_idx);
+            // 目標位置を決める
+            while visited[goal_order[idx_goal].0][goal_order[idx_goal].1] {
+                idx_goal += 1;
+            }
+            let i_goal = goal_order[idx_goal].0;
+            let j_goal = goal_order[idx_goal].1;
+
+            // 目標に最も近いロボットを求める
+            let mut shortest_path_robot = 0;
+            let mut shortest_path_len = shortest_paths[robots_pos[0].0][robots_pos[0].1][i_goal][j_goal].len();
+            for i in 1..M {
+                let cur_len = shortest_paths[robots_pos[i].0][robots_pos[i].1][i_goal][j_goal].len();
+                if cur_len < shortest_path_len {
+                    shortest_path_robot = i;
+                    shortest_path_len = cur_len;
                 }
             }
+            // println!("goal: {:?}", goal_order[idx_goal]);
+            // println!("  from robot[{}]", shortest_path_robot);
+            // println!("  path: {:?}", shortest_paths[robots_pos[shortest_path_robot].0][robots_pos[shortest_path_robot].1][i_goal][j_goal]);
 
-            let &operation_selected = operations.last().unwrap();
-            // 現在位置と到達更新
-            for i in 0..m {
-                robots_pos[i] = move_pos(robots_pos[i], buttons[operation_selected][i].dir(), &vn, &hn);
-                let ii = robots_pos[i].0;
-                let jj = robots_pos[i].1;
-                visited[ii][jj] = true;
-                unvisited.remove(&(ii, jj));
+            for cur_op in & shortest_paths[robots_pos[shortest_path_robot].0][robots_pos[shortest_path_robot].1][i_goal][j_goal] {
+                operations.push(op_to_num(*cur_op));
+
+                // ロボット現在位置の更新
+                for i in 0..M {
+                    robots_pos[i] = move_pos(robots_pos[i], cur_op.dir(), &vn, &hn);
+                    let ii = robots_pos[i].0;
+                    let jj = robots_pos[i].1;
+                    visited[ii][jj] = true;
+                    unvisited.remove(&(ii, jj));
+                }
+
+                turn_current += 1;
+                if turn_current == TURN_MAX {
+                    // 手数超過により強制終了
+                    break;
+                }
             }
-
-            turn_current += 1;
         }
         // println!("{:?}", unvisited);
         // println!("{:?}", robots_pos);
@@ -235,8 +289,8 @@ fn main() {
             ans_operation = operations.clone();
         }
 
-        // TODO: debug
-        // break;
+        // 乱択部分がなく一度やって終わりであるため
+        break;
     }
 
     for ac in ans_button {
