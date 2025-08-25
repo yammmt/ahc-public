@@ -122,25 +122,48 @@ fn goal_order(vbegin: (usize, usize), dir: (isize, isize)) -> Option<Vec<(usize,
     }
 
     let mut ret = Vec::with_capacity(N * N);
-    let perp = (dir.1, dir.0);
+
+    // thank you Gemini 2.5 Pro...
+    // i は進行方向に対して垂直な軸（レーン）のインデックス
     for i in 0..N {
-        for j in 0..N {
-            // 奇数行のときは j を反転
-            let jj = if i % 2 == 0 { j } else { N - 1 - j };
+        // j_raw は各レーン内の進行方向のインデックス
+        for j_raw in 0..N {
+            // i の偶奇に応じて進行方向を反転させる
+            // i=0, 2, 4... (偶数) -> 順方向 (0, 1, ..., N-1)
+            // i=1, 3, 5... (奇数) -> 逆方向 (N-1, N-2, ..., 0)
+            let j = if i % 2 == 0 {
+                j_raw
+            } else {
+                N - 1 - j_raw
+            };
 
-            // 基準点 vbegin + dir*jj + perp*i
-            let p0 = vbegin.0
-                .wrapping_add_signed(dir.0 * jj as isize + perp.0 * i as isize);
-            let p1 = vbegin.1
-                .wrapping_add_signed(dir.1 * jj as isize + perp.1 * i as isize);
+            let (r, c); // 最終的な座標 (row, column)
 
-            // 範囲外なら None
-            // FIXME: None がかえるわけがない
-            if p0 >= N || p1 >= N {
-                return None;
+            // dir.0 が 0 の場合、主な進行方向は水平（左右）
+            if dir.0 == 0 {
+                // [進行方向でない側（行）の決定]
+                // 開始点が上辺 (vbegin.0 == 0) なら、行は i の昇順 (0, 1, 2...)
+                // 開始点が下辺 (vbegin.0 == N-1) なら、行は i の降順 (N-1, N-2, ...)
+                r = if vbegin.0 == 0 { i } else { N - 1 - i };
+
+                // [進行方向側（列）の決定]
+                // 初期の進行方向が右 (dir.1 > 0) なら、列は j の昇順 (0, 1, 2...)
+                // 初期の進行方向が左 (dir.1 < 0) なら、列は j の降順 (N-1, N-2, ...)
+                c = if dir.1 > 0 { j } else { N - 1 - j };
             }
+            // dir.1 が 0 の場合、主な進行方向は垂直（上下）
+            else {
+                // [進行方向でない側（列）の決定]
+                // 開始点が左辺 (vbegin.1 == 0) なら、列は i の昇順 (0, 1, 2...)
+                // 開始点が右辺 (vbegin.1 == N-1) なら、列は i の降順 (N-1, N-2, ...)
+                c = if vbegin.1 == 0 { i } else { N - 1 - i };
 
-            ret.push((p0, p1));
+                // [進行方向側（行）の決定]
+                // 初期の進行方向が下 (dir.0 > 0) なら、行は j の昇順 (0, 1, 2...)
+                // 初期の進行方向が上 (dir.0 < 0) なら、行は j の降順 (N-1, N-2, ...)
+                r = if dir.0 > 0 { j } else { N - 1 - j };
+            }
+            ret.push((r, c));
         }
     }
 
@@ -243,6 +266,9 @@ fn main() {
             }
         }
     }
+    // ここまで 160 ms くらい, つまりほとんど時間くってない
+    // println!("{:?}", start_time.elapsed());
+    // return;
 
     while start_time.elapsed() < break_time {
         for goal_order in &goal_orders {
