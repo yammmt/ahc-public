@@ -45,7 +45,12 @@ impl Operation {
     }
 }
 
-fn could_move(vcur: (usize, usize), dij: (isize, isize), vn: &Vec<Vec<char>>, hn: &Vec<Vec<char>>) -> bool {
+fn could_move(
+    vcur: (usize, usize),
+    dij: (isize, isize),
+    vn: &Vec<Vec<char>>,
+    hn: &Vec<Vec<char>>,
+) -> bool {
     let (di, dj) = dij;
     let ni = vcur.0.wrapping_add_signed(di);
     let nj = vcur.1.wrapping_add_signed(dj);
@@ -64,7 +69,12 @@ fn could_move(vcur: (usize, usize), dij: (isize, isize), vn: &Vec<Vec<char>>, hn
     true
 }
 
-fn move_pos(vcur: (usize, usize), dij: (isize, isize), vn: &Vec<Vec<char>>, hn: &Vec<Vec<char>>) -> (usize, usize) {
+fn move_pos(
+    vcur: (usize, usize),
+    dij: (isize, isize),
+    vn: &Vec<Vec<char>>,
+    hn: &Vec<Vec<char>>,
+) -> (usize, usize) {
     if !could_move(vcur, dij, vn, hn) {
         return vcur;
     }
@@ -74,7 +84,11 @@ fn move_pos(vcur: (usize, usize), dij: (isize, isize), vn: &Vec<Vec<char>>, hn: 
     (ni, nj)
 }
 
-fn shortest_path(vbegin: (usize, usize), vn: &Vec<Vec<char>>, hn: &Vec<Vec<char>>) -> Vec<Vec<Vec<Operation>>> {
+fn shortest_path(
+    vbegin: (usize, usize),
+    vn: &Vec<Vec<char>>,
+    hn: &Vec<Vec<char>>,
+) -> Vec<Vec<Vec<Operation>>> {
     let ops = [Operation::L, Operation::R, Operation::U, Operation::D];
     let mut ret = vec![vec![vec![]; N]; N];
     let mut que = VecDeque::new();
@@ -113,11 +127,7 @@ fn goal_order(vbegin: (usize, usize), dir: (isize, isize)) -> Option<Vec<(usize,
             // i の偶奇に応じて進行方向を反転させる
             // i=0, 2, 4... (偶数) -> 順方向 (0, 1, ..., N-1)
             // i=1, 3, 5... (奇数) -> 逆方向 (N-1, N-2, ..., 0)
-            let j = if i % 2 == 0 {
-                j_raw
-            } else {
-                N - 1 - j_raw
-            };
+            let j = if i % 2 == 0 { j_raw } else { N - 1 - j_raw };
 
             let (r, c); // 最終的な座標 (row, column)
 
@@ -215,14 +225,12 @@ fn main() {
         buttons[2][i] = Operation::U;
         buttons[3][i] = Operation::D;
     }
-    let op_to_num = |op: Operation| {
-        match op {
-            Operation::L => 0,
-            Operation::R => 1,
-            Operation::U => 2,
-            Operation::D => 3,
-            _ => unreachable!(),
-        }
+    let op_to_num = |op: Operation| match op {
+        Operation::L => 0,
+        Operation::R => 1,
+        Operation::U => 2,
+        Operation::D => 3,
+        _ => unreachable!(),
     };
 
     let mut operations: Vec<usize> = vec![];
@@ -296,9 +304,11 @@ fn main() {
 
                 // 目標に最も近いロボットを求める
                 let mut shortest_path_robot = 0;
-                let mut shortest_path_len = shortest_paths[robots_pos[0].0][robots_pos[0].1][i_goal][j_goal].len();
+                let mut shortest_path_len =
+                    shortest_paths[robots_pos[0].0][robots_pos[0].1][i_goal][j_goal].len();
                 for i in 1..M {
-                    let cur_len = shortest_paths[robots_pos[i].0][robots_pos[i].1][i_goal][j_goal].len();
+                    let cur_len =
+                        shortest_paths[robots_pos[i].0][robots_pos[i].1][i_goal][j_goal].len();
                     if cur_len < shortest_path_len {
                         shortest_path_robot = i;
                         shortest_path_len = cur_len;
@@ -308,7 +318,9 @@ fn main() {
                 // println!("  from robot[{}]", shortest_path_robot);
                 // println!("  path: {:?}", shortest_paths[robots_pos[shortest_path_robot].0][robots_pos[shortest_path_robot].1][i_goal][j_goal]);
 
-                for cur_op in & shortest_paths[robots_pos[shortest_path_robot].0][robots_pos[shortest_path_robot].1][i_goal][j_goal] {
+                for cur_op in &shortest_paths[robots_pos[shortest_path_robot].0]
+                    [robots_pos[shortest_path_robot].1][i_goal][j_goal]
+                {
                     operations.push(op_to_num(*cur_op));
 
                     // ロボット現在位置の更新
