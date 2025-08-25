@@ -156,8 +156,10 @@ fn goal_order(vbegin: (usize, usize), dir: (isize, isize)) -> Option<Vec<(usize,
 fn main() {
     const TURN_MAX: usize = 2 * 30 * 30;
 
-    // 2 sec
-    const RUN_TIME_MAX_MS: u64 = 1900;
+    // < 2 sec
+    const RUN_TIME_MAX_MS: u64 = 1930;
+    const SWAP_COUNT_MAX: usize = 10;
+    const ORDER_CANDIDATE_NUM: usize = 4;
 
     let start_time = Instant::now();
     let break_time = Duration::from_millis(RUN_TIME_MAX_MS);
@@ -204,6 +206,7 @@ fn main() {
     // c[i][j]: i 番目のボタン押下時のロボット j の動作
     let mut ans_button = vec![vec![Operation::S; M]; K];
     let mut ans_operation = vec![];
+    let mut ans_order = vec![];
 
     let mut buttons = vec![vec![Operation::S; M]; K];
     for i in 0..M {
@@ -337,10 +340,24 @@ fn main() {
                 ans_score = score;
                 ans_button = buttons.clone();
                 ans_operation = operations.clone();
+                ans_order = goal_order.clone();
             }
 
             // TODO: DEBUG
             // break;
+        }
+
+        // 訪問順を適当に並べ替えて登山
+        // TODO: 近傍とか壁沿いとかを入れ替えたほうがよいのだろうが, だるい
+        goal_orders.clear();
+        for _ in 0..ORDER_CANDIDATE_NUM {
+            let mut goal_order = ans_order.clone();
+            for _ in 0..rng.gen::<usize>() % SWAP_COUNT_MAX + 1 {
+                let i = rng.gen::<usize>() % goal_order.len();
+                let j = rng.gen::<usize>() % goal_order.len();
+                goal_order.swap(i, j);
+            }
+            goal_orders.push(goal_order);
         }
     }
 
