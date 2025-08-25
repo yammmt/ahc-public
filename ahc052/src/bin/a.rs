@@ -64,24 +64,6 @@ fn could_move(vcur: (usize, usize), dij: (isize, isize), vn: &Vec<Vec<char>>, hn
     true
 }
 
-fn dir_has_unvisited(vcur: (usize, usize), dij: (isize, isize), visited: &Vec<Vec<bool>>, vn: &Vec<Vec<char>>, hn: &Vec<Vec<char>>) -> bool {
-    let mut cur = vcur;
-    loop {
-        if !could_move(cur, dij, vn, hn) {
-            return false;
-        }
-
-        let ni = cur.0.wrapping_add_signed(dij.0);
-        let nj = cur.1.wrapping_add_signed(dij.1);
-
-        if !visited[ni][nj] {
-            return true;
-        }
-
-        cur = (ni, nj);
-    }
-}
-
 fn move_pos(vcur: (usize, usize), dij: (isize, isize), vn: &Vec<Vec<char>>, hn: &Vec<Vec<char>>) -> (usize, usize) {
     if !could_move(vcur, dij, vn, hn) {
         return vcur;
