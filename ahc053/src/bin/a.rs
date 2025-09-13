@@ -1,7 +1,5 @@
 // use itertools::Itertools;
 // use petgraph::unionfind::UnionFind;
-use proconio::fastout;
-use proconio::input;
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 // use std::collections::BinaryHeap;
@@ -18,7 +16,12 @@ const M: usize = 50;
 const L: i64 = 1_000_000_000_000_000 - 2 * 1_000_000_000_000;
 const U: i64 = 1_000_000_000_000_000 + 2 * 1_000_000_000_000;
 
-#[fastout]
+fn get_line() -> String {
+    let mut s = String::new();
+    std::io::stdin().read_line(&mut s).ok();
+    s.trim().to_string()
+}
+
 fn main() {
     // 2000 ms
     const RUN_TIME_MAX_MS: u64 = 1930;
@@ -27,12 +30,11 @@ fn main() {
     let break_time = Duration::from_millis(RUN_TIME_MAX_MS);
     let mut rng = SmallRng::from_entropy();
 
-    input! {
-        _n: usize,
-        _m: usize,
-        _l: usize,
-        _r: usize,
-    }
+    let _nmlu: Vec<i64> = get_line()
+        .split_whitespace()
+        .map(|tok| tok.parse::<i64>().expect("failed to parse i64"))
+        .collect();
+
     // 完璧に振り分けられると 1e8 点が得られる
     // A_i が 500 個で振り分け先が 50 個だから, 全探索すると 500^50
     // [L, R] の数を 500 個作って近い順に採用, が実装楽そうだが工夫がない
@@ -61,19 +63,14 @@ fn main() {
         // 7/8
         an[i] = an[i] + uml4 + uml4 / 2;
     }
-    for (i, a) in an.iter().enumerate() {
-        print!("{a}");
-        if i == N - 1 {
-            println!();
-        } else {
-            print!(" ");
-        }
-    }
+    let an_line = an.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(" ");
+    println!("{an_line}");
     stdout().flush().unwrap();
 
-    input! {
-        bm: [i64; M],
-    }
+    let bm: Vec<i64> = get_line()
+        .split_whitespace()
+        .map(|tok| tok.parse::<i64>().expect("failed to parse i64"))
+        .collect();
     let mut ans = vec![0; N];
     for i in 0..M {
         // 雑に半分を入れておく
@@ -86,12 +83,7 @@ fn main() {
     }
 
     // 解の出力
-    for (i, a) in ans.iter().enumerate() {
-        print!("{a}");
-        if i == N - 1 {
-            println!();
-        } else {
-            print!(" ");
-        }
-    }
+    let ans_line = ans.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(" ");
+    println!("{ans_line}");
+    stdout().flush().unwrap();
 }
