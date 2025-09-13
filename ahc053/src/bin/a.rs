@@ -1,12 +1,5 @@
-// use itertools::Itertools;
-// use petgraph::unionfind::UnionFind;
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
-// use std::collections::BinaryHeap;
-// use std::collections::BTreeSet;
-// use std::collections::HashSet;
-// use std::collections::HashMap;
-// use std::collections::VecDeque;
 use std::io::{stdout, Write};
 use std::time::{Duration, Instant};
 
