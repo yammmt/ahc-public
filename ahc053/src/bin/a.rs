@@ -91,6 +91,9 @@ fn main() {
     for i in 80..N {
         an[i] = (10_000_000_000 + d * (i - 80)) as i64;
     }
+    for i in 420..N {
+        an[i] /= 16;
+    }
 
     let an_line = an
         .iter()
