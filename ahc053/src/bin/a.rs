@@ -68,26 +68,35 @@ fn main() {
     // A_i は決め打ちだがどうやるとよいのやら？初期解を全部 (L+U)/2 にしてやるとか
     // 工夫が弱い...
 
+    // 初期値が上四桁 0998, 0999, 1000, 1001 の四通りとして
+    // 微調整用の値を足す
+
     let mut an = vec![(L + U) / 2; N];
-    let nm4 = (N - M) / 4;
-    let uml4 = (U - L) / 4;
-    for i in M..M + nm4 {
-        // 1/8
-        an[i] = an[i] - (uml4 + uml4 / 2);
+    // 初期値用
+    for i in 0..20 {
+        an[i] = 998_000_000_000_000;
     }
-    for i in M + nm4..M + 2 * nm4 {
-        // 1/4
-        an[i] = an[i] - uml4;
+    for i in 20..40 {
+        an[i] = 999_000_000_000_000;
     }
-    for i in M + 2 * nm4..M + 3 * nm4 {
-        // 3/4
-        an[i] = an[i] + uml4;
+    for i in 40..60 {
+        an[i] = 1_000_000_000_000_000;
     }
-    for i in M + 3 * nm4..N {
-        // 7/8
-        an[i] = an[i] + uml4 + uml4 / 2;
+    for i in 60..80 {
+        an[i] = 1_001_000_000_000_000;
     }
-    let an_line = an.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(" ");
+    // 微調整用
+    // floor((10^12-10^9)/420)
+    let d = 2_380_952_380;
+    for i in 80..N {
+        an[i] = (1_000_000_000 + d * (i - 80)) as i64;
+    }
+
+    let an_line = an
+        .iter()
+        .map(|x| x.to_string())
+        .collect::<Vec<_>>()
+        .join(" ");
     println!("{an_line}");
     stdout().flush().unwrap();
 
@@ -104,25 +113,42 @@ fn main() {
     // let mut mountains = calc_mountains(&an, &ans);
 
     while start_time.elapsed() < break_time {
-        let a_i = rng.gen::<usize>() % N;
-        let distribution_i = rng.gen::<usize>() % (M + 1);
-        let a_j = rng.gen::<usize>() % N;
-        let distribution_j = rng.gen::<usize>() % (M + 1);
-
         let mut ans_cur = ans.clone();
-        ans_cur[a_i] = distribution_j;
-        ans_cur[a_j] = distribution_i;
-        let score_cur = calc_score(&an, &bm, &ans_cur);
-        // println!("a[{a_idx}] -> {distribution_idx}, score: {score} -> {score_cur}");
-        stdout().flush().unwrap();
-        if score_cur < score {
-            ans = ans_cur;
-            score = score_cur;
+        let a_i = rng.gen::<usize>() % N;
+
+        if rng.gen::<usize>() % 2 == 0 {
+            // 加算
+            let distribution_i = rng.gen::<usize>() % (M + 1);
+            ans_cur[a_i] = distribution_i;
+            let score_cur = calc_score(&an, &bm, &ans_cur);
+            // println!("a[{a_i}] -> {distribution_i}, score: {score} -> {score_cur}");
+            stdout().flush().unwrap();
+            if score_cur < score {
+                ans = ans_cur;
+                score = score_cur;
+            }
+        } else {
+            // 交換
+            let distribution_i = ans[a_i];
+            let a_j = rng.gen::<usize>() % N;
+            let distribution_j = ans[a_j];
+            ans_cur[a_i] = distribution_j;
+            ans_cur[a_j] = distribution_i;
+            let score_cur = calc_score(&an, &bm, &ans_cur);
+            stdout().flush().unwrap();
+            if score_cur < score {
+                ans = ans_cur;
+                score = score_cur;
+            }
         }
     }
 
     // 解の出力
-    let ans_line = ans.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(" ");
+    let ans_line = ans
+        .iter()
+        .map(|x| x.to_string())
+        .collect::<Vec<_>>()
+        .join(" ");
     println!("{ans_line}");
     stdout().flush().unwrap();
 }
