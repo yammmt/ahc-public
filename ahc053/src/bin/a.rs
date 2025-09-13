@@ -48,7 +48,7 @@ fn get_line() -> String {
 
 fn main() {
     // 2000 ms
-    const RUN_TIME_MAX_MS: u64 = 1930;
+    const RUN_TIME_MAX_MS: u64 = 1980;
 
     let start_time = Instant::now();
     let break_time = Duration::from_millis(RUN_TIME_MAX_MS);
