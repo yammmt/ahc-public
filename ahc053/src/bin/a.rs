@@ -9,6 +9,37 @@ const M: usize = 50;
 const L: i64 = 1_000_000_000_000_000 - 2 * 1_000_000_000_000;
 const U: i64 = 1_000_000_000_000_000 + 2 * 1_000_000_000_000;
 
+// swap 一回であれば差分を取ったほうが高速だが絶対値に注意
+fn calc_score(an: &[i64], bm: &[i64], distributed_to: &[usize]) -> i64 {
+    let mut mountains = vec![0; M];
+    for i in 0..N {
+        if distributed_to[i] == 0 {
+            continue;
+        }
+
+        mountains[distributed_to[i] - 1] += an[i];
+    }
+
+    let mut ret = 0;
+    for i in 0..M {
+        ret += (bm[i] - mountains[i]).abs();
+    }
+
+    ret
+}
+
+fn _calc_mountains(an: &[i64], distributed_to: &[usize]) -> Vec<i64> {
+    let mut ret = vec![0; M];
+    for i in 0..N {
+        if distributed_to[i] == 0 {
+            continue;
+        }
+
+        ret[distributed_to[i] - 1] += an[i];
+    }
+    ret
+}
+
 fn get_line() -> String {
     let mut s = String::new();
     std::io::stdin().read_line(&mut s).ok();
@@ -69,10 +100,25 @@ fn main() {
         // 雑に半分を入れておく
         ans[i] = i + 1;
     }
+    let mut score = calc_score(&an, &bm, &ans);
+    // let mut mountains = calc_mountains(&an, &ans);
 
-    // TODO:
     while start_time.elapsed() < break_time {
-        break;
+        let a_i = rng.gen::<usize>() % N;
+        let distribution_i = rng.gen::<usize>() % (M + 1);
+        let a_j = rng.gen::<usize>() % N;
+        let distribution_j = rng.gen::<usize>() % (M + 1);
+
+        let mut ans_cur = ans.clone();
+        ans_cur[a_i] = distribution_j;
+        ans_cur[a_j] = distribution_i;
+        let score_cur = calc_score(&an, &bm, &ans_cur);
+        // println!("a[{a_idx}] -> {distribution_idx}, score: {score} -> {score_cur}");
+        stdout().flush().unwrap();
+        if score_cur < score {
+            ans = ans_cur;
+            score = score_cur;
+        }
     }
 
     // 解の出力
