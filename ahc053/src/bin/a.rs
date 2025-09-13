@@ -162,8 +162,6 @@ fn main() {
             let distribution_i = rng.gen::<usize>() % (M + 1);
             ans_cur[a_i] = distribution_i;
             let score_cur = calc_score(&an, &bm, &ans_cur);
-            // println!("a[{a_i}] -> {distribution_i}, score: {score} -> {score_cur}");
-            stdout().flush().unwrap();
             if score_cur < score {
                 ans = ans_cur;
                 score = score_cur;
@@ -176,7 +174,6 @@ fn main() {
             ans_cur[a_i] = distribution_j;
             ans_cur[a_j] = distribution_i;
             let score_cur = calc_score(&an, &bm, &ans_cur);
-            stdout().flush().unwrap();
             if score_cur < score {
                 ans = ans_cur;
                 score = score_cur;
