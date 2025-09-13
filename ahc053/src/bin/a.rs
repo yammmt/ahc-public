@@ -112,6 +112,47 @@ fn main() {
     let mut score = calc_score(&an, &bm, &ans);
     // let mut mountains = calc_mountains(&an, &ans);
 
+    // 値が大きい初期値を先に割り当てておく
+    // 加算操作後だと焼きなまししない限りは更新が起らなくなりそうであるため
+    // TODO: 判定が弱く, 更新できるのに更新しない場合がある
+    // TODO: そこそこ複雑, 共通化したい
+    for i in 0..M {
+        if bm[i] > 1_001_000_000_000_000 {
+            for j in 60..80 {
+                if ans[j] == 0 {
+                    for k in 0..N {
+                        if ans[k] == i + 1 {
+                            ans[k] = 0;
+                        }
+                    }
+                    ans[j] = i + 1;
+                }
+            }
+        } else if bm[i] > 1_000_000_000_000_000 {
+            for j in 40..60 {
+                if ans[j] == 0 {
+                    for k in 0..N {
+                        if ans[k] == i + 1 {
+                            ans[k] = 0;
+                        }
+                    }
+                    ans[j] = i + 1;
+                }
+            }
+        } else if bm[i] > 999_000_000_000_000 {
+            for j in 20..40 {
+                if ans[j] == 0 {
+                    for k in 0..N {
+                        if ans[k] == i + 1 {
+                            ans[k] = 0;
+                        }
+                    }
+                    ans[j] = i + 1;
+                }
+            }
+        }
+    }
+
     while start_time.elapsed() < break_time {
         let mut ans_cur = ans.clone();
         let a_i = rng.gen::<usize>() % N;
