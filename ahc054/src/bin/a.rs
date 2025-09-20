@@ -1,10 +1,47 @@
 use proconio::marker::Chars;
 use proconio::{input, source::line::LineSource};
+use rand::prelude::*;
+use rand::rngs::SmallRng;
+use rand::SeedableRng;
+use std::collections::VecDeque;
 use std::io::{stdout, Write};
 
 // 2 s
 #[allow(dead_code)]
 const TIME_LIMIT_MS: usize = 1980;
+
+const DXY: [(isize, isize); 4] = [(-1, 0), (1, 0), (0, -1), (0, 1)];
+
+fn could_goal(sxy: (usize, usize), gxy: (usize, usize), has_tree: &Vec<Vec<bool>>) -> bool {
+    let n = has_tree.len();
+    let mut visited = vec![vec![false; n]; n];
+    let mut que = VecDeque::new();
+    que.push_back(sxy);
+
+    while let Some(cur) = que.pop_front() {
+        if visited[cur.0][cur.1] {
+            continue;
+        }
+
+        visited[cur.0][cur.1] = true;
+        for &(dx, dy) in &DXY {
+            let nx = cur.0.wrapping_add_signed(dx);
+            let ny = cur.1.wrapping_add_signed(dy);
+            if nx >= n || ny >= n || has_tree[nx][ny] {
+                continue;
+            }
+
+            let nxy = (nx, ny);
+            if nxy == gxy {
+                return true;
+            }
+
+            que.push_back(nxy);
+        }
+    }
+
+    false
+}
 
 fn main() {
     let stdin = std::io::stdin();
@@ -17,8 +54,36 @@ fn main() {
         bnn: [Chars; n],
     }
 
+    let mut rng = SmallRng::from_entropy();
     let mut adventurer = (0, n / 2);
     let mut is_founded = vec![vec![false; n]; n];
+    // 伝説の花マスも置けないが, 考えなくともよい？
+    let mut has_tree = vec![vec![false; n]; n];
+    for i in 0..n {
+        for j in 0..n {
+            has_tree[i][j] = bnn[i][j] == 'T';
+        }
+    }
+    let mut ready_treants = vec![];
+
+    // goal を視認されないよう, 三方を囲む
+    // TODO: ランダム性をもたせる意味とは
+    let mut dxy = DXY.clone();
+    dxy.shuffle(&mut rng);
+    for (dx, dy) in dxy {
+        let tx = tij.0.wrapping_add_signed(dx);
+        let ty = tij.1.wrapping_add_signed(dy);
+        if tx >= n || ty >= n || has_tree[tx][ty] {
+            continue;
+        }
+
+        let mut ht = has_tree.clone();
+        ht[tx][ty] = true;
+        if could_goal(adventurer, tij, &ht) {
+            ready_treants.push((tx, ty));
+            has_tree[tx][ty] = true;
+        }
+    }
 
     loop {
         input! {
@@ -36,8 +101,15 @@ fn main() {
             is_founded[x][y] = true;
         }
 
-        // do nothing: simplest solution to get AC
-        println!("0");
+        // 初期以外でうまく使えず…
+        print!("{}", ready_treants.len());
+        if !ready_treants.is_empty() {
+            for &(x, y) in &ready_treants {
+                print!(" {x} {y}");
+            }
+            ready_treants.clear();
+        }
+        println!();
         stdout().flush().unwrap();
     }
 }
