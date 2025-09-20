@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 INPUT_PTRN = "tools/in/*.txt"
-OUT_FILE = "out.txt"
+OUT_FILE = "scores.txt"
 MY_ANS_FILE = "myans.txt"
 
 files_in = Dir.glob(INPUT_PTRN).sort
