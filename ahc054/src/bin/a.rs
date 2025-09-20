@@ -89,7 +89,7 @@ fn main() {
     for i in 0..n {
         for j in 0..n {
             let nj = j + (i % 4);
-            if j % 6 == 0 && nj < n && !has_tree[i][nj] && (i, nj) != adventurer && (i, nj) != tij {
+            if j % 5 == 0 && nj < n && !has_tree[i][nj] && (i, nj) != adventurer && (i, nj) != tij {
                 let mut ht = has_tree.clone();
                 ht[i][nj] = true;
                 if could_goal(adventurer, tij, &ht) {
