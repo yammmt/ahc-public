@@ -85,6 +85,21 @@ fn main() {
         }
     }
 
+    // 列単位で適当に間引く (置く -> 置かない -> 置かない, をループ)
+    for i in 0..n {
+        for j in 0..n {
+            let nj = j + (i % 4);
+            if j % 6 == 0 && nj < n && !has_tree[i][nj] && (i, nj) != adventurer && (i, nj) != tij {
+                let mut ht = has_tree.clone();
+                ht[i][nj] = true;
+                if could_goal(adventurer, tij, &ht) {
+                    ready_treants.push((i, nj));
+                    has_tree[i][nj] = true;
+                }
+            }
+        }
+    }
+
     loop {
         input! {
             from &mut source,
