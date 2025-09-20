@@ -82,6 +82,20 @@ fn main() {
         if could_goal(adventurer, tij, &ht) {
             ready_treants.push((tx, ty));
             has_tree[tx][ty] = true;
+        } else {
+            // 囲めなかった部分に対し, 一マス空けて視界を遮る木を立てたい
+            let tx = tx.wrapping_add_signed(dx);
+            let ty = ty.wrapping_add_signed(dy);
+            if tx >= n || ty >= n || has_tree[tx][ty] {
+                continue;
+            }
+
+            let mut ht = has_tree.clone();
+            ht[tx][ty] = true;
+            if could_goal(adventurer, tij, &ht) {
+                ready_treants.push((tx, ty));
+                has_tree[tx][ty] = true;
+            }
         }
     }
 
