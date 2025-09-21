@@ -12,6 +12,7 @@ const TIME_LIMIT_MS: usize = 1980;
 
 const DXY: [(isize, isize); 4] = [(-1, 0), (1, 0), (0, -1), (0, 1)];
 
+#[allow(dead_code)]
 fn could_goal(sxy: (usize, usize), gxy: (usize, usize), has_tree: &Vec<Vec<bool>>) -> bool {
     let n = has_tree.len();
     let mut visited = vec![vec![false; n]; n];
@@ -43,9 +44,44 @@ fn could_goal(sxy: (usize, usize), gxy: (usize, usize), has_tree: &Vec<Vec<bool>
     false
 }
 
+fn could_goal_all(sxy: (usize, usize), has_tree: &Vec<Vec<bool>>) -> bool {
+    let n = has_tree.len();
+    let mut visited = vec![vec![false; n]; n];
+    let mut que = VecDeque::new();
+    que.push_back(sxy);
+
+    while let Some(cur) = que.pop_front() {
+        if visited[cur.0][cur.1] {
+            continue;
+        }
+
+        visited[cur.0][cur.1] = true;
+        for &(dx, dy) in &DXY {
+            let nx = cur.0.wrapping_add_signed(dx);
+            let ny = cur.1.wrapping_add_signed(dy);
+            if nx >= n || ny >= n || has_tree[nx][ny] {
+                continue;
+            }
+
+            let nxy = (nx, ny);
+            que.push_back(nxy);
+        }
+    }
+
+    for i in 0..n {
+        for j in 0..n {
+            if !has_tree[i][j] && !visited[i][j] {
+                return false;
+            }
+        }
+    }
+
+    true
+}
+
 fn could_add_treant(
     sxy: (usize, usize),
-    gxy: (usize, usize),
+    _gxy: (usize, usize),
     is_found: &Vec<Vec<bool>>,
     has_tree: &Vec<Vec<bool>>,
     treant_xy: (usize, usize),
@@ -58,7 +94,7 @@ fn could_add_treant(
 
     let mut ht = has_tree.clone();
     ht[tx][ty] = true;
-    could_goal(sxy, gxy, &ht)
+    could_goal_all(sxy, &ht)
 }
 
 fn main() {
