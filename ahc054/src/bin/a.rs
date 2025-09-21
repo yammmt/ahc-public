@@ -81,14 +81,14 @@ fn could_goal_all(sxy: (usize, usize), has_tree: &Vec<Vec<bool>>) -> bool {
 
 fn could_add_treant(
     sxy: (usize, usize),
-    _gxy: (usize, usize),
+    gxy: (usize, usize),
     is_found: &Vec<Vec<bool>>,
     has_tree: &Vec<Vec<bool>>,
     treant_xy: (usize, usize),
 ) -> bool {
     let n = has_tree.len();
     let (tx, ty) = treant_xy;
-    if tx >= n || ty >= n || is_found[tx][ty] || has_tree[tx][ty] {
+    if tx >= n || ty >= n || is_found[tx][ty] || has_tree[tx][ty] || treant_xy == gxy {
         return false;
     }
 
