@@ -1,7 +1,10 @@
 use proconio::marker::Chars;
 use proconio::{input, source::line::LineSource};
+#[allow(unused_imports)]
 use rand::prelude::*;
+#[allow(unused_imports)]
 use rand::rngs::SmallRng;
+#[allow(unused_imports)]
 use rand::SeedableRng;
 use std::collections::VecDeque;
 use std::io::{stdout, Write};
@@ -11,6 +14,11 @@ use std::io::{stdout, Write};
 const TIME_LIMIT_MS: usize = 1980;
 
 const DXY: [(isize, isize); 4] = [(-1, 0), (1, 0), (0, -1), (0, 1)];
+// 命名の方角: ゴールの位置が Visualizer 感覚でどこにあるか
+const DXY_LT: [(isize, isize); 4] = [(1, 0), (0, 1), (-1, 0), (0, -1)];
+const DXY_LB: [(isize, isize); 4] = [(-1, 0), (0, 1), (1, 0), (0, -1)];
+const DXY_RT: [(isize, isize); 4] = [(1, 0), (0, -1), (-1, 0), (0, 1)];
+const DXY_RB: [(isize, isize); 4] = [(-1, 0), (0, -1), (1, 0), (0, 1)];
 
 #[allow(dead_code)]
 fn could_goal(sxy: (usize, usize), gxy: (usize, usize), has_tree: &Vec<Vec<bool>>) -> bool {
@@ -79,6 +87,35 @@ fn could_goal_all(sxy: (usize, usize), has_tree: &Vec<Vec<bool>>) -> bool {
     true
 }
 
+fn shortest_paths(sxy: (usize, usize), has_tree: &Vec<Vec<bool>>) -> Vec<Vec<usize>> {
+    let unvisited = usize::MAX / 2;
+    let n = has_tree.len();
+    let mut ret = vec![vec![unvisited; n]; n];
+    let mut que = VecDeque::new();
+    que.push_back((sxy, 0));
+
+    while let Some((cur_xy, cur_cost)) = que.pop_front() {
+        if ret[cur_xy.0][cur_xy.1] != unvisited {
+            continue;
+        }
+
+        ret[cur_xy.0][cur_xy.1] = cur_cost;
+
+        for &(dx, dy) in &DXY {
+            let nx = cur_xy.0.wrapping_add_signed(dx);
+            let ny = cur_xy.1.wrapping_add_signed(dy);
+            if nx >= n || ny >= n || has_tree[nx][ny] {
+                continue;
+            }
+
+            let nxy = (nx, ny);
+            que.push_back((nxy, cur_cost + 1));
+        }
+    }
+
+    ret
+}
+
 fn could_add_treant(
     sxy: (usize, usize),
     gxy: (usize, usize),
@@ -108,6 +145,7 @@ fn main() {
         bnn: [Chars; n],
     }
 
+    #[allow(unused_mut, unused_variables)]
     let mut rng = SmallRng::from_entropy();
     let mut adventurer = (0, n / 2);
     let mut is_found = vec![vec![false; n]; n];
@@ -123,25 +161,39 @@ fn main() {
     let mut ready_treants = vec![];
 
     // goal を視認されないよう, 三方を囲む
-    // TODO: ランダム性をもたせる意味とは
-    let mut dxy = DXY.clone();
-    dxy.shuffle(&mut rng);
-    for (dx, dy) in dxy {
-        let tx = tij.0.wrapping_add_signed(dx);
-        let ty = tij.1.wrapping_add_signed(dy);
-        if could_add_treant(adventurer, tij, &is_found, &has_tree, (tx, ty)) {
-            ready_treants.push((tx, ty));
-            has_tree[tx][ty] = true;
-        } else {
-            // 囲めなかった部分に対し, 一マス空けて視界を遮る木を立てたい
-            let tx = tx.wrapping_add_signed(dx);
-            let ty = ty.wrapping_add_signed(dy);
-            if could_add_treant(adventurer, tij, &is_found, &has_tree, (tx, ty)) {
-                ready_treants.push((tx, ty));
-                has_tree[tx][ty] = true;
+    let mut score_best = 0;
+    let mut ready_treants_best = vec![];
+    let mut has_tree_best = has_tree.clone();
+    for &dxy in &[DXY_LB, DXY_LT, DXY_RB, DXY_RT] {
+        let mut ready_treants_cur = vec![];
+        let mut has_tree_cur = has_tree.clone();
+        for (dx, dy) in dxy {
+            let tx = tij.0.wrapping_add_signed(dx);
+            let ty = tij.1.wrapping_add_signed(dy);
+            if could_add_treant(adventurer, tij, &is_found, &has_tree_cur, (tx, ty)) {
+                ready_treants_cur.push((tx, ty));
+                has_tree_cur[tx][ty] = true;
+            } else {
+                // 囲めなかった部分に対し, 一マス空けて視界を遮る木を立てたい
+                let tx = tx.wrapping_add_signed(dx);
+                let ty = ty.wrapping_add_signed(dy);
+                if could_add_treant(adventurer, tij, &is_found, &has_tree_cur, (tx, ty)) {
+                    ready_treants_cur.push((tx, ty));
+                    has_tree_cur[tx][ty] = true;
+                }
             }
         }
+
+        let shortest_paths_cur = shortest_paths((0, n / 2), &has_tree_cur);
+        let score_cur = shortest_paths_cur[tij.0][tij.1];
+        if score_cur > score_best {
+            score_best = score_cur;
+            ready_treants_best = ready_treants_cur;
+            has_tree_best = has_tree_cur;
+        }
     }
+    ready_treants = ready_treants_best;
+    has_tree = has_tree_best;
 
     // X の形にトレントを置く
     const X_DIAG_LEN: usize = 4;
