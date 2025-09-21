@@ -46,12 +46,13 @@ fn could_goal(sxy: (usize, usize), gxy: (usize, usize), has_tree: &Vec<Vec<bool>
 fn could_add_treant(
     sxy: (usize, usize),
     gxy: (usize, usize),
+    is_found: &Vec<Vec<bool>>,
     has_tree: &Vec<Vec<bool>>,
     treant_xy: (usize, usize),
 ) -> bool {
     let n = has_tree.len();
     let (tx, ty) = treant_xy;
-    if tx >= n || ty >= n || has_tree[tx][ty] {
+    if tx >= n || ty >= n || is_found[tx][ty] || has_tree[tx][ty] {
         return false;
     }
 
@@ -73,7 +74,9 @@ fn main() {
 
     let mut rng = SmallRng::from_entropy();
     let mut adventurer = (0, n / 2);
-    let mut is_founded = vec![vec![false; n]; n];
+    let mut is_found = vec![vec![false; n]; n];
+    // 冒険者の初期配置
+    is_found[0][n / 2] = true;
     // 伝説の花マスも置けないが, 考えなくともよい？
     let mut has_tree = vec![vec![false; n]; n];
     for i in 0..n {
@@ -90,14 +93,14 @@ fn main() {
     for (dx, dy) in dxy {
         let tx = tij.0.wrapping_add_signed(dx);
         let ty = tij.1.wrapping_add_signed(dy);
-        if could_add_treant(adventurer, tij, &has_tree, (tx, ty)) {
+        if could_add_treant(adventurer, tij, &is_found, &has_tree, (tx, ty)) {
             ready_treants.push((tx, ty));
             has_tree[tx][ty] = true;
         } else {
             // 囲めなかった部分に対し, 一マス空けて視界を遮る木を立てたい
             let tx = tx.wrapping_add_signed(dx);
             let ty = ty.wrapping_add_signed(dy);
-            if could_add_treant(adventurer, tij, &has_tree, (tx, ty)) {
+            if could_add_treant(adventurer, tij, &is_found, &has_tree, (tx, ty)) {
                 ready_treants.push((tx, ty));
                 has_tree[tx][ty] = true;
             }
@@ -108,8 +111,8 @@ fn main() {
     for i in 0..n {
         for j in 0..n {
             let nj = j + (i % 4);
-            if j % 5 == 0 && nj < n && !has_tree[i][nj] && (i, nj) != adventurer && (i, nj) != tij {
-                if could_add_treant(adventurer, tij, &has_tree, (i, nj)) {
+            if j % 5 == 0 && nj < n && !has_tree[i][nj] && (i, nj) != tij {
+                if could_add_treant(adventurer, tij, &is_found, &has_tree, (i, nj)) {
                     ready_treants.push((i, nj));
                     has_tree[i][nj] = true;
                 }
@@ -130,7 +133,7 @@ fn main() {
         }
 
         for (x, y) in xyn {
-            is_founded[x][y] = true;
+            is_found[x][y] = true;
         }
 
         // 初期以外でうまく使えず…
