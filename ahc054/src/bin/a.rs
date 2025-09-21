@@ -143,17 +143,43 @@ fn main() {
         }
     }
 
-    // 列単位で適当に間引く (置く -> 置かない -> 置かない, をループ)
-    for i in 0..n {
-        for j in 0..n {
-            let nj = j + (i % 4);
-            if j % 5 == 0 && nj < n && !has_tree[i][nj] && (i, nj) != tij {
-                if could_add_treant(adventurer, tij, &is_found, &has_tree, (i, nj)) {
-                    ready_treants.push((i, nj));
-                    has_tree[i][nj] = true;
+    // X の形にトレントを置く
+    const X_DIAG_LEN: usize = 4;
+    let mut i = 1;
+    while i < n {
+        let mut j = 1;
+        while j < n {
+            // 左上から右下
+            for k in 0..X_DIAG_LEN {
+                let ni = i + k;
+                let nj = j + k;
+                if ni != n - 1
+                    && nj != n - 1
+                    && could_add_treant(adventurer, tij, &is_found, &has_tree, (ni, nj))
+                {
+                    ready_treants.push((ni, nj));
+                    has_tree[ni][nj] = true;
                 }
             }
+
+            // 右上から左下
+            for k in 0..X_DIAG_LEN {
+                let ni = i + k;
+                let nj = j + X_DIAG_LEN - k;
+                if ni < n {
+                    if ni != n - 1
+                        && nj != n - 1
+                        && could_add_treant(adventurer, tij, &is_found, &has_tree, (ni, nj))
+                    {
+                        ready_treants.push((ni, nj));
+                        has_tree[ni][nj] = true;
+                    }
+                }
+            }
+
+            j += X_DIAG_LEN + 1;
         }
+        i += X_DIAG_LEN + 1;
     }
 
     loop {
