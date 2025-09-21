@@ -134,50 +134,33 @@ fn could_add_treant(
     could_goal_all(sxy, &ht)
 }
 
-fn main() {
-    let stdin = std::io::stdin();
-    let mut source = LineSource::new(stdin.lock());
+/// goal を視認されないよう, 三方を囲む
+fn add_treants_surrounding_goal(
+    sxy: (usize, usize),
+    gxy: (usize, usize),
+    is_found: &Vec<Vec<bool>>,
+    has_tree: &mut Vec<Vec<bool>>,
+    ready_treants: &mut Vec<(usize, usize)>,
+) {
+    let n = has_tree.len();
 
-    input! {
-        from &mut source,
-        n: usize,
-        tij: (usize, usize),
-        bnn: [Chars; n],
-    }
-
-    #[allow(unused_mut, unused_variables)]
-    let mut rng = SmallRng::from_entropy();
-    let mut adventurer = (0, n / 2);
-    let mut is_found = vec![vec![false; n]; n];
-    // 冒険者の初期配置
-    is_found[0][n / 2] = true;
-    // 伝説の花マスも置けないが, 考えなくともよい？
-    let mut has_tree = vec![vec![false; n]; n];
-    for i in 0..n {
-        for j in 0..n {
-            has_tree[i][j] = bnn[i][j] == 'T';
-        }
-    }
-    let mut ready_treants = vec![];
-
-    // goal を視認されないよう, 三方を囲む
     let mut score_best = 0;
     let mut ready_treants_best = vec![];
     let mut has_tree_best = has_tree.clone();
     for &dxy in &[DXY_LB, DXY_LT, DXY_RB, DXY_RT] {
-        let mut ready_treants_cur = vec![];
+        let mut ready_treants_cur = ready_treants.clone();
         let mut has_tree_cur = has_tree.clone();
         for (dx, dy) in dxy {
-            let tx = tij.0.wrapping_add_signed(dx);
-            let ty = tij.1.wrapping_add_signed(dy);
-            if could_add_treant(adventurer, tij, &is_found, &has_tree_cur, (tx, ty)) {
+            let tx = gxy.0.wrapping_add_signed(dx);
+            let ty = gxy.1.wrapping_add_signed(dy);
+            if could_add_treant(sxy, gxy, is_found, &has_tree_cur, (tx, ty)) {
                 ready_treants_cur.push((tx, ty));
                 has_tree_cur[tx][ty] = true;
             } else {
                 // 囲めなかった部分に対し, 一マス空けて視界を遮る木を立てたい
                 let tx = tx.wrapping_add_signed(dx);
                 let ty = ty.wrapping_add_signed(dy);
-                if could_add_treant(adventurer, tij, &is_found, &has_tree_cur, (tx, ty)) {
+                if could_add_treant(sxy, gxy, is_found, &has_tree_cur, (tx, ty)) {
                     ready_treants_cur.push((tx, ty));
                     has_tree_cur[tx][ty] = true;
                 }
@@ -185,18 +168,28 @@ fn main() {
         }
 
         let shortest_paths_cur = shortest_paths((0, n / 2), &has_tree_cur);
-        let score_cur = shortest_paths_cur[tij.0][tij.1];
+        let score_cur = shortest_paths_cur[gxy.0][gxy.1];
         if score_cur > score_best {
             score_best = score_cur;
             ready_treants_best = ready_treants_cur;
             has_tree_best = has_tree_cur;
         }
     }
-    ready_treants = ready_treants_best;
-    has_tree = has_tree_best;
+    *ready_treants = ready_treants_best;
+    *has_tree = has_tree_best;
+}
 
-    // X の形にトレントを置く
+/// 盤面全体に対し, X 状にトレントを配置する
+fn add_treants_x(
+    sxy: (usize, usize),
+    gxy: (usize, usize),
+    is_found: &Vec<Vec<bool>>,
+    has_tree: &mut Vec<Vec<bool>>,
+    ready_treants: &mut Vec<(usize, usize)>,
+) {
     const X_DIAG_LEN: usize = 4;
+    let n = has_tree.len();
+
     let mut i = 1;
     while i < n {
         let mut j = 1;
@@ -207,7 +200,7 @@ fn main() {
                 let nj = j + k;
                 if ni != n - 1
                     && nj != n - 1
-                    && could_add_treant(adventurer, tij, &is_found, &has_tree, (ni, nj))
+                    && could_add_treant(sxy, gxy, is_found, has_tree, (ni, nj))
                 {
                     ready_treants.push((ni, nj));
                     has_tree[ni][nj] = true;
@@ -221,7 +214,7 @@ fn main() {
                 if ni < n {
                     if ni != n - 1
                         && nj != n - 1
-                        && could_add_treant(adventurer, tij, &is_found, &has_tree, (ni, nj))
+                        && could_add_treant(sxy, gxy, is_found, has_tree, (ni, nj))
                     {
                         ready_treants.push((ni, nj));
                         has_tree[ni][nj] = true;
@@ -233,6 +226,52 @@ fn main() {
         }
         i += X_DIAG_LEN + 1;
     }
+}
+
+fn main() {
+    let stdin = std::io::stdin();
+    let mut source = LineSource::new(stdin.lock());
+
+    input! {
+        from &mut source,
+        n: usize,
+        tij: (usize, usize),
+        bnn: [Chars; n],
+    }
+
+    #[allow(unused_mut, unused_variables)]
+    let mut rng = SmallRng::from_entropy();
+    #[allow(unused_assignments)]
+    let mut adventurer = (0, n / 2);
+    let mut is_found = vec![vec![false; n]; n];
+    // 冒険者の初期配置
+    is_found[0][n / 2] = true;
+    // 伝説の花マスも置けないが, 考えなくともよい？
+    let mut has_tree = vec![vec![false; n]; n];
+    for i in 0..n {
+        for j in 0..n {
+            has_tree[i][j] = bnn[i][j] == 'T';
+        }
+    }
+    let mut ready_treants = vec![];
+
+    // ゴールの三方を塞ぐ
+    add_treants_surrounding_goal(
+        (0, n / 2),
+        tij,
+        &is_found,
+        &mut has_tree,
+        &mut ready_treants,
+    );
+
+    // X の形にトレントを置く
+    add_treants_x(
+        (0, n / 2),
+        tij,
+        &is_found,
+        &mut has_tree,
+        &mut ready_treants,
+    );
 
     loop {
         input! {
