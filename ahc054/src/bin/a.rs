@@ -141,42 +141,27 @@ fn add_treants_surrounding_goal(
     is_found: &Vec<Vec<bool>>,
     has_tree: &mut Vec<Vec<bool>>,
     ready_treants: &mut Vec<(usize, usize)>,
+    dxy: &[(isize, isize)],
 ) {
+    #[allow(unused_variables)]
     let n = has_tree.len();
 
-    let mut score_best = 0;
-    let mut ready_treants_best = vec![];
-    let mut has_tree_best = has_tree.clone();
-    for &dxy in &[DXY_LB, DXY_LT, DXY_RB, DXY_RT] {
-        let mut ready_treants_cur = ready_treants.clone();
-        let mut has_tree_cur = has_tree.clone();
-        for (dx, dy) in dxy {
-            let tx = gxy.0.wrapping_add_signed(dx);
-            let ty = gxy.1.wrapping_add_signed(dy);
-            if could_add_treant(sxy, gxy, is_found, &has_tree_cur, (tx, ty)) {
-                ready_treants_cur.push((tx, ty));
-                has_tree_cur[tx][ty] = true;
-            } else {
-                // 囲めなかった部分に対し, 一マス空けて視界を遮る木を立てたい
-                let tx = tx.wrapping_add_signed(dx);
-                let ty = ty.wrapping_add_signed(dy);
-                if could_add_treant(sxy, gxy, is_found, &has_tree_cur, (tx, ty)) {
-                    ready_treants_cur.push((tx, ty));
-                    has_tree_cur[tx][ty] = true;
-                }
+    for &(dx, dy) in dxy {
+        let tx = gxy.0.wrapping_add_signed(dx);
+        let ty = gxy.1.wrapping_add_signed(dy);
+        if could_add_treant(sxy, gxy, is_found, has_tree, (tx, ty)) {
+            ready_treants.push((tx, ty));
+            has_tree[tx][ty] = true;
+        } else {
+            // 囲めなかった部分に対し, 一マス空けて視界を遮る木を立てたい
+            let tx = tx.wrapping_add_signed(dx);
+            let ty = ty.wrapping_add_signed(dy);
+            if could_add_treant(sxy, gxy, is_found, has_tree, (tx, ty)) {
+                ready_treants.push((tx, ty));
+                has_tree[tx][ty] = true;
             }
         }
-
-        let shortest_paths_cur = shortest_paths((0, n / 2), &has_tree_cur);
-        let score_cur = shortest_paths_cur[gxy.0][gxy.1];
-        if score_cur > score_best {
-            score_best = score_cur;
-            ready_treants_best = ready_treants_cur;
-            has_tree_best = has_tree_cur;
-        }
     }
-    *ready_treants = ready_treants_best;
-    *has_tree = has_tree_best;
 }
 
 /// 盤面全体に対し, X 状にトレントを配置する
@@ -256,13 +241,24 @@ fn main() {
     let mut ready_treants = vec![];
 
     // ゴールの三方を塞ぐ
-    add_treants_surrounding_goal(
-        (0, n / 2),
-        tij,
-        &is_found,
-        &mut has_tree,
-        &mut ready_treants,
-    );
+    let mut score_best = 0;
+    let mut ht_best = has_tree.clone();
+    let mut rt_best = ready_treants.clone();
+    for &dxy in &[DXY_LB, DXY_LT, DXY_RB, DXY_RT] {
+        let mut ht_cur = has_tree.clone();
+        let mut rt_cur = ready_treants.clone();
+        add_treants_surrounding_goal((0, n / 2), tij, &is_found, &mut ht_cur, &mut rt_cur, &dxy);
+
+        let shortest_paths_cur = shortest_paths((0, n / 2), &ht_cur);
+        let score_cur = shortest_paths_cur[tij.0][tij.1];
+        if score_cur > score_best {
+            score_best = score_cur;
+            rt_best = rt_cur;
+            ht_best = ht_cur;
+        }
+    }
+    has_tree = ht_best;
+    ready_treants = rt_best;
 
     // X の形にトレントを置く
     add_treants_x(
