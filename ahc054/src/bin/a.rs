@@ -240,14 +240,18 @@ fn main() {
     }
     let mut ready_treants = vec![];
 
-    // ゴールの三方を塞ぐ
     let mut score_best = 0;
     let mut ht_best = has_tree.clone();
     let mut rt_best = ready_treants.clone();
+
+    // ゴールの三方を塞ぐ方法それぞれを試し, 最良のものを採用する
+    // 評価関数がうまくかけているかを知りたい
     for &dxy in &[DXY_LB, DXY_LT, DXY_RB, DXY_RT] {
         let mut ht_cur = has_tree.clone();
         let mut rt_cur = ready_treants.clone();
         add_treants_surrounding_goal((0, n / 2), tij, &is_found, &mut ht_cur, &mut rt_cur, &dxy);
+        // X の形にトレントを置く
+        add_treants_x((0, n / 2), tij, &is_found, &mut ht_cur, &mut rt_cur);
 
         let shortest_paths_cur = shortest_paths((0, n / 2), &ht_cur);
         let score_cur = shortest_paths_cur[tij.0][tij.1];
@@ -259,15 +263,6 @@ fn main() {
     }
     has_tree = ht_best;
     ready_treants = rt_best;
-
-    // X の形にトレントを置く
-    add_treants_x(
-        (0, n / 2),
-        tij,
-        &is_found,
-        &mut has_tree,
-        &mut ready_treants,
-    );
 
     loop {
         input! {
