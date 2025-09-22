@@ -1,17 +1,14 @@
 use proconio::marker::Chars;
 use proconio::{input, source::line::LineSource};
-#[allow(unused_imports)]
 use rand::prelude::*;
-#[allow(unused_imports)]
 use rand::rngs::SmallRng;
-#[allow(unused_imports)]
 use rand::SeedableRng;
 use std::collections::VecDeque;
 use std::io::{stdout, Write};
+use std::time::{Duration, Instant};
 
 // 2 s
-#[allow(dead_code)]
-const TIME_LIMIT_MS: usize = 1980;
+const TIME_LIMIT_MS: u64 = 1950;
 
 const DXY: [(isize, isize); 4] = [(-1, 0), (1, 0), (0, -1), (0, 1)];
 // 命名の方角: ゴールの位置が Visualizer 感覚でどこにあるか
@@ -214,6 +211,9 @@ fn add_treants_x(
 }
 
 fn main() {
+    let start_time = Instant::now();
+    let break_time = Duration::from_millis(TIME_LIMIT_MS);
+
     let stdin = std::io::stdin();
     let mut source = LineSource::new(stdin.lock());
 
@@ -224,7 +224,6 @@ fn main() {
         bnn: [Chars; n],
     }
 
-    #[allow(unused_mut, unused_variables)]
     let mut rng = SmallRng::from_entropy();
     #[allow(unused_assignments)]
     let mut adventurer = (0, n / 2);
@@ -244,25 +243,66 @@ fn main() {
     let mut ht_best = has_tree.clone();
     let mut rt_best = ready_treants.clone();
 
-    // ゴールの三方を塞ぐ方法それぞれを試し, 最良のものを採用する
-    // 評価関数がうまくかけているかを知りたい
-    for &dxy in &[DXY_LB, DXY_LT, DXY_RB, DXY_RT] {
-        let mut ht_cur = has_tree.clone();
-        let mut rt_cur = ready_treants.clone();
-        add_treants_surrounding_goal((0, n / 2), tij, &is_found, &mut ht_cur, &mut rt_cur, &dxy);
-        // X の形にトレントを置く
-        add_treants_x((0, n / 2), tij, &is_found, &mut ht_cur, &mut rt_cur);
+    while start_time.elapsed() < break_time {
+        // ゴールの三方に視界を防ぐためのトレントを立て,
+        // "X" の形に適当にトレントを立て,
+        // トレントの追加/削除をまとめて行った後に,
+        // *評価関数* がよくなれば採用する
+        for &dxy in &[DXY_LB, DXY_LT, DXY_RB, DXY_RT] {
+            let mut ht_cur = has_tree.clone();
+            let mut rt_cur = ready_treants.clone();
+            add_treants_surrounding_goal(
+                (0, n / 2),
+                tij,
+                &is_found,
+                &mut ht_cur,
+                &mut rt_cur,
+                &dxy,
+            );
+            // X の形にトレントを置く
+            add_treants_x((0, n / 2), tij, &is_found, &mut ht_cur, &mut rt_cur);
 
-        let shortest_paths_cur = shortest_paths((0, n / 2), &ht_cur);
-        let score_cur = shortest_paths_cur[tij.0][tij.1];
-        if score_cur > score_best {
-            score_best = score_cur;
-            rt_best = rt_cur;
-            ht_best = ht_cur;
+            // 雑乱択
+            for _ in 0..n {
+                let treant_x = rng.gen::<usize>() % n;
+                let treant_y = rng.gen::<usize>() % n;
+                if ht_cur[treant_x][treant_y] && bnn[treant_x][treant_y] != 'T' {
+                    // 削除を試みる
+                    // TODO: 遅い
+                    let mut rm_i = 0;
+                    for i in 0..rt_cur.len() {
+                        if rt_cur[i] == (treant_x, treant_y) {
+                            rm_i = i;
+                            break;
+                        }
+                    }
+                    rt_cur.remove(rm_i);
+                    ht_cur[treant_x][treant_y] = false;
+                } else if could_add_treant(
+                    adventurer,
+                    tij,
+                    &is_found,
+                    &ht_cur,
+                    (treant_x, treant_y),
+                ) {
+                    rt_cur.push((treant_x, treant_y));
+                    ht_cur[treant_x][treant_y] = true;
+                }
+            }
+
+            let shortest_paths_cur = shortest_paths((0, n / 2), &ht_cur);
+            let score_cur = shortest_paths_cur[tij.0][tij.1];
+            if score_cur > score_best {
+                score_best = score_cur;
+                rt_best = rt_cur;
+                ht_best = ht_cur;
+            }
         }
+
+        // 初期囲い四方を試した後に更新する
+        has_tree = ht_best.clone();
+        ready_treants = rt_best.clone();
     }
-    has_tree = ht_best;
-    ready_treants = rt_best;
 
     loop {
         input! {
