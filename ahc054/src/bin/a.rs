@@ -113,6 +113,50 @@ fn shortest_paths(sxy: (usize, usize), has_tree: &Vec<Vec<bool>>) -> Vec<Vec<usi
     ret
 }
 
+/// 各マスから見えるマスの総数を返す.
+/// 見えるマスの数は冒険者に与える情報の量と対応しているだろうという考えによる.
+/// のだが, 評価関数に使うとスコアが下がる...
+#[allow(dead_code)]
+fn visible_cells_num(has_tree: &Vec<Vec<bool>>) -> usize {
+    let n = has_tree.len();
+    let mut visible_num = vec![vec![0; n]; n];
+
+    for i in 0..n {
+        for j in 0..n {
+            if has_tree[i][j] {
+                continue;
+            }
+
+            for &(dx, dy) in &DXY {
+                let mut a = 1;
+                loop {
+                    let cx = i.wrapping_add_signed(a * dx);
+                    let cy = j.wrapping_add_signed(a * dy);
+                    if cx >= n || cy >= n {
+                        break;
+                    } else if has_tree[cx][cy] {
+                        // 木が見える場合も加算して終わる, 情報は得ているので
+                        visible_num[i][j] += 1;
+                        break;
+                    }
+
+                    visible_num[i][j] += 1;
+                    a += 1;
+                }
+            }
+        }
+    }
+
+    let mut ret = 0;
+    for i in 0..n {
+        for j in 0..n {
+            ret += visible_num[i][j];
+        }
+    }
+
+    ret
+}
+
 /// 盤面のスコアを良い感じに計算して返す
 /// 小さいほうがよいスコア
 #[inline(always)]
