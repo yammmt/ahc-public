@@ -263,7 +263,7 @@ fn main() {
             add_treants_x((0, n / 2), tij, &is_found, &mut ht_cur, &mut rt_cur);
 
             // 雑乱択
-            for _ in 0..n {
+            for _ in 0..n / 2 {
                 let treant_x = rng.gen::<usize>() % n;
                 let treant_y = rng.gen::<usize>() % n;
                 if ht_cur[treant_x][treant_y] && bnn[treant_x][treant_y] != 'T' {
