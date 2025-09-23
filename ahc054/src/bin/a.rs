@@ -113,6 +113,17 @@ fn shortest_paths(sxy: (usize, usize), has_tree: &Vec<Vec<bool>>) -> Vec<Vec<usi
     ret
 }
 
+/// 盤面のスコアを良い感じに計算して返す
+/// 小さいほうがよいスコア
+#[inline(always)]
+fn board_score(sxy: (usize, usize), gxy: (usize, usize), has_tree: &Vec<Vec<bool>>) -> f64 {
+    let n = has_tree.len();
+    let shortest_paths = shortest_paths(sxy, &has_tree);
+    let s2g_len = shortest_paths[gxy.0][gxy.1];
+    // 左: 適当に大きな数, 大きくしすぎると表現精度の都合でクリップされる
+    (n * n * n - s2g_len) as f64
+}
+
 fn could_add_treant(
     sxy: (usize, usize),
     gxy: (usize, usize),
@@ -239,7 +250,7 @@ fn main() {
     }
     let mut ready_treants = vec![];
 
-    let mut score_best = 0;
+    let mut score_best = f64::MAX;
     let mut ht_best = has_tree.clone();
     let mut rt_best = ready_treants.clone();
 
@@ -290,9 +301,8 @@ fn main() {
                 }
             }
 
-            let shortest_paths_cur = shortest_paths((0, n / 2), &ht_cur);
-            let score_cur = shortest_paths_cur[tij.0][tij.1];
-            if score_cur > score_best {
+            let score_cur = board_score((0, n / 2), tij, &ht_cur);
+            if score_cur < score_best {
                 score_best = score_cur;
                 rt_best = rt_cur;
                 ht_best = ht_cur;
