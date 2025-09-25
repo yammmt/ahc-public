@@ -2,13 +2,13 @@ use proconio::marker::Chars;
 use proconio::{input, source::line::LineSource};
 use rand::prelude::*;
 use rand::rngs::SmallRng;
-use rand::SeedableRng;
+use rand::RngCore;
 use std::collections::VecDeque;
 use std::io::{stdout, Write};
 use std::time::{Duration, Instant};
 
 // 2 s
-const TIME_LIMIT_MS: u64 = 1950;
+const TIME_LIMIT_MS: u64 = 1900;
 
 const DXY: [(isize, isize); 4] = [(-1, 0), (1, 0), (0, -1), (0, 1)];
 // 命名の方角: ゴールの位置が Visualizer 感覚でどこにあるか
@@ -84,6 +84,75 @@ fn could_goal_all(sxy: (usize, usize), has_tree: &Vec<Vec<bool>>) -> bool {
     true
 }
 
+/// 到達可能なマスにのみ `true` を入れたものを返す.
+fn could_goal_each(sxy: (usize, usize), has_tree: &Vec<Vec<bool>>) -> Vec<Vec<bool>> {
+    let n = has_tree.len();
+    let mut visited = vec![vec![false; n]; n];
+    let mut que = VecDeque::new();
+    que.push_back(sxy);
+
+    while let Some(cur) = que.pop_front() {
+        if visited[cur.0][cur.1] {
+            continue;
+        }
+
+        visited[cur.0][cur.1] = true;
+        for &(dx, dy) in &DXY {
+            let nx = cur.0.wrapping_add_signed(dx);
+            let ny = cur.1.wrapping_add_signed(dy);
+            if nx >= n || ny >= n || has_tree[nx][ny] {
+                continue;
+            }
+
+            let nxy = (nx, ny);
+            que.push_back(nxy);
+        }
+    }
+
+    visited
+}
+
+/// 二点間の最短経路となる経路を一つ返す. 始点と終点も経路に含む.
+fn shortest_path_2cells(
+    sxy: (usize, usize),
+    gxy: (usize, usize),
+    has_tree: &Vec<Vec<bool>>,
+) -> Vec<(usize, usize)> {
+    let n = has_tree.len();
+
+    // TODO: 経路もたせながらの BFS は重い, BFS の経路復元なかったっけか
+    let mut visited = vec![vec![false; n]; n];
+    let mut que = VecDeque::new();
+    que.push_back((sxy, vec![]));
+
+    while let Some((cur_xy, cur_path)) = que.pop_front() {
+        if visited[cur_xy.0][cur_xy.1] {
+            continue;
+        }
+
+        visited[cur_xy.0][cur_xy.1] = true;
+        let mut next_path = cur_path.clone();
+        next_path.push(cur_xy);
+        if cur_xy == gxy {
+            return next_path;
+        }
+
+        for &(dx, dy) in &DXY {
+            let nx = cur_xy.0.wrapping_add_signed(dx);
+            let ny = cur_xy.1.wrapping_add_signed(dy);
+            if nx >= n || ny >= n || has_tree[nx][ny] {
+                continue;
+            }
+
+            let nxy = (nx, ny);
+            que.push_back((nxy, next_path.clone()));
+        }
+    }
+
+    unreachable!()
+}
+
+#[allow(dead_code)]
 fn shortest_paths(sxy: (usize, usize), has_tree: &Vec<Vec<bool>>) -> Vec<Vec<usize>> {
     let unvisited = usize::MAX / 2;
     let n = has_tree.len();
@@ -160,12 +229,22 @@ fn visible_cells_num(has_tree: &Vec<Vec<bool>>) -> usize {
 /// 盤面のスコアを良い感じに計算して返す
 /// 小さいほうがよいスコア
 #[inline(always)]
-fn board_score(sxy: (usize, usize), gxy: (usize, usize), has_tree: &Vec<Vec<bool>>) -> f64 {
-    let n = has_tree.len();
-    let shortest_paths = shortest_paths(sxy, &has_tree);
-    let s2g_len = shortest_paths[gxy.0][gxy.1];
-    // 左: 適当に大きな数, 大きくしすぎると表現精度の都合でクリップされる
-    (n * n * n - s2g_len) as f64
+fn board_score<T>(
+    sxy: (usize, usize),
+    gxy: (usize, usize),
+    has_tree: &Vec<Vec<bool>>,
+    rng: &mut T,
+) -> f64
+where
+    T: RngCore,
+{
+    let mut tries = [0, 0, 0, 0, 0];
+    for i in 0..tries.len() {
+        tries[i] = random_play_score(sxy, gxy, has_tree, rng);
+    }
+    tries.sort_unstable();
+
+    -(tries[tries.len() / 2] as f64)
 }
 
 fn could_add_treant(
@@ -265,6 +344,119 @@ fn add_treants_x(
     }
 }
 
+/// 訪問順をランダムにして, ゲームを実行した結果のスコアを返す.
+/// - ゴールマスの訪問順は, 必ず全マスの中間となるように固定する.
+/// - 途中でトレントが追加されることは想定しない.
+fn random_play_score<T>(
+    sxy: (usize, usize),
+    gxy: (usize, usize),
+    has_tree: &Vec<Vec<bool>>,
+    rng: &mut T,
+) -> usize
+where
+    T: RngCore,
+{
+    let n = has_tree.len();
+
+    let mut is_found = vec![vec![false; n]; n];
+    let mut saw_tree = vec![vec![false; n]; n];
+    let mut goal_orders = Vec::with_capacity(n * n);
+    for i in 0..n {
+        for j in 0..n {
+            goal_orders.push((i, j));
+        }
+    }
+    goal_orders.shuffle(rng);
+
+    let mut goal_i = 0;
+    let mut cur_goal: Option<(usize, usize)> = None;
+    let mut gxy_appeared = false;
+    let mut cur_pos = sxy;
+    is_found[sxy.0][sxy.1] = true;
+    let mut turn = 0;
+
+    while cur_pos != gxy {
+        // 確認済みマスへの追加
+        for &(dx, dy) in &DXY {
+            for i in 1..n {
+                let cx = cur_pos.0.wrapping_add_signed(i as isize * dx);
+                let cy = cur_pos.1.wrapping_add_signed(i as isize * dy);
+                if cx >= n || cy >= n {
+                    break;
+                } else if has_tree[cx][cy] {
+                    saw_tree[cx][cy] = true;
+                    is_found[cx][cy] = true;
+                    break;
+                }
+
+                is_found[cx][cy] = true;
+            }
+        }
+
+        // 目的地が確認できていればクリア
+        if let Some((cgx, cgy)) = cur_goal {
+            // gxy との一致は取っても取らなくてもどうせ後で代入される
+            if is_found[cgx][cgy] {
+                cur_goal = None;
+            }
+        }
+
+        // 伝説の花が確認済みであれば, 目的地に設定
+        if is_found[gxy.0][gxy.1] {
+            cur_goal = Some(gxy);
+        }
+
+        let could_be_goal = could_goal_each(cur_pos, &saw_tree);
+        // 目的地が到達不可であればクリア
+        // 全マスに対して到着判定取って, 後から使い回す
+        if let Some((cgx, cgy)) = cur_goal {
+            if !could_be_goal[cgx][cgy] {
+                cur_goal = None;
+            }
+        }
+
+        // 目的地の設定, ゴール出現位置は操作する
+        // HACK: 難読な気がする
+        if cur_goal.is_none() {
+            // TODO: goal_orders 長くて嫌
+            while is_found[goal_orders[goal_i].0][goal_orders[goal_i].1]
+                || !could_be_goal[goal_orders[goal_i].0][goal_orders[goal_i].1]
+            {
+                goal_i += 1;
+
+                if goal_orders[goal_i] == gxy {
+                    gxy_appeared = true;
+                    goal_i += 1;
+                }
+
+                if (gxy_appeared && goal_i >= n * n / 2 + 1)
+                    || (!gxy_appeared && goal_i >= n * n / 2)
+                {
+                    // 正しいゴールの登場順は中間で固定
+                    cur_goal = Some(gxy);
+                    break;
+                }
+            }
+
+            if cur_goal.is_none() {
+                cur_goal = Some(goal_orders[goal_i]);
+            }
+        }
+
+        // 目的地到達までの最短経路を算出し, 動く
+        // HACK: 目的地変わるか否かで全探索するの遅くないか
+        //       少なくとも木が確認できた場合以外には更新不要なはず
+        if let Some(cxy) = cur_goal {
+            let p = shortest_path_2cells(cur_pos, cxy, &saw_tree);
+            cur_pos = p[1];
+        }
+
+        turn += 1;
+    }
+
+    turn
+}
+
 fn main() {
     let start_time = Instant::now();
     let break_time = Duration::from_millis(TIME_LIMIT_MS);
@@ -345,7 +537,7 @@ fn main() {
                 }
             }
 
-            let score_cur = board_score((0, n / 2), tij, &ht_cur);
+            let score_cur = board_score((0, n / 2), tij, &ht_cur, &mut rng);
             if score_cur < score_best {
                 score_best = score_cur;
                 rt_best = rt_cur;
