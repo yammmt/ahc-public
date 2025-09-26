@@ -501,64 +501,58 @@ fn main() {
     let mut ht_best = has_tree.clone();
     let mut rt_best = ready_treants.clone();
 
+    // 初期配置はゴール囲む + X 状で固定する.
+    for &dxy in &[DXY_LB, DXY_LT, DXY_RB, DXY_RT] {
+        let mut ht_cur = has_tree.clone();
+        let mut rt_cur = ready_treants.clone();
+        add_treants_surrounding_goal((0, n / 2), tij, &is_found, &mut ht_cur, &mut rt_cur, &dxy);
+        // X の形にトレントを置く
+        add_treants_x((0, n / 2), tij, &is_found, &mut ht_cur, &mut rt_cur);
+
+        // スコアの計算と初期配置の更新
+        let score_cur = board_score((0, n / 2), tij, &ht_cur, &mut rng);
+        if score_cur < score_best {
+            score_best = score_cur;
+            rt_best = rt_cur;
+            ht_best = ht_cur;
+        }
+    }
+    ready_treants = rt_best;
+    has_tree = ht_best;
+
     while start_time.elapsed() < break_time {
-        // ゴールの三方に視界を防ぐためのトレントを立て,
-        // "X" の形に適当にトレントを立て,
-        // トレントの追加/削除をまとめて行った後に,
-        // *評価関数* がよくなれば採用する
-        for &dxy in &[DXY_LB, DXY_LT, DXY_RB, DXY_RT] {
-            let mut ht_cur = has_tree.clone();
-            let mut rt_cur = ready_treants.clone();
-            add_treants_surrounding_goal(
-                (0, n / 2),
-                tij,
-                &is_found,
-                &mut ht_cur,
-                &mut rt_cur,
-                &dxy,
-            );
-            // X の形にトレントを置く
-            add_treants_x((0, n / 2), tij, &is_found, &mut ht_cur, &mut rt_cur);
+        // トレントの追加/削除をまとめて行った後に, *評価関数* がよくなれば採用する
 
-            // 雑乱択
-            for _ in 0..n / 2 {
-                let treant_x = rng.gen::<usize>() % n;
-                let treant_y = rng.gen::<usize>() % n;
-                if ht_cur[treant_x][treant_y] && bnn[treant_x][treant_y] != 'T' {
-                    // 削除を試みる
-                    // TODO: 遅い
-                    let mut rm_i = 0;
-                    for i in 0..rt_cur.len() {
-                        if rt_cur[i] == (treant_x, treant_y) {
-                            rm_i = i;
-                            break;
-                        }
+        let mut rt_cur = ready_treants.clone();
+        let mut ht_cur = has_tree.clone();
+        // 雑乱択
+        for _ in 0..n / 2 {
+            let treant_x = rng.gen::<usize>() % n;
+            let treant_y = rng.gen::<usize>() % n;
+            if ht_cur[treant_x][treant_y] && bnn[treant_x][treant_y] != 'T' {
+                // 削除を試みる
+                // TODO: 遅い
+                let mut rm_i = 0;
+                for i in 0..rt_cur.len() {
+                    if rt_cur[i] == (treant_x, treant_y) {
+                        rm_i = i;
+                        break;
                     }
-                    rt_cur.remove(rm_i);
-                    ht_cur[treant_x][treant_y] = false;
-                } else if could_add_treant(
-                    adventurer,
-                    tij,
-                    &is_found,
-                    &ht_cur,
-                    (treant_x, treant_y),
-                ) {
-                    rt_cur.push((treant_x, treant_y));
-                    ht_cur[treant_x][treant_y] = true;
                 }
-            }
-
-            let score_cur = board_score((0, n / 2), tij, &ht_cur, &mut rng);
-            if score_cur < score_best {
-                score_best = score_cur;
-                rt_best = rt_cur;
-                ht_best = ht_cur;
+                rt_cur.remove(rm_i);
+                ht_cur[treant_x][treant_y] = false;
+            } else if could_add_treant(adventurer, tij, &is_found, &ht_cur, (treant_x, treant_y)) {
+                rt_cur.push((treant_x, treant_y));
+                ht_cur[treant_x][treant_y] = true;
             }
         }
 
-        // 初期囲い四方を試した後に更新する
-        has_tree = ht_best.clone();
-        ready_treants = rt_best.clone();
+        let score_cur = board_score((0, n / 2), tij, &ht_cur, &mut rng);
+        if score_cur < score_best {
+            score_best = score_cur;
+            ready_treants = rt_cur;
+            has_tree = ht_cur;
+        }
     }
 
     loop {
