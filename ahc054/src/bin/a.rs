@@ -120,36 +120,47 @@ fn shortest_path_2cells(
 ) -> Vec<(usize, usize)> {
     let n = has_tree.len();
 
-    // TODO: 経路もたせながらの BFS は重い, BFS の経路復元なかったっけか
+    // 経路もたせながらの BFS は重い, BFS の経路復元なかったっけか
+    //       => どこから来たか, の直前一マスだけを覚えておいて最後に復元する
     let mut visited = vec![vec![false; n]; n];
+    let mut comes_from = vec![vec![None; n]; n];
     let mut que = VecDeque::new();
-    que.push_back((sxy, vec![]));
+    que.push_back(sxy);
 
-    while let Some((cur_xy, cur_path)) = que.pop_front() {
-        if visited[cur_xy.0][cur_xy.1] {
-            continue;
-        }
-
+    'bfs_loop: while let Some(cur_xy) = que.pop_front() {
+        // visited 判定は queue 格納時
         visited[cur_xy.0][cur_xy.1] = true;
-        let mut next_path = cur_path.clone();
-        next_path.push(cur_xy);
-        if cur_xy == gxy {
-            return next_path;
-        }
 
         for &(dx, dy) in &DXY {
             let nx = cur_xy.0.wrapping_add_signed(dx);
             let ny = cur_xy.1.wrapping_add_signed(dy);
-            if nx >= n || ny >= n || has_tree[nx][ny] {
+            if nx >= n
+                || ny >= n
+                || has_tree[nx][ny]
+                || comes_from[nx][ny].is_some()
+                || visited[nx][ny]
+            {
                 continue;
             }
 
             let nxy = (nx, ny);
-            que.push_back((nxy, next_path.clone()));
+            comes_from[nx][ny] = Some(cur_xy);
+            if (nx, ny) == gxy {
+                break 'bfs_loop;
+            }
+
+            que.push_back(nxy);
         }
     }
 
-    unreachable!()
+    let mut ret = vec![gxy];
+    let mut cur_xy = gxy;
+    while let Some(prev_xy) = comes_from[cur_xy.0][cur_xy.1] {
+        ret.push(prev_xy);
+        cur_xy = prev_xy;
+    }
+    ret.reverse();
+    ret
 }
 
 #[allow(dead_code)]
