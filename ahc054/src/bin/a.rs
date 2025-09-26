@@ -16,6 +16,7 @@ const DXY_LT: [(isize, isize); 4] = [(1, 0), (0, 1), (-1, 0), (0, -1)];
 const DXY_LB: [(isize, isize); 4] = [(-1, 0), (0, 1), (1, 0), (0, -1)];
 const DXY_RT: [(isize, isize); 4] = [(1, 0), (0, -1), (-1, 0), (0, 1)];
 const DXY_RB: [(isize, isize); 4] = [(-1, 0), (0, -1), (1, 0), (0, 1)];
+const DXY_ALL: [[(isize, isize); 4]; 4] = [DXY_LB, DXY_LT, DXY_RB, DXY_RT];
 
 #[allow(dead_code)]
 fn could_goal(sxy: (usize, usize), gxy: (usize, usize), has_tree: &Vec<Vec<bool>>) -> bool {
@@ -498,33 +499,33 @@ fn main() {
     let mut ready_treants = vec![];
 
     let mut score_best = f64::MAX;
-    let mut ht_best = has_tree.clone();
-    let mut rt_best = ready_treants.clone();
 
-    // 初期配置はゴール囲む + X 状で固定する.
-    for &dxy in &[DXY_LB, DXY_LT, DXY_RB, DXY_RT] {
-        let mut ht_cur = has_tree.clone();
-        let mut rt_cur = ready_treants.clone();
-        add_treants_surrounding_goal((0, n / 2), tij, &is_found, &mut ht_cur, &mut rt_cur, &dxy);
-        // X の形にトレントを置く
-        add_treants_x((0, n / 2), tij, &is_found, &mut ht_cur, &mut rt_cur);
+    // 初期配置は X 状で固定する.
+    add_treants_x(
+        (0, n / 2),
+        tij,
+        &is_found,
+        &mut has_tree,
+        &mut ready_treants,
+    );
 
-        // スコアの計算と初期配置の更新
-        let score_cur = board_score((0, n / 2), tij, &ht_cur, &mut rng);
-        if score_cur < score_best {
-            score_best = score_cur;
-            rt_best = rt_cur;
-            ht_best = ht_cur;
-        }
-    }
-    ready_treants = rt_best;
-    has_tree = ht_best;
-
+    let mut tries = 0;
     while start_time.elapsed() < break_time {
-        // トレントの追加/削除をまとめて行った後に, *評価関数* がよくなれば採用する
+        tries += 1;
 
+        // トレントの追加/削除をまとめて行った後に, *評価関数* がよくなれば採用する
         let mut rt_cur = ready_treants.clone();
         let mut ht_cur = has_tree.clone();
+        // ゴール隠しはあった方が基本的によさそうであり, とりあえず適用したい
+        add_treants_surrounding_goal(
+            (0, n / 2),
+            tij,
+            &is_found,
+            &mut ht_cur,
+            &mut rt_cur,
+            &DXY_ALL[tries % DXY_ALL.len()],
+        );
+
         // 雑乱択
         for _ in 0..n / 2 {
             let treant_x = rng.gen::<usize>() % n;
