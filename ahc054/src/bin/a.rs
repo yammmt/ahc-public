@@ -245,18 +245,16 @@ fn board_score<T>(
     sxy: (usize, usize),
     gxy: (usize, usize),
     has_tree: &Vec<Vec<bool>>,
-    rng: &mut T,
+    _rng: &mut T,
 ) -> f64
 where
     T: RngCore,
 {
-    let mut tries = [0, 0, 0, 0, 0];
-    for i in 0..tries.len() {
-        tries[i] = random_play_score(sxy, gxy, has_tree, rng);
-    }
-    tries.sort_unstable();
-
-    -(tries[tries.len() / 2] as f64)
+    let n = has_tree.len();
+    let shortest_paths = shortest_paths(sxy, &has_tree);
+    let s2g_len = shortest_paths[gxy.0][gxy.1];
+    // 左: 適当に大きな数, 大きくしすぎると表現精度の都合でクリップされる
+    (n * n * n - s2g_len) as f64
 }
 
 fn could_add_treant(
@@ -359,6 +357,7 @@ fn add_treants_x(
 /// 訪問順をランダムにして, ゲームを実行した結果のスコアを返す.
 /// - ゴールマスの訪問順は, 必ず全マスの中間となるように固定する.
 /// - 途中でトレントが追加されることは想定しない.
+#[allow(dead_code)]
 fn random_play_score<T>(
     sxy: (usize, usize),
     gxy: (usize, usize),
