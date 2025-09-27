@@ -569,7 +569,7 @@ fn main() {
                 }
                 rt_cur.remove(rm_i);
                 ht_cur[treant_x][treant_y] = false;
-            } else if default_tree_num + rt_cur.len() < n * n * 1 / 3
+            } else if default_tree_num + rt_cur.len() < n * n * 1 / 4
                 && could_add_treant(adventurer, tij, &is_found, &ht_cur, (treant_x, treant_y))
             {
                 rt_cur.push((treant_x, treant_y));
