@@ -17,9 +17,10 @@ macro_rules! debug {
 }
 
 // 2 s
+const TIME_LIMIT_MS: u64 = 1800;
 // 対話的動作部分のマージンを取る
 // 初期盤面の評価関数があまりよくなく, 時間をかけすぎてもスコアが伸びない.
-const TIME_LIMIT_MS: u64 = 1000;
+const TIME_LIMIT_BEFORE_INTERACTIVE_PART_MS: u64 = 1000;
 
 const DXY: [(isize, isize); 4] = [(-1, 0), (1, 0), (0, -1), (0, 1)];
 // 命名の方角: ゴールの位置が Visualizer 感覚でどこにあるか
@@ -501,7 +502,9 @@ where
 
 fn main() {
     let start_time = Instant::now();
-    let break_time = Duration::from_millis(TIME_LIMIT_MS);
+    let break_time_before_interactive_part =
+        Duration::from_millis(TIME_LIMIT_BEFORE_INTERACTIVE_PART_MS);
+    let break_time_finally = Duration::from_millis(TIME_LIMIT_MS);
 
     let stdin = std::io::stdin();
     let mut source = LineSource::new(stdin.lock());
@@ -537,7 +540,7 @@ fn main() {
     // 初期配置の X 状は動的な阻止と合わせると逆効果っぽいのでしない
 
     let mut tries = 0;
-    while start_time.elapsed() < break_time {
+    while start_time.elapsed() < break_time_before_interactive_part {
         tries += 1;
 
         // トレントの追加/削除をまとめて行った後に, *評価関数* がよくなれば採用する
@@ -626,6 +629,12 @@ fn main() {
     let mut turn = 0;
     let mut adventure_moves = vec![];
     loop {
+        if start_time.elapsed() >= break_time_finally {
+            // TLE 回避
+            println!("-1");
+            return;
+        }
+
         input! {
             from &mut source,
             pij: (usize, usize),
