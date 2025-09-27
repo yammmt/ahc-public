@@ -687,13 +687,15 @@ fn main() {
             na2goal.pop();
             na2goal.reverse();
             for (i, &c) in na2goal.iter().enumerate() {
-                if i == 2 {
-                    break;
-                }
-
                 if !is_found[c.0][c.1] {
                     // TODO: 到達不可なマスを生み出してでも目先の遠回りを優先した方が賢い？
-                    if could_add_treant_harshly((nax, nay), tij, &is_found, &has_tree, c) {
+                    if i < 2 && could_add_treant_harshly((nax, nay), tij, &is_found, &has_tree, c) {
+                        ready_treants.push(c);
+                        has_tree[c.0][c.1] = true;
+                        break;
+                    } else if i < n / 4
+                        && could_add_treant(adventurer, tij, &is_found, &has_tree, c)
+                    {
                         ready_treants.push(c);
                         has_tree[c.0][c.1] = true;
                         break;
