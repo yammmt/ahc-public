@@ -8,7 +8,9 @@ use std::io::{stdout, Write};
 use std::time::{Duration, Instant};
 
 // 2 s
-const TIME_LIMIT_MS: u64 = 1900;
+// 対話的動作部分のマージンを取る
+// 初期盤面の評価関数があまりよくなく, 時間をかけすぎてもスコアが伸びない.
+const TIME_LIMIT_MS: u64 = 1000;
 
 const DXY: [(isize, isize); 4] = [(-1, 0), (1, 0), (0, -1), (0, 1)];
 // 命名の方角: ゴールの位置が Visualizer 感覚でどこにあるか
@@ -275,6 +277,25 @@ fn could_add_treant(
     could_goal_all(sxy, &ht)
 }
 
+/// トレントを足せるか判定する. 到達不能なセルを作る可能性がある.
+fn could_add_treant_harshly(
+    sxy: (usize, usize),
+    gxy: (usize, usize),
+    is_found: &Vec<Vec<bool>>,
+    has_tree: &Vec<Vec<bool>>,
+    treant_xy: (usize, usize),
+) -> bool {
+    let n = has_tree.len();
+    let (tx, ty) = treant_xy;
+    if tx >= n || ty >= n || is_found[tx][ty] || has_tree[tx][ty] || treant_xy == gxy {
+        return false;
+    }
+
+    let mut ht = has_tree.clone();
+    ht[tx][ty] = true;
+    could_goal(sxy, gxy, &ht)
+}
+
 /// goal を視認されないよう, 三方を囲む
 fn add_treants_surrounding_goal(
     sxy: (usize, usize),
@@ -306,6 +327,7 @@ fn add_treants_surrounding_goal(
 }
 
 /// 盤面全体に対し, X 状にトレントを配置する
+#[allow(dead_code)]
 fn add_treants_x(
     sxy: (usize, usize),
     gxy: (usize, usize),
@@ -489,24 +511,21 @@ fn main() {
     // 冒険者の初期配置
     is_found[0][n / 2] = true;
     // 伝説の花マスも置けないが, 考えなくともよい？
+    let mut default_tree_num = 0;
     let mut has_tree = vec![vec![false; n]; n];
     for i in 0..n {
         for j in 0..n {
-            has_tree[i][j] = bnn[i][j] == 'T';
+            if bnn[i][j] == 'T' {
+                default_tree_num += 1;
+                has_tree[i][j] = true;
+            }
         }
     }
     let mut ready_treants = vec![];
 
     let mut score_best = f64::MAX;
 
-    // 初期配置は X 状で固定する.
-    add_treants_x(
-        (0, n / 2),
-        tij,
-        &is_found,
-        &mut has_tree,
-        &mut ready_treants,
-    );
+    // 初期配置の X 状は動的な阻止と合わせると逆効果っぽいのでしない
 
     let mut tries = 0;
     while start_time.elapsed() < break_time {
@@ -541,7 +560,9 @@ fn main() {
                 }
                 rt_cur.remove(rm_i);
                 ht_cur[treant_x][treant_y] = false;
-            } else if could_add_treant(adventurer, tij, &is_found, &ht_cur, (treant_x, treant_y)) {
+            } else if default_tree_num + rt_cur.len() < n * n * 1 / 3
+                && could_add_treant(adventurer, tij, &is_found, &ht_cur, (treant_x, treant_y))
+            {
                 rt_cur.push((treant_x, treant_y));
                 ht_cur[treant_x][treant_y] = true;
             }
@@ -555,13 +576,60 @@ fn main() {
         }
     }
 
+    // ゴールから方向転換一度で行けるマスをマークする
+    // このラインを進まれるとゴールが発見されてしまう
+    let mut is_danger_cell = vec![vec![false; n]; n];
+    for &(dxa, dya) in &DXY {
+        for &(dxb, dyb) in &DXY {
+            if (dxa == dxb && dya == dyb) || (dxa == -dxb && dya == -dyb) {
+                // 同じ方向か反対方向は見ても意味がないので
+                continue;
+            }
+
+            for a in 1..n {
+                let ax = tij.0.wrapping_add_signed(a as isize * dxa);
+                let ay = tij.1.wrapping_add_signed(a as isize * dya);
+                if ax >= n || ay >= n || has_tree[ax][ay] {
+                    break;
+                }
+
+                for b in 0..n {
+                    let abx = ax.wrapping_add_signed(b as isize * dxb);
+                    let aby = ay.wrapping_add_signed(b as isize * dyb);
+                    if abx >= n || aby >= n || has_tree[abx][aby] {
+                        break;
+                    }
+
+                    is_danger_cell[abx][aby] = true;
+                }
+            }
+        }
+    }
+    let mut danger_cells = vec![];
+    for i in 0..n {
+        for j in 0..n {
+            if is_danger_cell[i][j] {
+                danger_cells.push((i, j));
+            }
+        }
+    }
+
+    let mut turn = 0;
+    let mut adventure_moves = vec![];
     loop {
         input! {
             from &mut source,
             pij: (usize, usize),
-            n: usize,
-            xyn: [(usize, usize); n],
+            n_turn: usize,
+            xyn: [(usize, usize); n_turn],
         }
+        if turn != 0 {
+            adventure_moves.push((
+                pij.0 as isize - adventurer.0 as isize,
+                pij.1 as isize - adventurer.0 as isize,
+            ));
+        }
+        turn += 1;
         adventurer = pij;
         if adventurer == tij {
             break;
@@ -569,6 +637,62 @@ fn main() {
 
         for (x, y) in xyn {
             is_found[x][y] = true;
+        }
+
+        // let goal_diff = (tij.0 as isize - adventurer.0 as isize, tij.1 as isize - adventurer.1 as isize);
+        for &(dx, dy) in &DXY {
+            // TODO: 2 固定もどうなのか, 斜めに置いたほうがよい
+            for i in 1..5 {
+                let cx = adventurer.0.wrapping_add_signed(i as isize * dx);
+                let cy = adventurer.1.wrapping_add_signed(i as isize * dy);
+                if cx >= n || cy >= n || is_found[cx][cy] || has_tree[cx][cy] {
+                    break;
+                } else if i >= 2 {
+                    if could_add_treant(adventurer, tij, &is_found, &has_tree, (cx, cy)) {
+                        ready_treants.push((cx, cy));
+                        has_tree[cx][cy] = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        // 冒険者が次の手で花を視認できるマスに出てきそうな場合, 妨害したい
+        // 冒険者と危険マスの距離が 1 であった場合, 冒険者から最も近い危険マスを防ぐ
+        for &(dx, dy) in &DXY {
+            // 冒険者が次に出現し得る位置
+            let nax = adventurer.0.wrapping_add_signed(dx);
+            let nay = adventurer.1.wrapping_add_signed(dy);
+            if nax >= n || nay >= n || !is_danger_cell[nax][nay] || has_tree[nax][nay] {
+                continue;
+            }
+
+            // 危険マスを基準に, 花の方向に最も近い未確認マスを塞ぎたい
+            // 危険マスからゴールまでの最短経路をもらって, 逆順に防ぐ
+            // TODO: 遅い
+            let mut na2goal = shortest_path_2cells((nax, nay), tij, &has_tree);
+            // 始点は除く
+            na2goal.pop();
+            na2goal.reverse();
+            // ゴールは除く
+            na2goal.pop();
+            na2goal.reverse();
+            for (i, &c) in na2goal.iter().enumerate() {
+                if i == 2 {
+                    break;
+                }
+
+                if !is_found[c.0][c.1] {
+                    // TODO: 到達不可なマスを生み出してでも目先の遠回りを優先した方が賢い？
+                    if could_add_treant_harshly((nax, nay), tij, &is_found, &has_tree, c) {
+                        ready_treants.push(c);
+                        has_tree[c.0][c.1] = true;
+                        break;
+                    }
+                }
+            }
+
+            // TODO: 危険でなくなったマスをマークすべき, 高速化の余地もある
         }
 
         // 初期以外でうまく使えず…
