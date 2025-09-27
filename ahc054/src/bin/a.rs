@@ -7,6 +7,15 @@ use std::collections::VecDeque;
 use std::io::{stdout, Write};
 use std::time::{Duration, Instant};
 
+#[allow(unused_macros)]
+macro_rules! debug {
+    ($($arg:tt)+) => {
+        if cfg!(debug_assertions) {
+            eprintln!($($arg)+);
+        }
+    };
+}
+
 // 2 s
 // 対話的動作部分のマージンを取る
 // 初期盤面の評価関数があまりよくなく, 時間をかけすぎてもスコアが伸びない.
