@@ -431,6 +431,59 @@ fn add_treants_zigzag(
     // }
 }
 
+/// 正方形領域に対し, 固定数の木をランダムに配置する
+fn add_treants_square<T>(
+    sxy: (usize, usize),
+    gxy: (usize, usize),
+    is_found: &Vec<Vec<bool>>,
+    has_tree: &mut Vec<Vec<bool>>,
+    ready_treants: &mut Vec<(usize, usize)>,
+    rng: &mut T,
+    begin_lt: (usize, usize),
+) where
+    T: RngCore,
+{
+    let n = has_tree.len();
+    if begin_lt.0 + 1 >= n || begin_lt.1 + 1 >= n {
+        return;
+    }
+
+    let square_len = if begin_lt.0 + 3 < n && begin_lt.1 + 3 < n {
+        4
+    } else {
+        2
+    };
+    let want_trees_num = square_len * square_len / 4;
+
+    let mut trees_num = 0;
+    for i in 0..square_len {
+        for j in 0..square_len {
+            if has_tree[begin_lt.0 + i][begin_lt.1 + j] {
+                trees_num += 1;
+            }
+        }
+    }
+
+    // TODO: shuffle して順にあたった方が高速では
+    let mut loop_count = 0;
+    while trees_num < want_trees_num {
+        let dx = rng.gen::<usize>() % square_len;
+        let dy = rng.gen::<usize>() % square_len;
+        let nx = begin_lt.0 + dx;
+        let ny = begin_lt.1 + dy;
+        if could_add_treant(sxy, gxy, is_found, has_tree, (nx, ny)) {
+            ready_treants.push((nx, ny));
+            has_tree[nx][ny] = true;
+            trees_num += 1;
+        }
+        loop_count += 1;
+        // TODO: 追加できない場合も事前に判別できるのでは
+        if loop_count > square_len * square_len + square_len {
+            return;
+        }
+    }
+}
+
 /// 訪問順をランダムにして, ゲームを実行した結果のスコアを返す.
 /// - ゴールマスの訪問順は, 必ず全マスの中間となるように固定する.
 /// - 途中でトレントが追加されることは想定しない.
