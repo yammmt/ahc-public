@@ -386,6 +386,51 @@ fn add_treants_x(
     }
 }
 
+/// ジグザグな形にトレントを配置するよう試みる
+/// 配置は左上を基準としてサイズ 4 固定
+#[allow(dead_code)]
+fn add_treants_zigzag(
+    sxy: (usize, usize),
+    gxy: (usize, usize),
+    is_found: &Vec<Vec<bool>>,
+    has_tree: &mut Vec<Vec<bool>>,
+    ready_treants: &mut Vec<(usize, usize)>,
+    begin_lt: (usize, usize),
+) {
+    let n = has_tree.len();
+
+    // "X" を埋める
+    // ooXo
+    // Xooo
+    // oXoX
+    // oXoo
+    let add_cells_diff = [(0, 2), (1, 0), (2, 1), (2, 3), (3, 1)];
+
+    for (dx, dy) in add_cells_diff {
+        let treant_xy = (
+            begin_lt.0.wrapping_add_signed(dx),
+            begin_lt.1.wrapping_add_signed(dy),
+        );
+        if could_add_treant(sxy, gxy, is_found, has_tree, treant_xy) {
+            ready_treants.push(treant_xy);
+            has_tree[treant_xy.0][treant_xy.1] = true;
+        }
+    }
+    return;
+
+    // 外周部でない or 中央の列を含むブロックでない
+    // if !(begin_lt.0 != 0 && begin_lt.1 != 0) || begin_lt.1 == n / 4 / 2 * n {
+    //     let treant_xy = (
+    //         begin_lt.0 + 2,
+    //         begin_lt.1 + 1,
+    //     );
+    //     if could_add_treant(sxy, gxy, is_found, has_tree, treant_xy) {
+    //         ready_treants.push(treant_xy);
+    //         has_tree[treant_xy.0][treant_xy.1] = true;
+    //     }
+    // }
+}
+
 /// 訪問順をランダムにして, ゲームを実行した結果のスコアを返す.
 /// - ゴールマスの訪問順は, 必ず全マスの中間となるように固定する.
 /// - 途中でトレントが追加されることは想定しない.
