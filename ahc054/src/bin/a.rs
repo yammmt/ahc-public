@@ -250,6 +250,60 @@ fn visible_cells_num(has_tree: &Vec<Vec<bool>>) -> usize {
     ret
 }
 
+/// 訪問できるセル数を返す.
+#[allow(dead_code)]
+fn can_visit_cells_num(sxy: (usize, usize), has_tree: &Vec<Vec<bool>>) -> usize {
+    let n = has_tree.len();
+    let mut visited = vec![vec![false; n]; n];
+    let mut que = VecDeque::new();
+    que.push_back(sxy);
+
+    while let Some(cur_xy) = que.pop_front() {
+        if visited[cur_xy.0][cur_xy.1] {
+            continue;
+        }
+
+        visited[cur_xy.0][cur_xy.1] = true;
+
+        for &(dx, dy) in &DXY {
+            let nx = cur_xy.0.wrapping_add_signed(dx);
+            let ny = cur_xy.1.wrapping_add_signed(dy);
+            if nx >= n || ny >= n || has_tree[nx][ny] {
+                continue;
+            }
+
+            let nxy = (nx, ny);
+            que.push_back(nxy);
+        }
+    }
+
+    let mut ret = 0;
+    for i in 0..n {
+        for j in 0..n {
+            if visited[i][j] {
+                ret += 1;
+            }
+        }
+    }
+
+    ret
+}
+
+/// トレント追加前後での, 訪問できるセル数の変化 (減った数) を返す.
+#[allow(dead_code)]
+fn cannot_visit_cells_num_after_adding(
+    sxy: (usize, usize),
+    has_tree: &Vec<Vec<bool>>,
+    treant_xy: (usize, usize),
+) -> usize {
+    // board_score に入れるとあまり効果が見られず
+    let can_visit_before = can_visit_cells_num(sxy, has_tree);
+    let mut ht = has_tree.clone();
+    ht[treant_xy.0][treant_xy.1] = true;
+    let can_visit_after = can_visit_cells_num(sxy, &ht);
+    can_visit_before - can_visit_after
+}
+
 /// 盤面のスコアを良い感じに計算して返す
 /// 小さいほうがよいスコア
 #[inline(always)]
