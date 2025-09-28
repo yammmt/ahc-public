@@ -318,9 +318,11 @@ where
 {
     let n = has_tree.len();
     let shortest_paths = shortest_paths(sxy, &has_tree);
-    let s2g_len = shortest_paths[gxy.0][gxy.1];
-    // 左: 適当に大きな数, 大きくしすぎると表現精度の都合でクリップされる
-    (n * n * n - s2g_len) as f64
+    // 長いほどよい
+    let s2g_len = shortest_paths[gxy.0][gxy.1] as f64;
+    // 小さいほどよい
+    let goal_hub= cannot_visit_cells_num_after_adding(sxy, has_tree, gxy) as f64;
+     -s2g_len * 0.8 + goal_hub * 0.1
 }
 
 fn could_add_treant(
