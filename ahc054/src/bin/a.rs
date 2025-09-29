@@ -20,7 +20,7 @@ macro_rules! debug {
 const TIME_LIMIT_MS: u64 = 1800;
 // 対話的動作部分のマージンを取る
 // 初期盤面の評価関数があまりよくなく, 時間をかけすぎてもスコアが伸びない.
-const TIME_LIMIT_BEFORE_INTERACTIVE_PART_MS: u64 = 1000;
+const TIME_LIMIT_BEFORE_INTERACTIVE_PART_MS: u64 = 1300;
 
 const DXY: [(isize, isize); 4] = [(-1, 0), (1, 0), (0, -1), (0, 1)];
 // 命名の方角: ゴールの位置が Visualizer 感覚でどこにあるか
