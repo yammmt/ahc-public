@@ -35,6 +35,23 @@ const DXY_RB: [(isize, isize); 4] = [(-1, 0), (0, -1), (1, 0), (0, 1)];
 #[allow(dead_code)]
 const DXY_ALL: [[(isize, isize); 4]; 4] = [DXY_LB, DXY_LT, DXY_RB, DXY_RT];
 
+#[rustfmt::skip]
+// ([トレントを置く場所], [トレントを置かない場所])
+const WHIRLPOOL_LT: ([(isize, isize); 15], [(isize, isize); 1]) = (
+    [
+        (-1, 0),
+        (0, -3), (0, -1), (0, 1),
+        (1, -3), (1, -1), (1, 2),
+        (2, -3), (2, 0), (2, 2),
+        (3, -2), (3, 2),
+        (4, -1), (4, 0), (4, 1),
+    ],
+    [
+        (-1, -1),
+    ]
+);
+
+
 #[allow(dead_code)]
 fn could_goal(sxy: (usize, usize), gxy: (usize, usize), has_tree: &Vec<Vec<bool>>) -> bool {
     let n = has_tree.len();
@@ -344,6 +361,14 @@ fn could_add_treant(
         return false;
     }
 
+    for &(dx, dy) in &WHIRLPOOL_LT.1 {
+        let nx = gxy.0.wrapping_add_signed(dx);
+        let ny = gxy.1.wrapping_add_signed(dy);
+        if nx < n && ny < n && (nx, ny) == treant_xy {
+            return false;
+        }
+    }
+
     let mut ht = has_tree.clone();
     ht[tx][ty] = true;
     could_goal_all(sxy, &ht)
@@ -411,20 +436,11 @@ fn add_treants_whirlpool(
     has_tree: &mut Vec<Vec<bool>>,
     ready_treants: &mut Vec<(usize, usize)>,
 ) {
-    #[rustfmt::skip]
-    let dxy = [
-        (-1, 0),
-        (0, -3), (0, -1), (0, 1),
-        (1, -3), (1, -1), (1, 2),
-        (2, -3), (2, 0), (2, 2),
-        (3, -2), (3, 2),
-        (4, -1), (4, 0), (4, 1),
-    ];
 
     let mut rt = ready_treants.clone();
     let mut ht = has_tree.clone();
     let mut passed = true;
-    for (dx, dy) in dxy {
+    for &(dx, dy) in &WHIRLPOOL_LT.0 {
         let nx = gxy.0.wrapping_add_signed(dx);
         let ny = gxy.1.wrapping_add_signed(dy);
         if could_add_treant(sxy, gxy, is_found, &ht, (nx, ny)) {
