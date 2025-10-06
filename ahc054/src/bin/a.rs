@@ -481,6 +481,8 @@ fn add_treants_whirlpool(
     has_tree: &mut Vec<Vec<bool>>,
     ready_treants: &mut Vec<(usize, usize)>,
 ) {
+    let n = has_tree.len();
+
     for whirlpool in &WHIRLPOOL_ALL {
         let mut rt = ready_treants.clone();
         let mut ht = has_tree.clone();
@@ -492,7 +494,7 @@ fn add_treants_whirlpool(
             if could_add_treant(sxy, gxy, is_found, &ht, (nx, ny)) {
                 rt.push((nx, ny));
                 ht[nx][ny] = true;
-            } else {
+            } else if nx < n && ny < n && !ht[nx][ny] {
                 passed = false;
                 break;
             }
