@@ -24,10 +24,15 @@ const TIME_LIMIT_BEFORE_INTERACTIVE_PART_MS: u64 = 1300;
 
 const DXY: [(isize, isize); 4] = [(-1, 0), (1, 0), (0, -1), (0, 1)];
 // 命名の方角: ゴールの位置が Visualizer 感覚でどこにあるか
+#[allow(dead_code)]
 const DXY_LT: [(isize, isize); 4] = [(1, 0), (0, 1), (-1, 0), (0, -1)];
+#[allow(dead_code)]
 const DXY_LB: [(isize, isize); 4] = [(-1, 0), (0, 1), (1, 0), (0, -1)];
+#[allow(dead_code)]
 const DXY_RT: [(isize, isize); 4] = [(1, 0), (0, -1), (-1, 0), (0, 1)];
+#[allow(dead_code)]
 const DXY_RB: [(isize, isize); 4] = [(-1, 0), (0, -1), (1, 0), (0, 1)];
+#[allow(dead_code)]
 const DXY_ALL: [[(isize, isize); 4]; 4] = [DXY_LB, DXY_LT, DXY_RB, DXY_RT];
 
 #[allow(dead_code)]
@@ -307,6 +312,7 @@ fn cannot_visit_cells_num_after_adding(
 /// 盤面のスコアを良い感じに計算して返す
 /// 小さいほうがよいスコア
 #[inline(always)]
+#[allow(dead_code)]
 fn board_score<T>(
     sxy: (usize, usize),
     gxy: (usize, usize),
@@ -363,6 +369,7 @@ fn could_add_treant_harshly(
 }
 
 /// goal を視認されないよう, 三方を囲む
+#[allow(dead_code)]
 fn add_treants_surrounding_goal(
     sxy: (usize, usize),
     gxy: (usize, usize),
@@ -389,6 +396,49 @@ fn add_treants_surrounding_goal(
                 has_tree[tx][ty] = true;
             }
         }
+    }
+}
+
+/// 渦巻状にトレントを配置する
+/// これができれば, 花が目的地とならない限りは花の発見を阻止できる
+/// 拝借元: https://x.com/dj_maeda3/status/1972604871515017621
+///        G の上の T が視認されてないと, 渦巻右下にいる場合に
+///        探索優先度 (上下左右) の都合で G マス経由される
+fn add_treants_whirlpool(
+    sxy: (usize, usize),
+    gxy: (usize, usize),
+    is_found: &Vec<Vec<bool>>,
+    has_tree: &mut Vec<Vec<bool>>,
+    ready_treants: &mut Vec<(usize, usize)>,
+) {
+    #[rustfmt::skip]
+    let dxy = [
+        (-1, 0),
+        (0, -3), (0, -1), (0, 1),
+        (1, -3), (1, -1), (1, 2),
+        (2, -3), (2, 0), (2, 2),
+        (3, -2), (3, 2),
+        (4, -1), (4, 0), (4, 1),
+    ];
+
+    let mut rt = ready_treants.clone();
+    let mut ht = has_tree.clone();
+    let mut passed = true;
+    for (dx, dy) in dxy {
+        let nx = gxy.0.wrapping_add_signed(dx);
+        let ny = gxy.1.wrapping_add_signed(dy);
+        if could_add_treant(sxy, gxy, is_found, &ht, (nx, ny)) {
+            rt.push((nx, ny));
+            ht[nx][ny] = true;
+        } else {
+            passed = false;
+            break;
+        }
+    }
+
+    if passed {
+        *ready_treants = rt;
+        *has_tree = ht;
     }
 }
 
@@ -700,46 +750,14 @@ fn main() {
         // トレントの追加/削除をまとめて行った後に, *評価関数* がよくなれば採用する
         let mut rt_cur = ready_treants.clone();
         let mut ht_cur = has_tree.clone();
-        // ゴール隠しはあった方が基本的によさそうであり, とりあえず適用したい
-        add_treants_surrounding_goal(
+        add_treants_whirlpool(
             (0, n / 2),
             tij,
             &is_found,
-            &mut ht_cur,
-            &mut rt_cur,
-            &DXY_ALL[tries % DXY_ALL.len()],
+            &mut has_tree,
+            &mut ready_treants,
         );
-
-        // 雑乱択
-        for _ in 0..n / 2 {
-            let treant_x = rng.gen::<usize>() % n;
-            let treant_y = rng.gen::<usize>() % n;
-            if ht_cur[treant_x][treant_y] && bnn[treant_x][treant_y] != 'T' {
-                // 削除を試みる
-                // TODO: 遅い
-                let mut rm_i = 0;
-                for i in 0..rt_cur.len() {
-                    if rt_cur[i] == (treant_x, treant_y) {
-                        rm_i = i;
-                        break;
-                    }
-                }
-                rt_cur.remove(rm_i);
-                ht_cur[treant_x][treant_y] = false;
-            } else if default_tree_num + rt_cur.len() < n * n * 1 / 4
-                && could_add_treant(adventurer, tij, &is_found, &ht_cur, (treant_x, treant_y))
-            {
-                rt_cur.push((treant_x, treant_y));
-                ht_cur[treant_x][treant_y] = true;
-            }
-        }
-
-        let score_cur = board_score((0, n / 2), tij, &ht_cur, &mut rng);
-        if score_cur < score_best {
-            score_best = score_cur;
-            ready_treants = rt_cur;
-            has_tree = ht_cur;
-        }
+        break;
     }
 
     // ゴールから方向転換一度で行けるマスをマークする
