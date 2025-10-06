@@ -35,8 +35,10 @@ const DXY_RB: [(isize, isize); 4] = [(-1, 0), (0, -1), (1, 0), (0, 1)];
 #[allow(dead_code)]
 const DXY_ALL: [[(isize, isize); 4]; 4] = [DXY_LB, DXY_LT, DXY_RB, DXY_RT];
 
-#[rustfmt::skip]
 // ([トレントを置く場所], [トレントを置かない場所])
+// - 90 deg 回転を書いたほうが賢い
+// - 構造体にすべき気配がする
+#[rustfmt::skip]
 const WHIRLPOOL_LT: ([(isize, isize); 15], [(isize, isize); 1]) = (
     [
         (-1, 0),
@@ -50,7 +52,50 @@ const WHIRLPOOL_LT: ([(isize, isize); 15], [(isize, isize); 1]) = (
         (-1, -1),
     ]
 );
-
+#[rustfmt::skip]
+const WHIRLPOOL_LB: ([(isize, isize); 15], [(isize, isize); 1]) = (
+    [
+        (-2, 1), (-2, 2), (-2, 3),
+        (-1, 0), (-1, 4),
+        (0, -1), (0, 2), (0, 4),
+        (1, 0), (1, 1), (1, 4),
+        (2, 3),
+        (3, 0), (3, 1), (3, 2),
+    ],
+    [
+        (1, -1),
+    ]
+);
+#[rustfmt::skip]
+const WHIRLPOOL_RT: ([(isize, isize); 15], [(isize, isize); 1]) = (
+    [
+        (-3, -2), (-3, -1), (-3, 0),
+        (-2, -3),
+        (-1, -4), (-1, -1), (-1, 0),
+        (0, -4), (0, -2), (0, 1),
+        (1, -4), (1, 0),
+        (2, -3), (2, -2), (2, -1),
+    ],
+    [
+        (-1, 1),
+    ]
+);
+#[rustfmt::skip]
+const WHIRLPOOL_RB: ([(isize, isize); 15], [(isize, isize); 1]) = (
+    [
+        (-4, -1), (-4, 0), (-4, 1),
+        (-3, -2), (-3, 2),
+        (-2, -2), (-2, 0), (-2, 3),
+        (-1, -2), (-1, 1), (-1, 3),
+        (0, -1), (0, 1), (0, 3),
+        (1, 0),
+    ],
+    [
+        (1, 1),
+    ]
+);
+const WHIRLPOOL_ALL: [([(isize, isize); 15], [(isize, isize); 1]); 4] =
+    [WHIRLPOOL_LT, WHIRLPOOL_LB, WHIRLPOOL_RT, WHIRLPOOL_RB];
 
 #[allow(dead_code)]
 fn could_goal(sxy: (usize, usize), gxy: (usize, usize), has_tree: &Vec<Vec<bool>>) -> bool {
@@ -436,25 +481,29 @@ fn add_treants_whirlpool(
     has_tree: &mut Vec<Vec<bool>>,
     ready_treants: &mut Vec<(usize, usize)>,
 ) {
+    for whirlpool in &WHIRLPOOL_ALL {
+        let mut rt = ready_treants.clone();
+        let mut ht = has_tree.clone();
+        let mut passed = true;
 
-    let mut rt = ready_treants.clone();
-    let mut ht = has_tree.clone();
-    let mut passed = true;
-    for &(dx, dy) in &WHIRLPOOL_LT.0 {
-        let nx = gxy.0.wrapping_add_signed(dx);
-        let ny = gxy.1.wrapping_add_signed(dy);
-        if could_add_treant(sxy, gxy, is_found, &ht, (nx, ny)) {
-            rt.push((nx, ny));
-            ht[nx][ny] = true;
-        } else {
-            passed = false;
-            break;
+        for &(dx, dy) in &whirlpool.0 {
+            let nx = gxy.0.wrapping_add_signed(dx);
+            let ny = gxy.1.wrapping_add_signed(dy);
+            if could_add_treant(sxy, gxy, is_found, &ht, (nx, ny)) {
+                rt.push((nx, ny));
+                ht[nx][ny] = true;
+            } else {
+                passed = false;
+                break;
+            }
         }
-    }
 
-    if passed {
-        *ready_treants = rt;
-        *has_tree = ht;
+        if passed {
+            *ready_treants = rt;
+            *has_tree = ht;
+            // TODO: 採用した渦の形を返さねば, トレントを置けない場所が正しく判定できない
+            return;
+        }
     }
 }
 
