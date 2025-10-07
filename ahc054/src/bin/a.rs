@@ -398,8 +398,8 @@ where
     // 長いほどよい
     let s2g_len = shortest_paths[gxy.0][gxy.1] as f64;
     // 小さいほどよい
-    let goal_hub= cannot_visit_cells_num_after_adding(sxy, has_tree, gxy) as f64;
-     -s2g_len * 0.8 + goal_hub * 0.1
+    let goal_hub = cannot_visit_cells_num_after_adding(sxy, has_tree, gxy) as f64;
+    -s2g_len * 0.8 + goal_hub * 0.1
 }
 
 fn could_add_treant(
