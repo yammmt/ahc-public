@@ -97,6 +97,15 @@ const WHIRLPOOL_RB: ([(isize, isize); 15], [(isize, isize); 1]) = (
 const WHIRLPOOL_ALL: [([(isize, isize); 15], [(isize, isize); 1]); 4] =
     [WHIRLPOOL_LT, WHIRLPOOL_LB, WHIRLPOOL_RT, WHIRLPOOL_RB];
 
+// TODO: 構造体を用意した方が良い気はする
+#[derive(Copy, Clone, Debug)]
+enum Whirlpool {
+    LT,
+    LB,
+    RT,
+    RB,
+}
+
 #[allow(dead_code)]
 fn could_goal(sxy: (usize, usize), gxy: (usize, usize), has_tree: &Vec<Vec<bool>>) -> bool {
     let n = has_tree.len();
@@ -419,6 +428,43 @@ fn could_add_treant(
     could_goal_all(sxy, &ht)
 }
 
+fn could_add_treant_considering_whirlpool(
+    sxy: (usize, usize),
+    gxy: (usize, usize),
+    is_found: &Vec<Vec<bool>>,
+    has_tree: &Vec<Vec<bool>>,
+    treant_xy: (usize, usize),
+    whirlpool_used: Option<Whirlpool>,
+) -> bool {
+    let n = has_tree.len();
+    let (tx, ty) = treant_xy;
+    if tx >= n || ty >= n || is_found[tx][ty] || has_tree[tx][ty] || treant_xy == gxy {
+        return false;
+    }
+
+    if let Some(wp) = whirlpool_used {
+        let wp_tuple = match wp {
+            Whirlpool::LT => WHIRLPOOL_LT,
+            Whirlpool::LB => WHIRLPOOL_LB,
+            Whirlpool::RT => WHIRLPOOL_RT,
+            Whirlpool::RB => WHIRLPOOL_RB,
+            _ => unreachable!(),
+        };
+
+        for &(dx, dy) in &wp_tuple.1 {
+            let nx = gxy.0.wrapping_add_signed(dx);
+            let ny = gxy.1.wrapping_add_signed(dy);
+            if nx < n && ny < n && (nx, ny) == treant_xy {
+                return false;
+            }
+        }
+    }
+
+    let mut ht = has_tree.clone();
+    ht[tx][ty] = true;
+    could_goal_all(sxy, &ht)
+}
+
 /// トレントを足せるか判定する. 到達不能なセルを作る可能性がある.
 fn could_add_treant_harshly(
     sxy: (usize, usize),
@@ -480,7 +526,7 @@ fn add_treants_whirlpool(
     is_found: &Vec<Vec<bool>>,
     has_tree: &mut Vec<Vec<bool>>,
     ready_treants: &mut Vec<(usize, usize)>,
-) {
+) -> Option<Whirlpool> {
     let n = has_tree.len();
 
     for whirlpool in &WHIRLPOOL_ALL {
@@ -503,10 +549,17 @@ fn add_treants_whirlpool(
         if passed {
             *ready_treants = rt;
             *has_tree = ht;
-            // TODO: 採用した渦の形を返さねば, トレントを置けない場所が正しく判定できない
-            return;
+            return match *whirlpool {
+                WHIRLPOOL_LT => Some(Whirlpool::LT),
+                WHIRLPOOL_LB => Some(Whirlpool::LB),
+                WHIRLPOOL_RT => Some(Whirlpool::RT),
+                WHIRLPOOL_RB => Some(Whirlpool::RB),
+                _ => unreachable!(),
+            };
         }
     }
+
+    None
 }
 
 /// 盤面全体に対し, X 状にトレントを配置する
@@ -811,13 +864,15 @@ fn main() {
     // 初期配置の X 状は動的な阻止と合わせると逆効果っぽいのでしない
 
     let mut tries = 0;
+    // dummy
+    let mut whirlpool_used = None;
     while start_time.elapsed() < break_time_before_interactive_part {
         tries += 1;
 
         // トレントの追加/削除をまとめて行った後に, *評価関数* がよくなれば採用する
         let mut rt_cur = ready_treants.clone();
         let mut ht_cur = has_tree.clone();
-        add_treants_whirlpool(
+        whirlpool_used = add_treants_whirlpool(
             (0, n / 2),
             tij,
             &is_found,
@@ -905,7 +960,14 @@ fn main() {
                 if cx >= n || cy >= n || is_found[cx][cy] || has_tree[cx][cy] {
                     break;
                 } else if i >= 2 {
-                    if could_add_treant(adventurer, tij, &is_found, &has_tree, (cx, cy)) {
+                    if could_add_treant_considering_whirlpool(
+                        adventurer,
+                        tij,
+                        &is_found,
+                        &has_tree,
+                        (cx, cy),
+                        whirlpool_used,
+                    ) {
                         ready_treants.push((cx, cy));
                         has_tree[cx][cy] = true;
                         break;
