@@ -710,6 +710,83 @@ fn add_treants_square<T>(
     }
 }
 
+/// y 列の左右に, 列 (縦) 方向に一直線で道を塞ぐようにトレントを立てる
+/// 左右盤面を跨ぐ際に n だけの移動コストを稼ぐため
+/// 拝借元: https://x.com/bird0148677302/status/1973405780935319923
+fn add_treants_vertical(
+    sxy: (usize, usize),
+    gxy: (usize, usize),
+    is_found: &Vec<Vec<bool>>,
+    has_tree: &mut Vec<Vec<bool>>,
+    ready_treants: &mut Vec<(usize, usize)>,
+    y: usize,
+) -> bool {
+    let n = has_tree.len();
+
+    // passed は枝刈りできるが, 実行時間に余裕あるので放置
+    if !has_tree[0][y - 1] && !has_tree[n - 1][y + 1] {
+        let mut passed = true;
+        let mut ht = has_tree.clone();
+        let mut rt = ready_treants.clone();
+        // 左側は上を空ける
+        for x in 1..n {
+            if could_add_treant(sxy, gxy, is_found, &ht, (x, y - 1)) {
+                rt.push((x, y - 1));
+                ht[x][y - 1] = true;
+            } else {
+                passed = false;
+            }
+        }
+        // 右側は下を空ける
+        for x in 0..n - 1 {
+            if could_add_treant(sxy, gxy, is_found, &ht, (x, y + 1)) {
+                rt.push((x, y + 1));
+                ht[x][y + 1] = true;
+            } else {
+                passed = false;
+            }
+        }
+
+        if passed {
+            *ready_treants = rt;
+            *has_tree = ht;
+            return true;
+        }
+    }
+
+    if !has_tree[n - 1][y - 1] && !has_tree[0][y + 1] {
+        let mut passed = true;
+        let mut ht = has_tree.clone();
+        let mut rt = ready_treants.clone();
+        // 左側は下を空ける
+        for x in 0..n - 1 {
+            if could_add_treant(sxy, gxy, is_found, &ht, (x, y - 1)) {
+                rt.push((x, y - 1));
+                ht[x][y - 1] = true;
+            } else {
+                passed = false;
+            }
+        }
+        // 右側は上を空ける
+        for x in 1..n {
+            if could_add_treant(sxy, gxy, is_found, &ht, (x, y + 1)) {
+                rt.push((x, y + 1));
+                ht[x][y + 1] = true;
+            } else {
+                passed = false;
+            }
+        }
+
+        if passed {
+            *ready_treants = rt;
+            *has_tree = ht;
+            return true;
+        }
+    }
+
+    false
+}
+
 /// 訪問順をランダムにして, ゲームを実行した結果のスコアを返す.
 /// - ゴールマスの訪問順は, 必ず全マスの中間となるように固定する.
 /// - 途中でトレントが追加されることは想定しない.
@@ -874,6 +951,16 @@ fn main() {
             &mut has_tree,
             &mut ready_treants,
         );
+
+        add_treants_vertical(
+            (0, n / 2),
+            tij,
+            &is_found,
+            &mut has_tree,
+            &mut ready_treants,
+            n / 2,
+        );
+
         break;
     }
 
