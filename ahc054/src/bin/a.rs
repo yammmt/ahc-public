@@ -393,7 +393,7 @@ fn board_score<T>(
 where
     T: RngCore,
 {
-    let n = has_tree.len();
+    let _n = has_tree.len();
     let shortest_paths = shortest_paths(sxy, &has_tree);
     // 長いほどよい
     let s2g_len = shortest_paths[gxy.0][gxy.1] as f64;
@@ -448,7 +448,6 @@ fn could_add_treant_considering_whirlpool(
             Whirlpool::LB => WHIRLPOOL_LB,
             Whirlpool::RT => WHIRLPOOL_RT,
             Whirlpool::RB => WHIRLPOOL_RB,
-            _ => unreachable!(),
         };
 
         for &(dx, dy) in &wp_tuple.1 {
@@ -623,7 +622,7 @@ fn add_treants_zigzag(
     ready_treants: &mut Vec<(usize, usize)>,
     begin_lt: (usize, usize),
 ) {
-    let n = has_tree.len();
+    let _n = has_tree.len();
 
     // "X" を埋める
     // ooXo
@@ -658,6 +657,7 @@ fn add_treants_zigzag(
 }
 
 /// 正方形領域に対し, 固定数の木をランダムに配置する
+#[allow(dead_code)]
 fn add_treants_square<T>(
     sxy: (usize, usize),
     gxy: (usize, usize),
@@ -824,6 +824,7 @@ where
     turn
 }
 
+#[allow(unused_assignments, unused_variables)]
 fn main() {
     let start_time = Instant::now();
     let break_time_before_interactive_part =
@@ -840,8 +841,8 @@ fn main() {
         bnn: [Chars; n],
     }
 
+    #[allow(unused_mut)]
     let mut rng = SmallRng::from_entropy();
-    #[allow(unused_assignments)]
     let mut adventurer = (0, n / 2);
     let mut is_found = vec![vec![false; n]; n];
     // 冒険者の初期配置
@@ -859,19 +860,13 @@ fn main() {
     }
     let mut ready_treants = vec![];
 
-    let mut score_best = f64::MAX;
-
-    // 初期配置の X 状は動的な阻止と合わせると逆効果っぽいのでしない
-
     let mut tries = 0;
     // dummy
     let mut whirlpool_used = None;
     while start_time.elapsed() < break_time_before_interactive_part {
         tries += 1;
 
-        // トレントの追加/削除をまとめて行った後に, *評価関数* がよくなれば採用する
-        let mut rt_cur = ready_treants.clone();
-        let mut ht_cur = has_tree.clone();
+        // 渦巻状に配置し, 花を目的地にされない限りは発見を阻止する
         whirlpool_used = add_treants_whirlpool(
             (0, n / 2),
             tij,
