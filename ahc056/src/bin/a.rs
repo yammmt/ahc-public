@@ -1,0 +1,253 @@
+// use petgraph::unionfind::UnionFind;
+use proconio::fastout;
+use proconio::input;
+use proconio::marker::Chars;
+use std::collections::VecDeque;
+use std::fmt::{self, Formatter};
+// use rand::rngs::SmallRng;
+// use rand::{Rng, SeedableRng};
+
+#[allow(unused_macros)]
+macro_rules! debug {
+    ($($arg:tt)+) => {
+        if cfg!(debug_assertions) {
+            eprintln!($($arg)+);
+        }
+    };
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug)]
+enum Dir {
+    Up,
+    Down,
+    Left,
+    Right,
+    Stay,
+}
+
+impl std::fmt::Display for Dir {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        match self {
+            Dir::Up => write!(f, "U"),
+            Dir::Down => write!(f, "D"),
+            Dir::Left => write!(f, "L"),
+            Dir::Right => write!(f, "R"),
+            Dir::Stay => write!(f, "S"),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct TransitionRules {
+    new_color: usize,
+    new_state: usize,
+    dir: Dir,
+}
+
+impl std::fmt::Display for TransitionRules {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "{} {} {}", self.new_color, self.new_state, self.dir)
+    }
+}
+
+#[inline]
+fn twod_to_oned((x, y): (usize, usize), n: usize) -> usize {
+    x * n + y
+}
+
+#[inline]
+fn oned_to_twod(xy: usize, n: usize) -> (usize, usize) {
+    (xy / n, xy % n)
+}
+
+#[inline]
+fn move_dir_from_1d(pfrom: usize, pto: usize, n: usize) -> Dir {
+    let pfrom_2d = oned_to_twod(pfrom, n);
+    let pto_2d = oned_to_twod(pto, n);
+    let mv_i = (
+        pto_2d.0 as isize - pfrom_2d.0 as isize,
+        pto_2d.1 as isize - pfrom_2d.1 as isize,
+    );
+    match mv_i {
+        (-1, 0) => Dir::Up,
+        (1, 0) => Dir::Down,
+        (0, -1) => Dir::Left,
+        (0, 1) => Dir::Right,
+        _ => unreachable!(),
+    }
+}
+
+/// 二点間最短経路を求める.
+/// - 最短経路が複数ある際には, どれか一つだけを返す.
+/// - 入出力はすべて一次元座標とする.
+/// - 返す経路には, 始点と終点をそれぞれ含む.
+fn shortest_path(ps: usize, gs: usize, edges: &Vec<Vec<usize>>) -> Vec<usize> {
+    let n = edges.len();
+
+    let mut que = VecDeque::new();
+    let mut comes_from = vec![None; n];
+    // (次, 遷移元)
+    // 訪問済み判定の便宜上, 始点も入れておく
+    que.push_back((ps, ps));
+    while let Some((pos_cur, pos_from)) = que.pop_front() {
+        if comes_from[pos_cur].is_some() {
+            continue;
+        }
+
+        comes_from[pos_cur] = Some(pos_from);
+        if pos_cur == gs {
+            // 枝刈り
+            break;
+        }
+
+        for &pos_next in &edges[pos_cur] {
+            if comes_from[pos_next].is_none() {
+                que.push_back((pos_next, pos_cur));
+            }
+        }
+    }
+
+    let mut ret = vec![gs];
+    let mut cur_pos = gs;
+    while let Some(comes_from) = comes_from[cur_pos] {
+        ret.push(comes_from);
+        if comes_from == ps {
+            break;
+        }
+
+        cur_pos = comes_from;
+    }
+    ret.reverse();
+
+    ret
+}
+
+#[fastout]
+fn main() {
+    input! {
+        n: usize,
+        k: usize,
+        // TODO: 活用したい
+        _t: usize,
+        vnn: [Chars; n],
+        hnn: [Chars; n - 1],
+        xyk: [(usize, usize); k],
+    }
+    let grid_size_1d = n * n;
+
+    // 移動可能な方向を定義
+    let mut edges = vec![vec![]; n * n];
+    for (i, v) in vnn.iter().enumerate() {
+        for (j, &vv) in v.iter().enumerate() {
+            if vv == '0' {
+                let a = twod_to_oned((i, j), n);
+                let b = twod_to_oned((i, j + 1), n);
+                edges[a].push(b);
+                edges[b].push(a);
+            }
+        }
+    }
+    for (i, h) in hnn.iter().enumerate() {
+        for (j, &hh) in h.iter().enumerate() {
+            if hh == '0' {
+                let a = twod_to_oned((i, j), n);
+                let b = twod_to_oned((i + 1, j), n);
+                edges[a].push(b);
+                edges[b].push(a);
+            }
+        }
+    }
+
+    // 目的地順に最短経路を求める
+    // 経路は後の迂回試行を考えると線形リストの方が都合がよいかもしれない
+    let mut paths = vec![];
+    let mut cur_pos = twod_to_oned(*xyk.first().unwrap(), n);
+    for &xy in xyk.iter().skip(1) {
+        let goal = twod_to_oned(xy, n);
+        // TODO: 経路選択に乱択を入れる
+        let path = shortest_path(cur_pos, goal, &edges);
+        // 直前の終点 (目的地) と今の始点の重複除去は reverse -> pop -> reverse -> append でも
+        // 動作はするが, reverse 二度かける分の定数倍が嫌
+        if paths.is_empty() {
+            paths.push(path[0]);
+        }
+        for &p in path.iter().skip(1) {
+            paths.push(p);
+        }
+
+        cur_pos = *path.last().unwrap();
+    }
+    debug!("paths: {paths:?}");
+
+    // 経路を可能な限り一筆書きに辿る
+    // 内部状態の更新は, 次に訪問するマスがその内部状態で訪問済みであった時点
+    // TODO: この方法では, state をこれ以上削減し辛い
+    //       色を塗り替えて再利用する方法は思い浮かぶのだが, 実装が辛そう...
+    let mut cur_pos = twod_to_oned(*xyk.first().unwrap(), n);
+    let mut cur_state = 0;
+    let mut move_dirs = vec![vec![None; k]; grid_size_1d];
+    let mut state_update_points = vec![];
+    for (i, &p) in paths.iter().enumerate() {
+        if i == 0 {
+            continue;
+        }
+
+        move_dirs[cur_pos][cur_state] = Some(move_dir_from_1d(cur_pos, p, n));
+        if i + 1 < paths.len() - 1 && move_dirs[paths[i + 1]][cur_state].is_some() {
+            state_update_points.push(cur_pos);
+            cur_state += 1;
+        }
+
+        cur_pos = p;
+    }
+    let state_num = cur_state + 1;
+    debug!("state_update_points: {state_update_points:?}");
+    debug!("state_num: {state_num}");
+
+    // TODO: 色数削減
+    // - 一度も通過しない頂点があれば, 適当な色として扱う
+    // - すべての二つの頂点の組について, 内部状態に重複がなければマージする
+    // - 異なる二つの内部状態について, 同じマスを通過しない場合にはマージする
+    let colors = (0..n * n).collect::<Vec<usize>>();
+    let color_num = n * n;
+
+    // 遷移規則
+    let mut rules = vec![];
+    for i in 0..grid_size_1d {
+        for j in 0..k {
+            if let Some(dir) = move_dirs[i][j] {
+                rules.push((
+                    // (色, 内部状態)
+                    (i, j),
+                    // 塗り替える色, 新しい内部状態, 移動方向
+                    TransitionRules {
+                        new_color: i,
+                        new_state: if j < state_update_points.len() && i == state_update_points[j] {
+                            j + 1
+                        } else {
+                            j
+                        },
+                        dir,
+                    },
+                ));
+            }
+        }
+    }
+
+    // 出力
+    println!("{color_num} {state_num} {}", rules.len());
+    for i in 0..n {
+        for j in 0..n {
+            print!("{}", colors[twod_to_oned((i, j), n)]);
+            if j != n - 1 {
+                print!(" ");
+            } else {
+                println!();
+            }
+        }
+    }
+    for ((c, q), t) in rules {
+        println!("{c} {q} {t}");
+    }
+}
