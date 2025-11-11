@@ -1,9 +1,9 @@
 use proconio::fastout;
 use proconio::input;
 use proconio::marker::Chars;
+use rand::SeedableRng;
 use rand::rngs::SmallRng;
 use rand::seq::SliceRandom;
-use rand::{RngCore, SeedableRng};
 use std::collections::VecDeque;
 use std::fmt::{self, Formatter};
 use std::time::{Duration, Instant};
@@ -18,7 +18,7 @@ macro_rules! debug {
 }
 
 // 2 s
-const TIME_LIMIT_MS: u64 = 1800;
+const TIME_LIMIT_MS: u64 = 1500;
 // const TIME_LIMIT_MS: u64 = 10000;
 
 #[allow(dead_code)]
@@ -87,10 +87,7 @@ fn move_dir_from_1d(pfrom: usize, pto: usize, n: usize) -> Dir {
 /// - 最短経路が複数ある際には, どれか一つだけを返す.
 /// - 入出力はすべて一次元座標とする.
 /// - 返す経路には, 始点と終点をそれぞれ含む.
-fn shortest_path<T>(ps: usize, gs: usize, edges: &Vec<Vec<usize>>, rng: &mut T) -> Vec<usize>
-where
-    T: RngCore,
-{
+fn shortest_path(ps: usize, gs: usize, edges: &Vec<Vec<usize>>) -> Vec<usize> {
     let n = edges.len();
 
     let mut que = VecDeque::new();
@@ -109,11 +106,7 @@ where
             break;
         }
         // 完全乱択より経路重複しない側に手厚くした方がよさそうなのだが
-        // TODO: remove!
-        let mut indices: Vec<usize> = (0..edges[pos_cur].len()).collect();
-        indices.shuffle(rng);
-        for i in indices {
-            let pos_next = edges[pos_cur][i];
+        for &pos_next in &edges[pos_cur] {
             if comes_from[pos_next].is_none() {
                 que.push_back((pos_next, pos_cur));
             }
@@ -236,7 +229,7 @@ fn main() {
         for &xy in xyk.iter().skip(1) {
             let goal = twod_to_oned(xy, n);
             // TODO: 経路選択に乱択を入れる
-            let path = shortest_path(cur_pos, goal, &edges, &mut rng);
+            let path = shortest_path(cur_pos, goal, &edges);
             // 直前の終点 (目的地) と今の始点の重複除去は reverse -> pop -> reverse -> append でも
             // 動作はするが, reverse 二度かける分の定数倍が嫌
             if paths.is_empty() {
