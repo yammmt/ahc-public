@@ -109,6 +109,7 @@ where
             break;
         }
         // 完全乱択より経路重複しない側に手厚くした方がよさそうなのだが
+        // TODO: remove!
         let mut indices: Vec<usize> = (0..edges[pos_cur].len()).collect();
         indices.shuffle(rng);
         for i in indices {
@@ -136,6 +137,13 @@ where
 
 /// 二つの色に割り当てられた行動を確認し, 相反する行動がなければ `true` を返す.
 fn could_merge_move(dir_i: &Vec<Option<Dir>>, dir_j: &Vec<Option<Dir>>, state_num: usize) -> bool {
+    // 不要色同士をマージしない
+    let some_appears_i = dir_i.iter().any(|x| x.is_some());
+    let some_appears_j = dir_j.iter().any(|x| x.is_some());
+    if !some_appears_i && !some_appears_j {
+        return false;
+    }
+
     for i in 0..state_num {
         if dir_i[i].is_some() && dir_j[i].is_some() && dir_i[i] != dir_j[i] {
             return false;
@@ -147,13 +155,28 @@ fn could_merge_move(dir_i: &Vec<Option<Dir>>, dir_j: &Vec<Option<Dir>>, state_nu
 
 /// 色 b の行動を色 a にマージする. エラー判定は行わないので, 実行可能判定は呼び元が責任を追う.
 /// マージされた色 b の行動は, すべて `None` になる.
-fn merge_move(dirs: &mut Vec<Vec<Option<Dir>>>, a: usize, b: usize) {
-    for i in 0..dirs[0].len() {
-        if dirs[b][i].is_some() {
-            dirs[a][i] = dirs[b][i];
-            dirs[b][i] = None;
+fn merge_colors(
+    colors: &mut Vec<usize>,
+    use_colors: &mut Vec<bool>,
+    move_dirs: &mut Vec<Vec<Option<Dir>>>,
+    a: usize,
+    b: usize,
+) {
+    // move rule を a 側に移す
+    for i in 0..move_dirs[0].len() {
+        if move_dirs[b][i].is_some() {
+            move_dirs[a][i] = move_dirs[b][i];
+            move_dirs[b][i] = None;
         }
     }
+    // 色代表を a に
+    // TODO: UF で高速化
+    for c in colors.iter_mut() {
+        if *c == b {
+            *c = a;
+        }
+    }
+    use_colors[b] = false;
 }
 
 #[fastout]
@@ -262,21 +285,27 @@ fn main() {
         // None 同士でマージ可能になるとかなり遅くなるので避ける
         let mut colors = (0..grid_size_1d).collect::<Vec<usize>>();
         let mut use_colors = vec![true; grid_size_1d];
-        // TODO: マージ順は乱択できる
+        // マージ順は乱択できる
+        let mut indices = (0..grid_size_1d).collect::<Vec<usize>>();
+        indices.shuffle(&mut rng);
         for i in 0..grid_size_1d {
-            if !use_colors[i] || is_state_update_points[i] {
+            let ii = indices[i];
+            if !use_colors[ii] || is_state_update_points[ii] {
                 continue;
             }
 
             for j in i + 1..grid_size_1d {
-                if !use_colors[j] || is_state_update_points[j] || colors[i] == colors[j] {
+                let jj = indices[j];
+                if !use_colors[jj] || is_state_update_points[jj] {
                     continue;
                 }
 
-                if could_merge_move(&move_dirs[i], &move_dirs[j], state_num) {
-                    merge_move(&mut move_dirs, i, j);
-                    colors[j] = i;
-                    use_colors[j] = false;
+                let a = colors[ii];
+                let b = colors[jj];
+                if could_merge_move(&move_dirs[a], &move_dirs[b], state_num) {
+                    let aa = a.min(b);
+                    let bb = a.max(b);
+                    merge_colors(&mut colors, &mut use_colors, &mut move_dirs, aa, bb);
                 }
             }
         }
