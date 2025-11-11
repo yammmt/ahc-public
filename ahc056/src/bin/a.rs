@@ -1,4 +1,3 @@
-// use petgraph::unionfind::UnionFind;
 use proconio::fastout;
 use proconio::input;
 use proconio::marker::Chars;
@@ -17,7 +16,7 @@ macro_rules! debug {
 }
 
 #[allow(dead_code)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Dir {
     Up,
     Down,
@@ -123,6 +122,28 @@ fn shortest_path(ps: usize, gs: usize, edges: &Vec<Vec<usize>>) -> Vec<usize> {
     ret
 }
 
+/// 二つの色に割り当てられた行動を確認し, 相反する行動がなければ `true` を返す.
+fn could_merge_move(dir_i: &Vec<Option<Dir>>, dir_j: &Vec<Option<Dir>>, state_num: usize) -> bool {
+    for i in 0..state_num {
+        if dir_i[i].is_some() && dir_j[i].is_some() && dir_i[i] != dir_j[i] {
+            return false;
+        }
+    }
+
+    true
+}
+
+/// 色 b の行動を色 a にマージする. エラー判定は行わないので, 実行可能判定は呼び元が責任を追う.
+/// マージされた色 b の行動は, すべて `None` になる.
+fn merge_move(dirs: &mut Vec<Vec<Option<Dir>>>, a: usize, b: usize) {
+    for i in 0..dirs[0].len() {
+        if dirs[b][i].is_some() {
+            dirs[a][i] = dirs[b][i];
+            dirs[b][i] = None;
+        }
+    }
+}
+
 #[fastout]
 fn main() {
     input! {
@@ -186,7 +207,10 @@ fn main() {
     //       色を塗り替えて再利用する方法は思い浮かぶのだが, 実装が辛そう...
     let mut cur_pos = twod_to_oned(*xyk.first().unwrap(), n);
     let mut cur_state = 0;
+    // move_dirs[色][内部状態]
     let mut move_dirs = vec![vec![None; k]; grid_size_1d];
+    // この二つの変数は意図が重複しとらんか
+    let mut is_state_update_points = vec![false; grid_size_1d];
     let mut state_update_points = vec![];
     for (i, &p) in paths.iter().enumerate() {
         if i == 0 {
@@ -196,6 +220,7 @@ fn main() {
         move_dirs[cur_pos][cur_state] = Some(move_dir_from_1d(cur_pos, p, n));
         if i + 1 < paths.len() - 1 && move_dirs[paths[i + 1]][cur_state].is_some() {
             state_update_points.push(cur_pos);
+            is_state_update_points[cur_pos] = true;
             cur_state += 1;
         }
 
@@ -205,24 +230,60 @@ fn main() {
     debug!("state_update_points: {state_update_points:?}");
     debug!("state_num: {state_num}");
 
-    // TODO: 色数削減
+    // 色数削減
     // - 一度も通過しない頂点があれば, 適当な色として扱う
     // - すべての二つの頂点の組について, 内部状態に重複がなければマージする
-    // - 異なる二つの内部状態について, 同じマスを通過しない場合にはマージする
-    let colors = (0..n * n).collect::<Vec<usize>>();
-    let color_num = n * n;
+    // None 同士でマージ可能になるとかなり遅くなるので避ける
+    let mut colors = (0..grid_size_1d).collect::<Vec<usize>>();
+    let mut use_colors = vec![true; grid_size_1d];
+    // TODO: マージ順は乱択できる
+    for i in 0..grid_size_1d {
+        if !use_colors[i] || is_state_update_points[i] {
+            continue;
+        }
+
+        for j in i + 1..grid_size_1d {
+            if !use_colors[j] || is_state_update_points[j] || colors[i] == colors[j] {
+                continue;
+            }
+
+            if could_merge_move(&move_dirs[i], &move_dirs[j], state_num) {
+                merge_move(&mut move_dirs, i, j);
+                colors[j] = i;
+                use_colors[j] = false;
+            }
+        }
+    }
+    debug!("colors: {colors:?}");
+    debug!("use_colors: {use_colors:?}");
+
+    // 色の座圧
+    let mut color2outcolor = vec![None; grid_size_1d];
+    let mut color_i = 0;
+    for (i, &c) in use_colors.iter().enumerate() {
+        if c {
+            color2outcolor[i] = Some(color_i);
+            color_i += 1;
+        }
+    }
+    debug!("color2outcolor: {color2outcolor:?}");
+    let color_num = color_i;
+
+    // TODO: 異なる二つの内部状態について, 同じマスを通過しない場合にはマージする
 
     // 遷移規則
     let mut rules = vec![];
     for i in 0..grid_size_1d {
+        let cur_color = color2outcolor[colors[i]].unwrap();
         for j in 0..k {
             if let Some(dir) = move_dirs[i][j] {
                 rules.push((
                     // (色, 内部状態)
-                    (i, j),
+                    (cur_color, j),
                     // 塗り替える色, 新しい内部状態, 移動方向
                     TransitionRules {
-                        new_color: i,
+                        // 色の塗り替えは現状考慮せず
+                        new_color: cur_color,
                         new_state: if j < state_update_points.len() && i == state_update_points[j] {
                             j + 1
                         } else {
@@ -237,9 +298,13 @@ fn main() {
 
     // 出力
     println!("{color_num} {state_num} {}", rules.len());
+    // 色の出力
     for i in 0..n {
         for j in 0..n {
-            print!("{}", colors[twod_to_oned((i, j), n)]);
+            print!(
+                "{}",
+                color2outcolor[colors[twod_to_oned((i, j), n)]].unwrap()
+            );
             if j != n - 1 {
                 print!(" ");
             } else {
@@ -247,6 +312,7 @@ fn main() {
             }
         }
     }
+    // 遷移規則の出力
     for ((c, q), t) in rules {
         println!("{c} {q} {t}");
     }
