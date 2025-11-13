@@ -250,13 +250,19 @@ fn main() {
         while ptrn_sqrt * ptrn_sqrt < paths.len() {
             ptrn_sqrt += 1;
         }
+        let (color_num, state_num) = if (ptrn_sqrt - 1) * ptrn_sqrt >= paths.len() {
+            (ptrn_sqrt - 1, ptrn_sqrt)
+        } else {
+            (ptrn_sqrt, ptrn_sqrt)
+        };
+
         // moves_each_vertex[i][j]: マス i を j 回目に通過した際の (色, 内部状態)
         let mut moves_each_vertex = vec![vec![None; k]; grid_size_1d];
         let mut vertex_pass_count = vec![0; grid_size_1d];
         let mut init_colors = vec![0; grid_size_1d];
         for (i, &p) in paths.iter().enumerate() {
-            let cur_color = i / ptrn_sqrt;
-            let cur_state = i % ptrn_sqrt;
+            let cur_color = i / state_num;
+            let cur_state = i % state_num;
             moves_each_vertex[p][vertex_pass_count[p]] = Some((cur_color, cur_state));
             if vertex_pass_count[p] == 0 {
                 init_colors[p] = cur_color;
@@ -265,12 +271,12 @@ fn main() {
         }
 
         // moves[色][内部状態] = (塗り替える色, 新しい内部状態, 移動方向)
-        let mut ans_moves = vec![vec![None; ptrn_sqrt]; ptrn_sqrt];
+        let mut ans_moves = vec![vec![None; state_num]; color_num];
         vertex_pass_count.fill(0);
         // 最後のマスに指示は不要であるので最初から省く
         for (i, &p) in paths.iter().take(paths.len() - 1).enumerate() {
-            let cur_color = i / ptrn_sqrt;
-            let cur_state = i % ptrn_sqrt;
+            let cur_color = i / state_num;
+            let cur_state = i % state_num;
             let next_p = paths[i + 1];
             let new_color = if let Some(m) = moves_each_vertex[p][vertex_pass_count[p] + 1] {
                 m.0
@@ -291,9 +297,6 @@ fn main() {
             vertex_pass_count[p] += 1;
         }
 
-        let color_num = ptrn_sqrt;
-        let state_num = ptrn_sqrt;
-
         let cur_score = color_num + state_num;
         if cur_score < best_score {
             best_score = cur_score;
@@ -302,8 +305,8 @@ fn main() {
             init_colors_ans = init_colors;
 
             let mut rules_num = 0;
-            for i in 0..ptrn_sqrt {
-                for j in 0..ptrn_sqrt {
+            for i in 0..color_num {
+                for j in 0..state_num {
                     if ans_moves[i][j].is_none() {
                         break;
                     }
