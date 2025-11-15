@@ -241,6 +241,10 @@ fn merge_moves(
     if path_i_cur == path_j_cur
         // 直前に通過するマスの遷移規則出力が設定されていない
         //   => 出力は最後にまとめるでよいので書かない
+        // 直前に通過するマスの遷移規則入力が設定されていない
+        //   => 共通化済だと詰むことがあるので, ひとまず全部避ける...でもないはずなんだけれどなぁ
+        || !(path_i_cur > 0 && path_rule_in[path_i_cur - 1].is_none())
+        || !(path_j_cur > 0 && path_rule_in[path_j_cur - 1].is_none())
 
         // 今回通過するマスの入力が設定済でない
         || !(path_rule_in[path_i_cur].is_none() && path_rule_in[path_j_cur].is_none())
@@ -605,8 +609,6 @@ fn main() {
             }
         }
         debug!("paths: {paths:?}");
-        // FIXME: この時点で重複発生
-        debug!("{}", status_assigned_per_color[9][11]);
         debug!("path_rule_in_after_merge: {path_rule_in:?}");
 
         // マージされていない頂点に, 独立した色と内部状態とを割り振る
@@ -633,7 +635,7 @@ fn main() {
 
         // 初期色は 0, 一度も通過しないマスは 0 のまま
         let mut init_colors = vec![0; grid_size_1d];
-        let mut rules = vec![];
+        let mut rules: Vec<Vec<Option<TransitionRules>>> = vec![vec![None; state_num]; color_num];
         let mut vertex_pass_count = vec![0; grid_size_1d];
         for (i, &p) in paths.iter().take(paths.len() - 1).enumerate() {
             if vertex_pass_count[p] == 0 {
@@ -646,6 +648,9 @@ fn main() {
             }
 
             // 自身のマスを次に通過した際の色
+            // FIXME: 0001 他で重複
+            // 7 30 7 30 L
+            // 7 30 9 30 L
             let new_color = if let Some(i) = path_idx_same_vertex_next(
                 i,
                 &paths,
@@ -656,8 +661,10 @@ fn main() {
             {
                 path_rule_in[i].unwrap().color
             } else {
-                // もう通らないのでなんでもよい
-                0
+                // 自身のマスは通らずとも, 共通化した他のマスが通る可能性がある
+                // とりあえずは値を入れるが, 後で上書きされるかも
+                // というよかこれだけだとだめ
+                path_rule_in[i].unwrap().color
             };
             let new_state = if i == paths.len() - 2 {
                 0
@@ -665,20 +672,34 @@ fn main() {
                 path_rule_in[i + 1].unwrap().state
             };
             let dir = move_dir_from_1d(paths[i], paths[i + 1], n);
-            rules.push((
-                path_rule_in[i].unwrap(),
-                TransitionRules {
+
+            let cin = path_rule_in[i].unwrap().color;
+            let sin = path_rule_in[i].unwrap().state;
+            if let Some(t) = rules[cin][sin] {
+                if t.new_color == cin {
+                    rules[cin][sin] = Some(TransitionRules {
+                        new_color,
+                        new_state,
+                        dir
+                    });
+                }
+            } else {
+                rules[cin][sin] = Some(TransitionRules {
                     new_color,
                     new_state,
                     dir,
-                },
-            ));
+                });
+            }
 
             vertex_pass_count[p] += 1;
         }
+
+        let mut rules = vec![];
+        for {
+            rules.push();
+        }
+
         debug!("rules: {rules:?}");
-        rules.sort_unstable();
-        rules.dedup();
         let mut color_num = 0;
         let mut state_num = 0;
         for &c in &init_colors {
