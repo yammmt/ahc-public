@@ -635,7 +635,8 @@ fn main() {
 
         // 初期色は 0, 一度も通過しないマスは 0 のまま
         let mut init_colors = vec![0; grid_size_1d];
-        let mut rules: Vec<Vec<Option<TransitionRules>>> = vec![vec![None; state_num]; color_num];
+        let mut rules = vec![];
+        // let mut rules: Vec<Vec<Option<TransitionRules>>> = vec![vec![None; state_num]; color_num];
         let mut vertex_pass_count = vec![0; grid_size_1d];
         for (i, &p) in paths.iter().take(paths.len() - 1).enumerate() {
             if vertex_pass_count[p] == 0 {
@@ -651,19 +652,17 @@ fn main() {
             // FIXME: 0001 他で重複
             // 7 30 7 30 L
             // 7 30 9 30 L
-            let new_color = if let Some(i) = path_idx_same_vertex_next(
+            let new_color = if let Some(ii) = path_idx_same_vertex_next(
                 i,
                 &paths,
                 &path_idx_to_vertex_pass_count,
                 &vertex_pass_count_to_path_idx,
                 &vertex_pass_counts,
-            ) && i < path_rule_in.len()
+            ) && ii < path_rule_in.len()
             {
-                path_rule_in[i].unwrap().color
+                path_rule_in[ii].unwrap().color
             } else {
-                // 自身のマスは通らずとも, 共通化した他のマスが通る可能性がある
-                // とりあえずは値を入れるが, 後で上書きされるかも
-                // というよかこれだけだとだめ
+                // 雑な 0 埋めはだめ, 自身のマスは通らずとも, 共通化した他のマスが通る可能性がある
                 path_rule_in[i].unwrap().color
             };
             let new_state = if i == paths.len() - 2 {
@@ -673,32 +672,44 @@ fn main() {
             };
             let dir = move_dir_from_1d(paths[i], paths[i + 1], n);
 
-            let cin = path_rule_in[i].unwrap().color;
-            let sin = path_rule_in[i].unwrap().state;
-            if let Some(t) = rules[cin][sin] {
-                if t.new_color == cin {
-                    rules[cin][sin] = Some(TransitionRules {
-                        new_color,
-                        new_state,
-                        dir
-                    });
-                }
-            } else {
-                rules[cin][sin] = Some(TransitionRules {
+            rules.push((
+                path_rule_in[i].unwrap(),
+                TransitionRules {
                     new_color,
                     new_state,
-                    dir,
-                });
-            }
+                    dir
+                }
+            ));
+
+            // let cin = path_rule_in[i].unwrap().color;
+            // let sin = path_rule_in[i].unwrap().state;
+            // if let Some(t) = rules[cin][sin] {
+            //     if t.new_color == cin {
+            //         rules[cin][sin] = Some(TransitionRules {
+            //             new_color,
+            //             new_state,
+            //             dir
+            //         });
+            //     }
+            // } else {
+            //     rules[cin][sin] = Some(TransitionRules {
+            //         new_color,
+            //         new_state,
+            //         dir,
+            //     });
+            // }
 
             vertex_pass_count[p] += 1;
         }
 
-        let mut rules = vec![];
-        for {
-            rules.push();
-        }
+        // FIXME: 形式合わせる
+        // let mut rules = vec![];
+        // for {
+        //     rules.push();
+        // }
 
+        rules.sort_unstable();
+        rules.dedup();
         debug!("rules: {rules:?}");
         let mut color_num = 0;
         let mut state_num = 0;
