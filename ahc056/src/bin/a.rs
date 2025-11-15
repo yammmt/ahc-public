@@ -22,7 +22,7 @@ const TIME_LIMIT_MS: u64 = 1500;
 // const TIME_LIMIT_MS: u64 = 10000;
 
 #[allow(dead_code)]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 enum Dir {
     Up,
     Down,
@@ -44,7 +44,7 @@ impl std::fmt::Display for Dir {
 }
 
 // TODO: in もまとめるべきような
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 struct TransitionRules {
     new_color: usize,
     new_state: usize,
@@ -57,28 +57,15 @@ impl std::fmt::Display for TransitionRules {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-struct RuleInWIP {
-    cur_color: Option<usize>,
-    cur_state: Option<usize>,
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
+struct RuleIn {
+    color: usize,
+    state: usize,
 }
 
-impl RuleInWIP {
-    fn is_empty(&self) -> bool {
-        self.cur_color.is_none() && self.cur_state.is_none()
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-struct RuleOutWIP {
-    new_color: Option<usize>,
-    new_state: Option<usize>,
-    dir: Option<Dir>,
-}
-
-impl RuleOutWIP {
-    fn is_empty(&self) -> bool {
-        self.new_color.is_none() && self.new_state.is_none() && self.dir.is_none()
+impl std::fmt::Display for RuleIn {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "{} {}", self.color, self.state)
     }
 }
 
@@ -107,6 +94,32 @@ fn move_dir_from_1d(pfrom: usize, pto: usize, n: usize) -> Dir {
         (0, 1) => Dir::Right,
         _ => unreachable!(),
     }
+}
+
+/// paths[i] と一致する要素 j>i を満たす最小の j を返す.
+fn path_idx_same_vertex_next(
+    i: usize,
+    paths: &[usize],
+    path_idx_to_vertex_pass_count: &[usize],
+    vertex_pass_count_to_path_idx: &[Vec<usize>],
+    vertex_pass_counts: &[usize],
+) -> Option<usize> {
+    // FIXME: なんか辻褄怪しい...
+    if i >= path_idx_to_vertex_pass_count.len() {
+        return None;
+    }
+
+    let vpc = path_idx_to_vertex_pass_count[i];
+    if vpc == vertex_pass_counts[paths[i]] - 1 {
+        return None;
+    }
+
+    // debug!("i: {i}");
+    // debug!("paths: {paths:?}");
+    // debug!("path_idx_to_vertex_pass_count: {path_idx_to_vertex_pass_count:?}");
+    // debug!("vertex_pass_count_to_path_idx: {vertex_pass_count_to_path_idx:?}");
+    // debug!("vertex_pass_counts: {vertex_pass_counts:?}");
+    Some(vertex_pass_count_to_path_idx[paths[i]][vpc + 1])
 }
 
 /// 二点間最短経路を求める.
@@ -154,18 +167,19 @@ fn shortest_path(ps: usize, gs: usize, edges: &Vec<Vec<usize>>) -> Vec<usize> {
     ret
 }
 
-/// 二つの行動に対し同じ遷移規則の入出力を割り当てられるか試行し, 成功時には真を返しつつ,
+/// 二つの行動に対し同じ遷移規則の入力を割り当てられるか試行し, 成功時には真を返しつつ,
 /// 可変参照で受け取った配列をマージして返す.
-/// - 引数である二つの行動に割り振る遷移規則 (出力) は, 色の塗り替え及び内部状態の更新は
-///   しないものとする.
-/// - マージにより state の削減が見込めない場合には, マージ不可として扱う.
-///   - 由来: 内部状態数の削減を state > color の順で行っているため
+// - 引数である二つの行動に割り振る遷移規則 (出力) は, 色の塗り替え及び内部状態の更新は
+//   しないものとする.
+// - マージにより state の削減が見込めない場合には, マージ不可として扱う.
+//   - 由来: 内部状態数の削減を state > color の順で行っているため
 // - vec で受け取っている引数は HashSet でもよいし, そっちの方が早いかも？
 //   - でも vec の長さもたいしたことなさそうであり, 線形でもまぁなような
 // - 地獄のような複雑度であり, なんとかしたい...
-// TODO: 入力だけ巻き取っておけばよいよね？
-//       - 新しい色: 同じマスを次に通る時の色
-//       - 新しい内部状態: 次に進むマスの状態
+// 入力だけ巻き取っておけばよいよね？
+//   - 新しい色: 同じマスを次に通る時の色
+//   - 新しい内部状態: 次に進むマスの状態
+// TODO: 色/状態数の削減に主観を置く
 fn merge_moves(
     n: usize,
     path_i_cur: usize,
@@ -177,12 +191,13 @@ fn merge_moves(
     // マス i の j 度目の通過に対応する paths[k] の k を返す
     vertex_pass_count_to_path_idx: &[Vec<usize>],
     status_assigned_per_color: &mut [Vec<bool>],
-
-    path_rule_in: &mut [RuleInWIP],
-    path_rule_out: &mut [RuleOutWIP],
-    init_colors: &mut [Option<usize>],
+    path_rule_in: &mut [Option<RuleIn>],
 ) -> bool {
-    if path_i_cur == 0 || path_j_cur == 0 {
+    if path_i_cur == 0
+        || path_j_cur == 0
+        || path_i_cur >= path_j_cur
+        || path_j_cur >= paths.len() - 1
+    {
         // 一旦実装で楽をする
         return false;
     }
@@ -190,185 +205,203 @@ fn merge_moves(
     let color_num = status_assigned_per_color.len();
     let state_num = status_assigned_per_color[0].len();
 
-    // paths[i] と一致する要素 j<i を満たす最大の j を返す.
-    let path_idx_same_vertex_prev = |i: usize| {
-        let vpc = path_idx_to_vertex_pass_count[i];
-        if vpc == 0 {
-            return None;
-        }
+    // // paths[i] と一致する要素 j<i を満たす最大の j を返す.
+    // let _path_idx_same_vertex_prev = |i: usize| {
+    //     let vpc = path_idx_to_vertex_pass_count[i];
+    //     if vpc == 0 {
+    //         return None;
+    //     }
+    //     Some(vertex_pass_count_to_path_idx[paths[i]][vpc - 1])
+    // };
 
-        Some(vertex_pass_count_to_path_idx[paths[i]][vpc - 1])
-    };
-    // paths[i] と一致する要素 j>i を満たす最小の j を返す.
-    let path_idx_same_vertex_next = |i: usize| {
-        // FIXME: なんか辻褄怪しい...
-        if i > path_idx_to_vertex_pass_count.len() {
-            return None;
-        }
+    // 進行方向
+    let dir_i = move_dir_from_1d(paths[path_i_cur], paths[path_i_cur + 1], n);
+    let dir_j = move_dir_from_1d(paths[path_j_cur], paths[path_j_cur + 1], n);
+    if dir_i != dir_j {
+        return false;
+    }
 
-        let vpc = path_idx_to_vertex_pass_count[i];
-        if vpc == vertex_pass_counts[paths[i]] - 1 {
-            return None;
-        }
+    // 同じマスを次回通過時のインデックス
+    let path_idx_same_vertex_i_next = path_idx_same_vertex_next(
+        path_i_cur,
+        paths,
+        path_idx_to_vertex_pass_count,
+        vertex_pass_count_to_path_idx,
+        vertex_pass_counts,
+    );
+    let path_idx_same_vertex_j_next = path_idx_same_vertex_next(
+        path_j_cur,
+        paths,
+        path_idx_to_vertex_pass_count,
+        vertex_pass_count_to_path_idx,
+        vertex_pass_counts,
+    );
 
-        Some(vertex_pass_count_to_path_idx[paths[i]][vpc + 1])
-    };
-
-    let path_idx_same_vertex_i_prev = path_idx_same_vertex_prev(path_i_cur);
-    let path_idx_same_vertex_j_prev = path_idx_same_vertex_prev(path_j_cur);
-    let path_idx_same_vertex_i_next = path_idx_same_vertex_next(path_i_cur);
-    let path_idx_same_vertex_j_next = path_idx_same_vertex_next(path_j_cur);
-
-    let path_idx_next_vertex_i_prev = path_idx_same_vertex_prev(path_i_cur + 1);
-    let path_idx_next_vertex_j_prev = path_idx_same_vertex_prev(path_j_cur + 1);
-
+    // 一行目はインデント目的...
     if path_i_cur == path_j_cur
         // 直前に通過するマスの遷移規則出力が設定されていない
-        || !((path_i_cur == 0 && init_colors[path_i_cur].is_none() || path_rule_out[path_i_cur - 1].is_empty())
-                && ((path_j_cur == 0 && init_colors[path_j_cur].is_none()) || path_rule_out[path_j_cur - 1].is_empty()))
+        //   => 出力は最後にまとめるでよいので書かない
 
         // 今回通過するマスの入力が設定済でない
-        || !(path_rule_in[path_i_cur].is_empty() && path_rule_in[path_j_cur].is_empty())
+        || !(path_rule_in[path_i_cur].is_none() && path_rule_in[path_j_cur].is_none())
         // 今回通過するマスの出力が設定済でない
-        || !(path_rule_out[path_i_cur].is_empty() && path_rule_out[path_j_cur].is_empty())
+        //   => 出力は最後にまとめるでよいので書かない
         // 今回通過するマスについて, 前回通過時の遷移規則出力にて塗りつぶす色が設定されていない
-        || !((path_idx_same_vertex_i_prev.is_none() && init_colors[path_i_cur].is_none()) || path_rule_out[path_idx_same_vertex_i_prev.unwrap()].new_color.is_none())
-        || !((path_idx_same_vertex_j_prev.is_none() && init_colors[path_j_cur].is_none()) || path_rule_out[path_idx_same_vertex_j_prev.unwrap()].new_color.is_none())
+        //   => 出力は最後にまとめるでよいので書かない
         // 今回通過するマスの次回通過時の遷移規則入力にて色が設定されていない
-        || !(path_idx_same_vertex_i_next.is_none() || path_rule_in[path_idx_same_vertex_i_next.unwrap()].cur_color.is_none())
-        || !(path_idx_same_vertex_j_next.is_none() || path_rule_in[path_idx_same_vertex_j_next.unwrap()].cur_color.is_none())
+        || !(path_idx_same_vertex_i_next.is_none() || path_idx_same_vertex_i_next == Some(paths.len() - 1) || path_rule_in[path_idx_same_vertex_i_next.unwrap()].is_none())
+        //   path_rules_in は最終パスを省いているので -1 判定
+        || !(path_idx_same_vertex_j_next.is_none() || path_idx_same_vertex_j_next == Some(paths.len() - 1) || path_rule_in[path_idx_same_vertex_j_next.unwrap()].is_none())
 
         // 直後に通過するマスの遷移規則入力が設定されていない
-        || !((path_i_cur == paths.len() - 1 || path_rule_in[path_i_cur + 1].is_empty())
-                && (path_j_cur == paths.len() - 1 || path_rule_in[path_j_cur + 1].is_empty()))
-        // 直後に通過するマスの前回通過時に塗りつぶす色が設定されていない
-        // TODO: 初期色
-        || !((path_i_cur == paths.len() - 1 || (path_idx_next_vertex_i_prev.is_none() && init_colors[path_idx_next_vertex_i_prev.unwrap()].is_none()) || path_rule_out[path_idx_next_vertex_i_prev.unwrap()].new_color.is_none())
-            && (path_j_cur == paths.len() - 1 || (path_idx_next_vertex_j_prev.is_none() && init_colors[path_idx_next_vertex_j_prev.unwrap()].is_none()) || path_rule_out[path_idx_next_vertex_j_prev.unwrap()].new_color.is_none()))
+        || !((path_i_cur >= paths.len() - 2 || path_rule_in[path_i_cur + 1].is_none())
+                && (path_j_cur >= paths.len() - 2 || path_rule_in[path_j_cur + 1].is_none()))
+    // 直後に通過するマスの前回通過時に塗りつぶす色が設定されていない
+    //   => 出力は最後にまとめるでよいので書かない
+    // TODO: 初期色？
     {
         return false;
     }
 
-    // 今回割り当てる色と状態, 及び今回のマスを通過後に通るマスの色を決める
+    // 以下の色/状態を選択する
+    // - 今回割り当てる色と状態
+    // - 今回のマス通過直後に通るマスの色を決める (内部状態は引き継ぐ)
+    // - 今回のマスを次に通過する際の内部状態 (色は引き継ぐ)
+    //   - TODO: 通らない場合はスルーできる
+    // つまりは, 色 c, 内部状態 s を今回割り当てるのであれば,
+    // - (c, s) が使用可能である
+    // - 内部状態 s で使用可能な色が (c, s) 以外に二つ以上残っている
+    // - 色 c で使用可能な内部状態が (c, s) 以外に二つ以上残っている
     let mut use_cur_color = None;
     let mut use_cur_state = None;
-    let mut use_colors_after_ij = [None, None];
-    let mut used_status_min = usize::MAX;
-    // 今回割り当てる (色 c, 内部状態 s) の条件:
-    // - (c, s) が未使用であること
-    // - (a, s) 及び (b, s) が未使用である色 a, b が存在すること
-    // かつ, 削減幅を大きくするため, 使用済み内部状態数が最小のものを使う.
-    for i in 0..color_num {
-        let mut use_status_candidate = None;
-        let mut used_status_count = 0;
-        let mut use_colors_after_candidate = [None, None];
+    let mut use_colors_after_ij = vec![];
+    let mut use_status_same_vertex_next_ij = vec![];
+    'use_color_state_loop: for i in 0..color_num {
         for j in 0..state_num {
-            if !status_assigned_per_color[i][j] {
-                used_status_count += 1;
-                if use_status_candidate.is_none() {
-                    // (色 i, 内部状態 j) を使うとして, 内部状態を区別するために,
-                    // 別の色二色を割り当てられるかを確認する.
-                    for k in 0..color_num {
-                        if k == i {
-                            continue;
-                        }
+            // (色 i, 内部状態 j) を今回のマスに割り当てられるか？
+            // FIXME: 更新タイミングが遅いので重複し得る..
+            if status_assigned_per_color[i][j] {
+                continue;
+            }
 
-                        if !status_assigned_per_color[k][j] {
-                            if use_colors_after_candidate[0].is_none() {
-                                use_colors_after_candidate[0] = Some(k);
-                            } else {
-                                use_colors_after_candidate[1] = Some(k);
-                                break;
-                            }
-                        }
+            // 同一色 i に対する内部状態が他に二つ余っているか
+            let mut use_status_candidates = vec![];
+            for jj in j + 1..state_num {
+                if !status_assigned_per_color[i][jj] {
+                    use_status_candidates.push(jj);
+                    if use_status_candidates.len() == 2 {
+                        break;
                     }
-
-                    use_status_candidate = Some(j);
                 }
             }
-        }
+            if use_status_candidates.len() < 2 {
+                // 今の色固定では不可
+                break;
+            }
 
-        if used_status_count < used_status_min {
-            use_cur_color = Some(i);
-            use_cur_state = use_status_candidate;
-            use_colors_after_ij = use_colors_after_candidate;
-            used_status_min = used_status_count;
+            // 同一内部状態 j に対する色が他に二つ余っているか
+            let mut use_colors_candidates = vec![];
+            for k in 0..color_num {
+                if k == i {
+                    continue;
+                }
+
+                if !status_assigned_per_color[k][j] {
+                    use_colors_candidates.push(k);
+                    if use_colors_candidates.len() == 2 {
+                        break;
+                    }
+                }
+            }
+            if use_colors_candidates.len() == 2 {
+                // 採用
+                use_cur_color = Some(i);
+                use_cur_state = Some(j);
+                use_colors_after_ij = use_colors_candidates;
+                use_status_same_vertex_next_ij = use_status_candidates;
+                break 'use_color_state_loop;
+            }
         }
     }
 
-    // 冗長だと思うんだが
-    if use_cur_color.is_none()
-        || use_cur_state.is_none()
-        || use_colors_after_ij.iter().any(|&a| a.is_none())
-    {
+    if use_cur_color.is_none() {
         return false;
     }
 
-    status_assigned_per_color[use_cur_color.unwrap()][use_cur_state.unwrap()] = true;
-    status_assigned_per_color[use_colors_after_ij[0].unwrap()][use_cur_state.unwrap()] = true;
-    status_assigned_per_color[use_colors_after_ij[1].unwrap()][use_cur_state.unwrap()] = true;
+    let mut used_cs = vec![
+        (use_cur_color.unwrap(), use_cur_state.unwrap()),
+        (use_cur_color.unwrap(), use_status_same_vertex_next_ij[0]),
+        (use_cur_color.unwrap(), use_status_same_vertex_next_ij[1]),
+        (use_colors_after_ij[0], use_cur_state.unwrap()),
+        (use_colors_after_ij[1], use_cur_state.unwrap()),
+    ];
+    used_cs.sort_unstable();
+    used_cs.dedup();
+    assert!(used_cs.len() == 5);
 
     // マージ対象の二つのマス **直前の** マスに対し,
     // - 今回通過時の遷移規則の出力に, 割り当てる内部状態を割り振る
-    // TODO: 初手
-    path_rule_out[path_j_cur - 1].new_state = use_cur_state;
-    path_rule_out[path_i_cur - 1].new_state = use_cur_state;
+    // (出力は書かない)
 
     // マージ対象の二つのマスに対し,
     // - 今回の行動に, 同じ遷移規則の入力を割り振る
-    path_rule_in[path_i_cur].cur_color = use_cur_color;
-    path_rule_in[path_j_cur].cur_state = use_cur_state;
+    path_rule_in[path_i_cur] = Some(RuleIn {
+        color: use_cur_color.unwrap(),
+        state: use_cur_state.unwrap(),
+    });
+    path_rule_in[path_j_cur] = Some(RuleIn {
+        color: use_cur_color.unwrap(),
+        state: use_cur_state.unwrap(),
+    });
+    assert!(!status_assigned_per_color[use_cur_color.unwrap()][use_cur_state.unwrap()]);
+    status_assigned_per_color[use_cur_color.unwrap()][use_cur_state.unwrap()] = true;
+
     // - 今回の行動に, 同じ遷移規則の出力を割り振る
-    let dir = move_dir_from_1d(path_i_cur, path_j_cur, n);
-    path_rule_out[path_i_cur] = RuleOutWIP {
-        new_color: use_cur_color,
-        new_state: use_cur_state,
-        dir: Some(dir),
-    };
-    path_rule_out[path_j_cur] = RuleOutWIP {
-        new_color: use_cur_color,
-        new_state: use_cur_state,
-        dir: Some(dir),
-    };
+    // (出力は書かない)
     // - 前回通過時の遷移規則出力に, 今回割り当てる色を割り振る
-    if let Some(i) = path_idx_same_vertex_i_prev {
-        path_rule_out[i].new_color = use_cur_color;
-    } else {
-        init_colors[paths[path_i_cur]] = use_cur_color;
+    // (出力は書かない)
+    // - 次回通過時の遷移規則入力に, 今回割り当てる色及び独立した内部状態を割り振る
+    //   - この頂点を二度と通らない場合は, これらの if にかからない
+    if let Some(i) = path_idx_same_vertex_i_next
+        && i < path_rule_in.len() - 1
+    {
+        path_rule_in[i] = Some(RuleIn {
+            color: use_cur_color.unwrap(),
+            state: use_status_same_vertex_next_ij[0],
+        });
+        assert!(!status_assigned_per_color[use_cur_color.unwrap()][use_status_same_vertex_next_ij[0]]);
+        status_assigned_per_color[use_cur_color.unwrap()][use_status_same_vertex_next_ij[0]] = true;
     }
-    if let Some(i) = path_idx_same_vertex_j_prev {
-        path_rule_out[i].new_color = use_cur_color;
-    } else {
-        init_colors[paths[path_j_cur]] = use_cur_color;
-    }
-    // - 次回通過時の遷移規則入力に, 今回割り当てる色を割り振る
-    if let Some(i) = path_idx_same_vertex_i_next {
-        path_rule_in[i].cur_color = use_cur_color;
-    } else {
-        unreachable!();
-    }
-    if let Some(i) = path_idx_same_vertex_j_next {
-        path_rule_in[i].cur_color = use_cur_color;
-    } else {
-        unreachable!();
+    if let Some(i) = path_idx_same_vertex_j_next
+        && i < path_rule_in.len() - 1
+    {
+        path_rule_in[i] = Some(RuleIn {
+            color: use_cur_color.unwrap(),
+            state: use_status_same_vertex_next_ij[1],
+        });
+        assert!(!status_assigned_per_color[use_cur_color.unwrap()][use_status_same_vertex_next_ij[1]]);
+        status_assigned_per_color[use_cur_color.unwrap()][use_status_same_vertex_next_ij[1]] = true;
     }
 
     // マージ対象の二つのマス **直後の** マスに対し,
     // - 前回通過時の遷移規則出力に, それぞれ異なる色を割り振る
-    if let Some(i) = path_idx_next_vertex_i_prev {
-        path_rule_out[i].new_color = use_colors_after_ij[0];
-    }
-    if let Some(i) = path_idx_next_vertex_j_prev {
-        path_rule_out[i].new_color = use_colors_after_ij[1];
-    }
+    // (出力は書かない)
     // - 今回行動直後の遷移規則の入力に, それぞれ異なる色及び内部状態を割り振る
-    if path_i_cur < paths.len() - 1 {
-        path_rule_in[path_i_cur + 1].cur_color = use_colors_after_ij[0];
-        path_rule_in[path_i_cur + 1].cur_state = use_cur_state;
+    if path_i_cur < paths.len() - 2 {
+        path_rule_in[path_i_cur + 1] = Some(RuleIn {
+            color: use_colors_after_ij[0],
+            state: use_cur_state.unwrap(),
+        });
+        assert!(!status_assigned_per_color[use_colors_after_ij[0]][use_cur_state.unwrap()]);
+        status_assigned_per_color[use_colors_after_ij[0]][use_cur_state.unwrap()] = true;
     }
-    if path_j_cur < paths.len() - 1 {
-        path_rule_in[path_j_cur + 1].cur_color = use_colors_after_ij[1];
-        path_rule_in[path_j_cur + 1].cur_state = use_cur_state;
+    if path_j_cur < paths.len() - 2 {
+        path_rule_in[path_j_cur + 1] = Some(RuleIn {
+            color: use_colors_after_ij[1],
+            state: use_cur_state.unwrap(),
+        });
+        assert!(!status_assigned_per_color[use_colors_after_ij[1]][use_cur_state.unwrap()]);
+        status_assigned_per_color[use_colors_after_ij[1]][use_cur_state.unwrap()] = true;
     }
 
     true
@@ -420,6 +453,28 @@ fn merge_colors(
     use_colors[b] = false;
 }
 
+/// i 番目に max(x, y) が小さい順の (x, y) を返す。
+fn ith_square_coord(i: usize) -> (usize, usize) {
+    // 層 M = floor(sqrt(i))
+    let m = (i as f64).sqrt().floor() as usize;
+    // 層 M の開始 index
+    let start = m * m;
+    // 層 internal index (0..2m)
+    let t = i - start;
+
+    if m == 0 {
+        return (0, 0);
+    }
+
+    if t <= m {
+        // 上側の辺
+        (t, m)
+    } else {
+        // 右側の辺
+        (m, t - (m + 1))
+    }
+}
+
 #[fastout]
 fn main() {
     let start_time = Instant::now();
@@ -465,7 +520,6 @@ fn main() {
     let mut best_score = usize::MAX;
     let mut color_num_ans = usize::MAX;
     let mut state_num_ans = usize::MAX;
-    let mut rules_num_ans = 0;
     let mut init_colors_ans = vec![0; grid_size_1d];
     let mut rules_ans = vec![];
     while start_time.elapsed() < break_time {
@@ -490,6 +544,18 @@ fn main() {
         }
         debug!("paths: {paths:?}");
 
+        // 全経路に固有の (色, 内部状態) の組を割り当てるとした場合の入力条件数
+        let mut ptrn_sqrt = 10;
+        while ptrn_sqrt * ptrn_sqrt < paths.len() {
+            ptrn_sqrt += 1;
+        }
+        // let (color_num, state_num) = if (ptrn_sqrt - 1) * ptrn_sqrt >= paths.len() {
+        //     (ptrn_sqrt - 1, ptrn_sqrt)
+        // } else {
+        //     (ptrn_sqrt, ptrn_sqrt)
+        // };
+        let (color_num, state_num) = (ptrn_sqrt, ptrn_sqrt);
+
         // マス i の通過回数
         let mut vertex_pass_counts = vec![0; grid_size_1d];
         // i 番目のパスがマス j の k 度目の通過 (0-origin)
@@ -497,91 +563,137 @@ fn main() {
         // マス i の j 回目の通過時のパスは全体で何番目か
         let mut vertex_pass_count_to_path_idx = vec![vec![]; grid_size_1d];
         for (i, &p) in paths.iter().enumerate() {
-            path_idx_to_vertex_pass_count[i] = vertex_pass_counts[p];
-            vertex_pass_count_to_path_idx[vertex_pass_counts[p]].push(i);
+            path_idx_to_vertex_pass_count.push(vertex_pass_counts[p]);
+            vertex_pass_count_to_path_idx[p].push(i);
             vertex_pass_counts[p] += 1;
         }
-        // moves[色][内部状態] = (塗り替える色, 新しい内部状態, 移動方向)
-        let mut ans_moves = vec![vec![None; state_num]; color_num];
+
         let mut status_assigned_per_color = vec![vec![false; state_num]; color_num];
-        // 各マスの通過回数を個別に持たせると時間が怪しい
-        vertex_pass_count.fill(0);
+        let mut path_rule_in = vec![None; paths.len() - 1];
+        // 初手は内部状態が固定
+        path_rule_in[0] = Some(RuleIn { color: 0, state: 0 });
+        status_assigned_per_color[0][0] = true;
         // TODO: マージ判定, とりあえず貪欲にするが実際は乱択可能
-        for i in 0..paths.len() {
-            let mut vertex_pass_count_cur = vertex_pass_count.clone();
-            // FIXME: 通過回数の扱いを考える, 特に i と j の間
-            for j in i + 2..paths.len() {
-                // 三点以上のマージは, 簡単のために一旦考えない
-                // if merge_moves(
-                //     i,
-                //     j,
-                //     &paths,
-                //     &vertex_pass_counts,
-                //     &path_idx_to_vertex_pass_count,
-                //     &vertex_pass_count_to_path_idx,
-                //     &mut ans_moves,
-                //     &mut moves_each_vertex,
-                //     &mut status_assigned_per_color,
-                // ) {
-                //     break;
-                // }
-                // vertex_pass_count_cur[j] += 1;
+        // 最後のパスは最終目的地であり, 指示は不要であるので省く
+        for i in 0..paths.len() - 1 {
+            for j in i + 2..paths.len() - 1 {
+                // println!("begin: {}", status_assigned_per_color[9][11]);
+                // println!("path_rule_in: {path_rule_in:?}");
+                // let a = path_rule_in.clone();
+                if merge_moves(
+                    n,
+                    i,
+                    j,
+                    &paths,
+                    &vertex_pass_counts,
+                    &path_idx_to_vertex_pass_count,
+                    &mut vertex_pass_count_to_path_idx,
+                    &mut status_assigned_per_color,
+                    &mut path_rule_in,
+                ) {
+                    // debug!("i: {i}, j: {j}, path_rule_in_after_merge: {path_rule_in:?}");
+                    // 三点以上のマージは, 簡単のために一旦考えない
+                    // println!("end: {}", status_assigned_per_color[9][11]);
+                    // (9, 11) が重複するのではなく, 重複後のパスがなんかおかしいのでは？
+                    // if status_assigned_per_color[9][11] {
+                    //     println!("before: {a:?}");
+                    //     println!("after: {path_rule_in:?}");
+                    //     return;
+                    // }
+                    break;
+                }
             }
-            // vertex_pass_count[i] += 1;
+        }
+        debug!("paths: {paths:?}");
+        // FIXME: この時点で重複発生
+        debug!("{}", status_assigned_per_color[9][11]);
+        debug!("path_rule_in_after_merge: {path_rule_in:?}");
+
+        // マージされていない頂点に, 独立した色と内部状態とを割り振る
+        let mut grid_i = 0;
+        for i in 0..paths.len() - 1 {
+            if path_rule_in[i].is_some() {
+                continue;
+            }
+
+            loop {
+                let (c, s) = ith_square_coord(grid_i);
+                if !status_assigned_per_color[c][s] {
+                    break;
+                }
+
+                grid_i += 1;
+            }
+
+            let (color, state) = ith_square_coord(grid_i);
+            assert!(!status_assigned_per_color[color][state]);
+            path_rule_in[i] = Some(RuleIn { color, state });
+            status_assigned_per_color[color][state] = true;
         }
 
-        // 全経路に固有の (色, 内部状態) の組を割り当てる
-        // 解を出力するには, 次の移動先, 内部状態と自身のマスの次の色がわかればよい
-        let mut ptrn_sqrt = 10;
-        while ptrn_sqrt * ptrn_sqrt < paths.len() {
-            ptrn_sqrt += 1;
-        }
-        let (mut color_num, mut state_num) = if (ptrn_sqrt - 1) * ptrn_sqrt >= paths.len() {
-            (ptrn_sqrt - 1, ptrn_sqrt)
-        } else {
-            (ptrn_sqrt, ptrn_sqrt)
-        };
-
-        // moves_each_vertex[i][j]: マス i を j 回目に通過した際の (色, 内部状態)
-        // TODO: 初期割り当てに状態削減を考えると消すよ
-        let mut moves_each_vertex = vec![vec![None; k]; grid_size_1d];
-        let mut vertex_pass_count = vec![0; grid_size_1d];
+        // 初期色は 0, 一度も通過しないマスは 0 のまま
         let mut init_colors = vec![0; grid_size_1d];
-        for (i, &p) in paths.iter().enumerate() {
-            let cur_color = i / state_num;
-            let cur_state = i % state_num;
-            moves_each_vertex[p][vertex_pass_count[p]] = Some((cur_color, cur_state));
-            if vertex_pass_count[p] == 0 {
-                init_colors[p] = cur_color;
-            }
-            vertex_pass_count[p] += 1;
-        }
-
-        vertex_pass_count.fill(0);
-        // 最後のマスに指示は不要であるので最初から省く
-        // TODO: 削減結果の反映と color/state 数の整理
+        let mut rules = vec![];
+        let mut vertex_pass_count = vec![0; grid_size_1d];
         for (i, &p) in paths.iter().take(paths.len() - 1).enumerate() {
-            let cur_color = i / state_num;
-            let cur_state = i % state_num;
-            let next_p = paths[i + 1];
-            let new_color = if let Some(m) = moves_each_vertex[p][vertex_pass_count[p] + 1] {
-                m.0
+            if vertex_pass_count[p] == 0 {
+                // 初回通過時には初期色を決める
+                init_colors[p] = if let Some(r) = path_rule_in[i] {
+                    r.color
+                } else {
+                    unreachable!();
+                }
+            }
+
+            // 自身のマスを次に通過した際の色
+            let new_color = if let Some(i) = path_idx_same_vertex_next(
+                i,
+                &paths,
+                &path_idx_to_vertex_pass_count,
+                &vertex_pass_count_to_path_idx,
+                &vertex_pass_counts,
+            ) && i < path_rule_in.len()
+            {
+                path_rule_in[i].unwrap().color
             } else {
-                cur_color
+                // もう通らないのでなんでもよい
+                0
             };
-            let new_state = if let Some(m) = moves_each_vertex[next_p][vertex_pass_count[next_p]] {
-                m.1
+            let new_state = if i == paths.len() - 2 {
+                0
             } else {
-                cur_state
+                path_rule_in[i + 1].unwrap().state
             };
-            let dir = move_dir_from_1d(p, paths[i + 1], n);
-            ans_moves[cur_color][cur_state] = Some(TransitionRules {
-                new_color,
-                new_state,
-                dir,
-            });
+            let dir = move_dir_from_1d(paths[i], paths[i + 1], n);
+            rules.push((
+                path_rule_in[i].unwrap(),
+                TransitionRules {
+                    new_color,
+                    new_state,
+                    dir,
+                },
+            ));
+
             vertex_pass_count[p] += 1;
         }
+        debug!("rules: {rules:?}");
+        rules.sort_unstable();
+        rules.dedup();
+        let mut color_num = 0;
+        let mut state_num = 0;
+        for &c in &init_colors {
+            color_num = color_num.max(c);
+        }
+        for &r in &rules {
+            color_num = color_num.max(r.0.color);
+            state_num = state_num.max(r.0.state);
+        }
+        color_num += 1;
+        state_num += 1;
+        debug!("color_num: {color_num}");
+        debug!("state_num: {state_num}");
+        debug!("init_colors: {:?}", init_colors);
+        debug!("rules: {rules:?}");
 
         let cur_score = color_num + state_num;
         if cur_score < best_score {
@@ -589,26 +701,14 @@ fn main() {
             color_num_ans = color_num;
             state_num_ans = state_num;
             init_colors_ans = init_colors;
-
-            let mut rules_num = 0;
-            for i in 0..color_num {
-                for j in 0..state_num {
-                    if ans_moves[i][j].is_none() {
-                        break;
-                    }
-
-                    rules_num += 1;
-                }
-            }
-            rules_num_ans = rules_num;
-            rules_ans = ans_moves;
+            rules_ans = rules;
         }
 
         // 乱択ができていないので
         break;
     }
 
-    println!("{color_num_ans} {state_num_ans} {rules_num_ans}");
+    println!("{color_num_ans} {state_num_ans} {}", rules_ans.len());
     for i in 0..n {
         for j in 0..n {
             let p = twod_to_oned((i, j), n);
@@ -620,11 +720,7 @@ fn main() {
             }
         }
     }
-    for i in 0..color_num_ans {
-        for j in 0..state_num_ans {
-            if let Some(t) = rules_ans[i][j] {
-                println!("{i} {j} {t}");
-            }
-        }
+    for (rin, rout) in rules_ans {
+        println!("{rin} {rout}");
     }
 }
