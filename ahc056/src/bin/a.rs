@@ -398,6 +398,27 @@ fn merge_moves(
     used_cs.dedup();
     assert!(used_cs.len() == 5);
 
+
+
+    if let Some(next) = path_idx_same_vertex_i_next && next < path_rule_in.len() {
+        if path_rule_in[next].is_some() {
+            // 既に次の入力が決まっており、それと矛盾する色をここで割り当てるなら、merge をやめる
+            if path_rule_in[next].unwrap().color != use_cur_color.unwrap() {
+                return false;
+            }
+        }
+    }
+    if let Some(next) = path_idx_same_vertex_j_next && next < path_rule_in.len() {
+        if path_rule_in[next].is_some() {
+            // 既に次の入力が決まっており、それと矛盾する色をここで割り当てるなら、merge をやめる
+            if path_rule_in[next].unwrap().color != use_cur_color.unwrap() {
+                return false;
+            }
+        }
+    }
+
+
+
     // ここに出力側の検査を入れる
     // TODO: "同じマスを二度前に通過した" は必要？
     if ((path_i_cur > 0 && path_rule_out[path_i_cur - 1].new_state.is_some())
@@ -412,6 +433,11 @@ fn merge_moves(
         // 今回通過直後のマスの前回通過時
         || (path_idx_next_vertex_i_prev.is_some() && path_rule_out[path_idx_next_vertex_i_prev.unwrap()].new_color.is_some())
         || (path_idx_next_vertex_j_prev.is_some() && path_rule_out[path_idx_next_vertex_j_prev.unwrap()].new_color.is_some())
+        // 初期色に言及し得るものをすべて省く, 整合取れていないため
+        || path_idx_same_vertex_i_prev.is_none()
+        || path_idx_same_vertex_j_prev.is_none()
+        || path_idx_next_vertex_i_prev.is_none()
+        || path_idx_next_vertex_j_prev.is_none()
     {
         return false;
     }
@@ -847,6 +873,17 @@ fn main() {
                 path_rule_in[i + 1].unwrap().state
             };
             let dir = move_dir_from_1d(paths[i], paths[i + 1], n);
+
+            // 0000 で引っかかる
+            if let Some(c) = path_rule_out[i].new_color {
+                assert_eq!(c, new_color);
+                // new_color = c;
+            }
+            // 0001 で引っかかる
+            if let Some(s) = path_rule_out[i].new_state {
+                assert_eq!(s, new_state);
+                // new_state = s;
+            }
 
             rules.push((
                 path_rule_in[i].unwrap(),
