@@ -4,6 +4,7 @@ use proconio::marker::Chars;
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
 // use rand::seq::SliceRandom;
+use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::fmt::{self, Formatter};
 use std::time::{Duration, Instant};
@@ -574,6 +575,7 @@ fn main() {
 
         let mut status_assigned_per_color = vec![vec![false; state_num]; color_num];
         let mut path_rule_in = vec![None; paths.len() - 1];
+        let mut common_vertices = HashSet::new();
         // 初手は内部状態が固定
         path_rule_in[0] = Some(RuleIn { color: 0, state: 0 });
         status_assigned_per_color[0][0] = true;
@@ -604,6 +606,8 @@ fn main() {
                     //     println!("after: {path_rule_in:?}");
                     //     return;
                     // }
+                    common_vertices.insert(i);
+                    common_vertices.insert(j);
                     break;
                 }
             }
@@ -646,10 +650,25 @@ fn main() {
                 } else {
                     unreachable!();
                 }
+            } else if common_vertices.contains(&i) {
+                // 共通化マスは (色, 内部状態) を更新しない決まりにした
+                let dir = move_dir_from_1d(paths[i], paths[i + 1], n);
+                let rin = path_rule_in[i].unwrap();
+                let new_color = rin.color;
+                let new_state = rin.state;
+                rules.push((
+                    rin,
+                    TransitionRules {
+                        new_color,
+                        new_state,
+                        dir,
+                    }
+                ));
+                continue;
             }
 
             // 自身のマスを次に通過した際の色
-            // FIXME: 0001 他で重複
+            // FIXME: 0001 他で重複, 共通化マスに二つの遷移が割り当てられる
             // 7 30 7 30 L
             // 7 30 9 30 L
             let new_color = if let Some(ii) = path_idx_same_vertex_next(
@@ -662,7 +681,6 @@ fn main() {
             {
                 path_rule_in[ii].unwrap().color
             } else {
-                // 雑な 0 埋めはだめ, 自身のマスは通らずとも, 共通化した他のマスが通る可能性がある
                 path_rule_in[i].unwrap().color
             };
             let new_state = if i == paths.len() - 2 {
