@@ -367,7 +367,7 @@ fn merge_moves(
     // - 次回通過時の遷移規則入力に, 今回割り当てる色及び独立した内部状態を割り振る
     //   - この頂点を二度と通らない場合は, これらの if にかからない
     if let Some(i) = path_idx_same_vertex_i_next
-        && i < path_rule_in.len() - 1
+        && i < paths.len() - 1
     {
         path_rule_in[i] = Some(RuleIn {
             color: use_cur_color.unwrap(),
@@ -377,7 +377,7 @@ fn merge_moves(
         status_assigned_per_color[use_cur_color.unwrap()][use_status_same_vertex_next_ij[0]] = true;
     }
     if let Some(i) = path_idx_same_vertex_j_next
-        && i < path_rule_in.len() - 1
+        && i < paths.len() - 1
     {
         path_rule_in[i] = Some(RuleIn {
             color: use_cur_color.unwrap(),
@@ -391,7 +391,7 @@ fn merge_moves(
     // - 前回通過時の遷移規則出力に, それぞれ異なる色を割り振る
     // (出力は書かない)
     // - 今回行動直後の遷移規則の入力に, それぞれ異なる色及び内部状態を割り振る
-    if path_i_cur < paths.len() - 2 {
+    if path_i_cur + 1 < path_rule_in.len() {
         path_rule_in[path_i_cur + 1] = Some(RuleIn {
             color: use_colors_after_ij[0],
             state: use_cur_state.unwrap(),
@@ -399,7 +399,7 @@ fn merge_moves(
         assert!(!status_assigned_per_color[use_colors_after_ij[0]][use_cur_state.unwrap()]);
         status_assigned_per_color[use_colors_after_ij[0]][use_cur_state.unwrap()] = true;
     }
-    if path_j_cur < paths.len() - 2 {
+    if path_j_cur + 1 < path_rule_in.len() {
         path_rule_in[path_j_cur + 1] = Some(RuleIn {
             color: use_colors_after_ij[1],
             state: use_cur_state.unwrap(),
