@@ -215,6 +215,80 @@ fn main() {
         }
     }
 
+    // 目的地順に最短経路を求める
+    // 経路は後の迂回試行を考えると線形リストの方が都合がよいかもしれない
+    let mut paths = vec![];
+    let mut cur_pos = twod_to_oned(*xyk.first().unwrap(), n);
+    for &xy in xyk.iter().skip(1) {
+        let goal = twod_to_oned(xy, n);
+        // TODO: 経路選択に乱択を入れる
+        let path = shortest_path(cur_pos, goal, &edges);
+        // 直前の終点 (目的地) と今の始点の重複除去は reverse -> pop -> reverse -> append でも
+        // 動作はするが, reverse 二度かける分の定数倍が嫌
+        if paths.is_empty() {
+            paths.push(path[0]);
+        }
+        for &p in path.iter().skip(1) {
+            paths.push(p);
+        }
+
+        cur_pos = *path.last().unwrap();
+    }
+    debug!("paths: {paths:?}");
+
+    // 全経路に固有の (色, 内部状態) の組を割り当てる
+    // 解を出力するには, 次の移動先, 内部状態と自身のマスの次の色がわかればよい
+    let mut ptrn_sqrt = 10;
+    while ptrn_sqrt * ptrn_sqrt < paths.len() {
+        ptrn_sqrt += 1;
+    }
+    let (color_num, state_num) = if (ptrn_sqrt - 1) * ptrn_sqrt >= paths.len() {
+        (ptrn_sqrt - 1, ptrn_sqrt)
+    } else {
+        (ptrn_sqrt, ptrn_sqrt)
+    };
+
+    // moves_each_vertex[i][j]: マス i を j 回目に通過した際の (色, 内部状態)
+    let mut moves_each_vertex = vec![vec![None; k]; grid_size_1d];
+    let mut vertex_pass_count = vec![0; grid_size_1d];
+    let mut init_colors = vec![0; grid_size_1d];
+    for (i, &p) in paths.iter().enumerate() {
+        let cur_color = i / state_num;
+        let cur_state = i % state_num;
+        moves_each_vertex[p][vertex_pass_count[p]] = Some((cur_color, cur_state));
+        if vertex_pass_count[p] == 0 {
+            init_colors[p] = cur_color;
+        }
+        vertex_pass_count[p] += 1;
+    }
+
+    // moves[色][内部状態] = (塗り替える色, 新しい内部状態, 移動方向)
+    let mut ans_moves = vec![vec![None; state_num]; color_num];
+    vertex_pass_count.fill(0);
+    // 最後のマスに指示は不要であるので最初から省く
+    for (i, &p) in paths.iter().take(paths.len() - 1).enumerate() {
+        let cur_color = i / state_num;
+        let cur_state = i % state_num;
+        let next_p = paths[i + 1];
+        let new_color = if let Some(m) = moves_each_vertex[p][vertex_pass_count[p] + 1] {
+            m.0
+        } else {
+            cur_color
+        };
+        let new_state = if let Some(m) = moves_each_vertex[next_p][vertex_pass_count[next_p]] {
+            m.1
+        } else {
+            cur_state
+        };
+        let dir = move_dir_from_1d(p, paths[i + 1], n);
+        ans_moves[cur_color][cur_state] = Some(TransitionRules {
+            new_color,
+            new_state,
+            dir,
+        });
+        vertex_pass_count[p] += 1;
+    }
+
     // 雑
     let mut best_score = usize::MAX;
     let mut color_num_ans = usize::MAX;
@@ -222,102 +296,29 @@ fn main() {
     let mut rules_num_ans = 0;
     let mut init_colors_ans = vec![0; grid_size_1d];
     let mut rules_ans = vec![];
-    while start_time.elapsed() < break_time {
-        // 目的地順に最短経路を求める
-        // 経路は後の迂回試行を考えると線形リストの方が都合がよいかもしれない
-        let mut paths = vec![];
-        let mut cur_pos = twod_to_oned(*xyk.first().unwrap(), n);
-        for &xy in xyk.iter().skip(1) {
-            let goal = twod_to_oned(xy, n);
-            // TODO: 経路選択に乱択を入れる
-            let path = shortest_path(cur_pos, goal, &edges);
-            // 直前の終点 (目的地) と今の始点の重複除去は reverse -> pop -> reverse -> append でも
-            // 動作はするが, reverse 二度かける分の定数倍が嫌
-            if paths.is_empty() {
-                paths.push(path[0]);
-            }
-            for &p in path.iter().skip(1) {
-                paths.push(p);
-            }
 
-            cur_pos = *path.last().unwrap();
-        }
-        debug!("paths: {paths:?}");
+    let cur_score = color_num + state_num;
+    if cur_score < best_score {
+        best_score = cur_score;
+        color_num_ans = color_num;
+        state_num_ans = state_num;
+        init_colors_ans = init_colors;
 
-        // 全経路に固有の (色, 内部状態) の組を割り当てる
-        // 解を出力するには, 次の移動先, 内部状態と自身のマスの次の色がわかればよい
-        let mut ptrn_sqrt = 10;
-        while ptrn_sqrt * ptrn_sqrt < paths.len() {
-            ptrn_sqrt += 1;
-        }
-        let (color_num, state_num) = if (ptrn_sqrt - 1) * ptrn_sqrt >= paths.len() {
-            (ptrn_sqrt - 1, ptrn_sqrt)
-        } else {
-            (ptrn_sqrt, ptrn_sqrt)
-        };
-
-        // moves_each_vertex[i][j]: マス i を j 回目に通過した際の (色, 内部状態)
-        let mut moves_each_vertex = vec![vec![None; k]; grid_size_1d];
-        let mut vertex_pass_count = vec![0; grid_size_1d];
-        let mut init_colors = vec![0; grid_size_1d];
-        for (i, &p) in paths.iter().enumerate() {
-            let cur_color = i / state_num;
-            let cur_state = i % state_num;
-            moves_each_vertex[p][vertex_pass_count[p]] = Some((cur_color, cur_state));
-            if vertex_pass_count[p] == 0 {
-                init_colors[p] = cur_color;
-            }
-            vertex_pass_count[p] += 1;
-        }
-
-        // moves[色][内部状態] = (塗り替える色, 新しい内部状態, 移動方向)
-        let mut ans_moves = vec![vec![None; state_num]; color_num];
-        vertex_pass_count.fill(0);
-        // 最後のマスに指示は不要であるので最初から省く
-        for (i, &p) in paths.iter().take(paths.len() - 1).enumerate() {
-            let cur_color = i / state_num;
-            let cur_state = i % state_num;
-            let next_p = paths[i + 1];
-            let new_color = if let Some(m) = moves_each_vertex[p][vertex_pass_count[p] + 1] {
-                m.0
-            } else {
-                cur_color
-            };
-            let new_state = if let Some(m) = moves_each_vertex[next_p][vertex_pass_count[next_p]] {
-                m.1
-            } else {
-                cur_state
-            };
-            let dir = move_dir_from_1d(p, paths[i + 1], n);
-            ans_moves[cur_color][cur_state] = Some(TransitionRules {
-                new_color,
-                new_state,
-                dir,
-            });
-            vertex_pass_count[p] += 1;
-        }
-
-        let cur_score = color_num + state_num;
-        if cur_score < best_score {
-            best_score = cur_score;
-            color_num_ans = color_num;
-            state_num_ans = state_num;
-            init_colors_ans = init_colors;
-
-            let mut rules_num = 0;
-            for i in 0..color_num {
-                for j in 0..state_num {
-                    if ans_moves[i][j].is_none() {
-                        break;
-                    }
-
-                    rules_num += 1;
+        let mut rules_num = 0;
+        for i in 0..color_num {
+            for j in 0..state_num {
+                if ans_moves[i][j].is_none() {
+                    break;
                 }
-            }
-            rules_num_ans = rules_num;
-            rules_ans = ans_moves;
-        }
 
+                rules_num += 1;
+            }
+        }
+        rules_num_ans = rules_num;
+        rules_ans = ans_moves;
+    }
+
+    while start_time.elapsed() < break_time {
         // 乱択ができていないので
         break;
     }
