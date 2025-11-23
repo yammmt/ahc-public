@@ -1,6 +1,7 @@
 use proconio::fastout;
 use proconio::input;
 use proconio::marker::Chars;
+use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::fmt::{self, Formatter};
 use std::time::{Duration, Instant};
@@ -17,7 +18,7 @@ macro_rules! debug {
 const TIME_LIMIT_MS: u64 = 1000;
 
 #[allow(dead_code)]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord, Hash)]
 enum Dir {
     Up,
     Down,
@@ -38,7 +39,7 @@ impl std::fmt::Display for Dir {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct TransitionRule {
     new_color: usize,
     new_state: usize,
@@ -51,7 +52,7 @@ impl std::fmt::Display for TransitionRule {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct OutRule {
     in_rule: (usize, usize),
     out_rule: TransitionRule,
@@ -152,7 +153,7 @@ fn ith_square_coord(i: usize) -> (usize, usize) {
     }
 }
 
-/// 団子解法で解く
+/// 団子解法ベースで重複を省きつつ解く (解説放送の真似)
 /// 団子解法: 経路を固定し, すべての経路に一意の (色, 内部状態) を割り振る
 fn solve_dumpling(n: usize, paths: &Vec<usize>) -> Solution {
     let grid_size_1d = n * n;
@@ -163,6 +164,8 @@ fn solve_dumpling(n: usize, paths: &Vec<usize>) -> Solution {
 
     let mut state_last = 0;
     let mut rules = vec![];
+    // 出力 -> 入力の map
+    let mut rules_appeared = HashMap::new();
     let mut color_and_state_per_cell: Vec<Vec<(usize, usize)>> = vec![vec![]; grid_size_1d];
     let mut used_color_and_state_num = 1;
     for (i, &c) in paths_reversed.iter().enumerate() {
@@ -179,23 +182,38 @@ fn solve_dumpling(n: usize, paths: &Vec<usize>) -> Solution {
         let new_state = state_last;
         let dir = move_dir_from_1d(paths_reversed[i], paths_reversed[i - 1], n);
 
+        let out_rule = TransitionRule {
+            new_color,
+            new_state,
+            dir,
+        };
+
         // 今のマスの情報
-        let coord = if i == paths.len() - 1 {
+        let coord = if let Some(&cc) = rules_appeared.get(&out_rule)
+            && i != paths.len() - 1
+        {
+            cc
+        } else if i == paths.len() - 1 {
             (0, 0)
         } else {
-            ith_square_coord(used_color_and_state_num)
+            let cc = ith_square_coord(used_color_and_state_num);
+            used_color_and_state_num += 1;
+            cc
         };
         color_and_state_per_cell[c].push(coord);
-        used_color_and_state_num += 1;
+        debug!(
+            "{:?} -> {:?}, cs: {coord:?} -> {out_rule:?} ",
+            oned_to_twod(c, n),
+            oned_to_twod(paths_reversed[i - 1], n)
+        );
 
-        rules.push(OutRule {
-            in_rule: coord,
-            out_rule: TransitionRule {
-                new_color,
-                new_state,
-                dir,
-            },
-        });
+        if !rules_appeared.contains_key(&out_rule) || coord == (0, 0) {
+            rules.push(OutRule {
+                in_rule: coord,
+                out_rule,
+            });
+            rules_appeared.insert(out_rule, coord);
+        }
 
         state_last = coord.1;
         color_num = color_num.max(coord.0);
@@ -203,6 +221,7 @@ fn solve_dumpling(n: usize, paths: &Vec<usize>) -> Solution {
     }
     color_num += 1;
     state_num += 1;
+    rules.sort_unstable();
     debug!("{color_and_state_per_cell:?}");
 
     let mut init_colors = vec![0; grid_size_1d];
