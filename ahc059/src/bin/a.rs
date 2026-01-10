@@ -54,6 +54,37 @@ fn shortest_path(
     ans
 }
 
+fn make_pairs_move(
+    ans: &mut Vec<char>,
+    cur_move_len: &mut usize,
+    deck: &mut VecDeque<usize>,
+    cur_pos: &mut (usize, usize),
+    ann: &mut Vec<Vec<usize>>,
+) {
+    // 未回収カードの位置を舐めておく
+    let mut card_pos = vec![(0, 0); CARD_KIND_NUM];
+    for i in 0..N {
+        for j in 0..N {
+            if ann[i][j] != NO_CARD {
+                card_pos[ann[i][j]] = (i, j);
+            }
+        }
+    }
+
+    // 上から順にペアを作っていく
+    while let Some(card_no) = deck.pop_back() {
+        let p = shortest_path(*cur_pos, card_no, &card_pos);
+        for c in p {
+            ans.push(c);
+            *cur_move_len += 1;
+        }
+        ans.push('Z');
+
+        *cur_pos = card_pos[card_no];
+        ann[cur_pos.0][cur_pos.1] = NO_CARD;
+    }
+}
+
 #[fastout]
 fn main() {
     input! {
@@ -80,26 +111,38 @@ fn main() {
     // 最短経路の移動を繰り返すと 2N^3 回の操作が必要, これは最大操作回数と一致
     // つまりは愚直でも X=0 は保証される
 
+    // 置く手を使わないとすると, 最初の半分を回収した経路でスコアが確定する
+    // 回収パート内でペア成立させた場合でもそう
+    // すると, 回収順を焼き鈍すことはできるが, それほどスコアが伸びる気がしない
+    // が, 提出時点での一位との差が二割もないのでちょっと伸ばすとリターンが大きいかも
+
+    // あるいは, 近くにもう片方があるなら先に成立させてしまうとか
+    // 同じ経路を何度も通るとスコアが悪化するため
+
+    // Visualizer を見ると, 後半のグラデーションが汚く, 赤マスが離れた位置にある
+
     let mut ans = vec![];
+    let mut ans_move_len = usize::MAX;
 
     // 乱択入れるかもなのでブロックにする
     {
+        let mut cur_ans = vec![];
+        let mut cur_move_len: usize = 0;
+
         let mut cur_pos = (0, 0);
         let mut last_move_dir = 'D';
         let mut deck = VecDeque::new();
         let mut in_deck = vec![false; CARD_KIND_NUM];
         let mut in_deck_num = 0;
         let mut cleared = vec![false; CARD_KIND_NUM];
-        let mut cleared_num = 0;
 
         // とりあえず全部片側を回収する
         while in_deck_num < CARD_KIND_NUM {
             if let Some(deck_top) = deck.pop_back() {
                 if deck_top == ann[cur_pos.0][cur_pos.1] {
                     // 同じ数字が連続したのでペア成立
-                    ans.push('Z');
+                    cur_ans.push('Z');
                     cleared[deck_top] = true;
-                    cleared_num += 1;
                     ann[cur_pos.0][cur_pos.1] = NO_CARD;
                 } else {
                     deck.push_back(deck_top);
@@ -108,7 +151,7 @@ fn main() {
 
             if ann[cur_pos.0][cur_pos.1] != NO_CARD {
                 if !in_deck[ann[cur_pos.0][cur_pos.1]] {
-                    ans.push('Z');
+                    cur_ans.push('Z');
                     deck.push_back(ann[cur_pos.0][cur_pos.1]);
                     in_deck[ann[cur_pos.0][cur_pos.1]] = true;
                     in_deck_num += 1;
@@ -126,13 +169,13 @@ fn main() {
                 match last_move_dir {
                     'D' => {
                         // D => R に動いて以後 U
-                        ans.push('R');
+                        cur_ans.push('R');
                         next_pos = (cur_pos.0, cur_pos.1 + 1);
                         last_move_dir = 'U';
                     }
                     'U' => {
                         // U => R に動いて以後 D
-                        ans.push('R');
+                        cur_ans.push('R');
                         next_pos = (cur_pos.0, cur_pos.1 + 1);
                         last_move_dir = 'D';
                     }
@@ -140,32 +183,24 @@ fn main() {
                     _ => unreachable!(),
                 }
             } else {
-                ans.push(last_move_dir);
+                cur_ans.push(last_move_dir);
             }
+            cur_move_len += 1;
             cur_pos = next_pos;
         }
 
-        // 未回収カードの位置を舐めておく
-        let mut card_pos = vec![(0, 0); CARD_KIND_NUM];
-        for i in 0..N {
-            for j in 0..N {
-                if ann[i][j] != NO_CARD {
-                    card_pos[ann[i][j]] = (i, j);
-                }
-            }
-        }
+        // 回収パートに工夫がないので
+        make_pairs_move(
+            &mut cur_ans,
+            &mut cur_move_len,
+            &mut deck,
+            &mut cur_pos,
+            &mut ann,
+        );
 
-        // 上から順にペアを作っていく
-        while let Some(card_no) = deck.pop_back() {
-            let p = shortest_path(cur_pos, card_no, &card_pos);
-            for c in p {
-                ans.push(c);
-            }
-            ans.push('Z');
-
-            cur_pos = card_pos[card_no];
-            ann[cur_pos.0][cur_pos.1] = NO_CARD;
-            cleared_num += 1;
+        if cur_move_len < ans_move_len {
+            ans = cur_ans;
+            ans_move_len = cur_move_len;
         }
     }
 
