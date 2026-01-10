@@ -3,8 +3,8 @@
 // use petgraph::unionfind::UnionFind;
 use proconio::fastout;
 use proconio::input;
-// use rand::rngs::SmallRng;
-// use rand::{Rng, SeedableRng};
+use rand::rngs::SmallRng;
+use rand::{Rng, SeedableRng};
 // use std::collections::BinaryHeap;
 // use std::collections::HashSet;
 // use std::collections::HashMap;
@@ -133,6 +133,8 @@ fn main() {
     let start_time = Instant::now();
     let break_time = Duration::from_millis(TIME_LIMIT_MS);
 
+    let mut rng = SmallRng::seed_from_u64(1);
+
     input! {
         // 固定値
         _n: usize,
@@ -221,7 +223,18 @@ fn main() {
         }
     }
 
+    let mut is_first_try = true;
     while start_time.elapsed() < break_time {
+        // HACK: 初期盤面の複製は遅そう, 使用状況をいちいち初期化した方がよいかも
+        let mut ann_cur = ann.clone();
+        let mut pair_order_cur = pair_order.clone();
+        if !is_first_try {
+            // 乱択山登り
+            let a = rng.random_range(0..CARD_KIND_NUM);
+            let b = rng.random_range(0..CARD_KIND_NUM);
+            pair_order_cur.swap(a, b);
+        }
+
         let mut cur_ans = vec![];
         let mut cur_move_len: usize = 0;
 
@@ -232,26 +245,27 @@ fn main() {
         // pair_order 順に最短経路を通って回収
 
         // 全部片側を回収する
-        for &card_num in &pair_order {
+        for &card_num in &pair_order_cur {
             let cur_path = shorter_path(cur_pos, card_pos[card_num].0, card_pos[card_num].1);
 
             for p in cur_path {
                 // 同じ数字が連続するなら先に取る
                 if let Some(deck_top) = deck.pop_back() {
-                    if deck_top == ann[cur_pos.0][cur_pos.1] {
+                    if deck_top == ann_cur[cur_pos.0][cur_pos.1] {
                         cur_ans.push('Z');
                         cleared[deck_top] = true;
-                        ann[cur_pos.0][cur_pos.1] = NO_CARD;
+                        ann_cur[cur_pos.0][cur_pos.1] = NO_CARD;
                     } else {
                         deck.push_back(deck_top);
                     }
                 }
                 cur_ans.push(p);
                 cur_pos = next_pos_wo_check(cur_pos, p);
+                cur_move_len += 1;
             }
             cur_ans.push('Z');
             deck.push_back(card_num);
-            ann[cur_pos.0][cur_pos.1] = NO_CARD;
+            ann_cur[cur_pos.0][cur_pos.1] = NO_CARD;
         }
 
         // 回収パートに工夫がないので
@@ -260,15 +274,16 @@ fn main() {
             &mut cur_move_len,
             &mut deck,
             &mut cur_pos,
-            &mut ann,
+            &mut ann_cur,
         );
 
         if cur_move_len < ans_move_len {
             ans = cur_ans;
             ans_move_len = cur_move_len;
+            pair_order = pair_order_cur;
         }
-        // TODO: debug
-        break;
+
+        is_first_try = false;
     }
 
     for a in ans {
