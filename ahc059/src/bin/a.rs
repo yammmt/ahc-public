@@ -9,11 +9,16 @@ use proconio::input;
 // use std::collections::HashSet;
 // use std::collections::HashMap;
 use std::collections::VecDeque;
+use std::time::{Duration, Instant};
 // use superslice::Ext;
+
+const TIME_LIMIT_MS: u64 = 1800;
 
 const N: usize = 20;
 const CARD_KIND_NUM: usize = 200;
 const NO_CARD: usize = 9999;
+
+const DUMMY: usize = 9999;
 
 /// 範囲外判定はしない
 fn next_pos_wo_check(cur_pos: (usize, usize), dir: char) -> (usize, usize) {
@@ -54,6 +59,44 @@ fn shortest_path(
     ans
 }
 
+fn shortest_path_plain(start_pos: (usize, usize), goal_pos: (usize, usize)) -> Vec<char> {
+    let mut ans = vec![];
+
+    let diff_ud = goal_pos.0 as isize - start_pos.0 as isize;
+    for _ in diff_ud..0 {
+        ans.push('U');
+    }
+    for _ in 0..diff_ud {
+        ans.push('D');
+    }
+
+    let diff_lr = goal_pos.1 as isize - start_pos.1 as isize;
+    for _ in diff_lr..0 {
+        ans.push('L');
+    }
+    for _ in 0..diff_lr {
+        ans.push('R');
+    }
+
+    ans
+}
+
+fn shorter_path(
+    cur_pos: (usize, usize),
+    card_pos0: (usize, usize),
+    card_pos1: (usize, usize),
+) -> Vec<char> {
+    let len0 = (cur_pos.0 as isize - card_pos0.0 as isize).abs()
+        + (cur_pos.1 as isize - card_pos0.1 as isize).abs();
+    let len1 = (cur_pos.0 as isize - card_pos1.0 as isize).abs()
+        + (cur_pos.1 as isize - card_pos1.1 as isize).abs();
+    if len0 < len1 {
+        shortest_path_plain(cur_pos, card_pos0)
+    } else {
+        shortest_path_plain(cur_pos, card_pos1)
+    }
+}
+
 fn make_pairs_move(
     ans: &mut Vec<char>,
     cur_move_len: &mut usize,
@@ -87,6 +130,9 @@ fn make_pairs_move(
 
 #[fastout]
 fn main() {
+    let start_time = Instant::now();
+    let break_time = Duration::from_millis(TIME_LIMIT_MS);
+
     input! {
         // 固定値
         _n: usize,
@@ -121,47 +167,37 @@ fn main() {
 
     // Visualizer を見ると, 後半のグラデーションが汚く, 赤マスが離れた位置にある
 
+    // pair 位置
+    let mut card_pos = vec![((DUMMY, DUMMY), (DUMMY, DUMMY)); CARD_KIND_NUM];
+    for i in 0..N {
+        for j in 0..N {
+            let no = ann[i][j];
+
+            if card_pos[no].0 == (DUMMY, DUMMY) {
+                card_pos[no].0 = (i, j);
+            } else {
+                card_pos[no].1 = (i, j);
+            }
+        }
+    }
+
     let mut ans = vec![];
     let mut ans_move_len = usize::MAX;
 
-    // 乱択入れるかもなのでブロックにする
+    // 初期値は DD...D->R->UU...U->... の愚直一本道
+    let mut pair_order = vec![];
     {
-        let mut cur_ans = vec![];
-        let mut cur_move_len: usize = 0;
-
         let mut cur_pos = (0, 0);
-        let mut last_move_dir = 'D';
-        let mut deck = VecDeque::new();
         let mut in_deck = vec![false; CARD_KIND_NUM];
         let mut in_deck_num = 0;
-        let mut cleared = vec![false; CARD_KIND_NUM];
+        let mut last_move_dir = 'D';
 
         // とりあえず全部片側を回収する
         while in_deck_num < CARD_KIND_NUM {
-            if let Some(deck_top) = deck.pop_back() {
-                if deck_top == ann[cur_pos.0][cur_pos.1] {
-                    // 同じ数字が連続したのでペア成立
-                    cur_ans.push('Z');
-                    cleared[deck_top] = true;
-                    ann[cur_pos.0][cur_pos.1] = NO_CARD;
-                } else {
-                    deck.push_back(deck_top);
-                }
-            }
-
-            if ann[cur_pos.0][cur_pos.1] != NO_CARD {
-                if !in_deck[ann[cur_pos.0][cur_pos.1]] {
-                    cur_ans.push('Z');
-                    deck.push_back(ann[cur_pos.0][cur_pos.1]);
-                    in_deck[ann[cur_pos.0][cur_pos.1]] = true;
-                    in_deck_num += 1;
-                    ann[cur_pos.0][cur_pos.1] = NO_CARD;
-                }
-            }
-
-            if in_deck_num == CARD_KIND_NUM {
-                // 無駄に動かない
-                break;
+            if !in_deck[ann[cur_pos.0][cur_pos.1]] {
+                pair_order.push(ann[cur_pos.0][cur_pos.1]);
+                in_deck[ann[cur_pos.0][cur_pos.1]] = true;
+                in_deck_num += 1;
             }
 
             let mut next_pos = next_pos_wo_check(cur_pos, last_move_dir);
@@ -169,24 +205,53 @@ fn main() {
                 match last_move_dir {
                     'D' => {
                         // D => R に動いて以後 U
-                        cur_ans.push('R');
                         next_pos = (cur_pos.0, cur_pos.1 + 1);
                         last_move_dir = 'U';
                     }
                     'U' => {
                         // U => R に動いて以後 D
-                        cur_ans.push('R');
                         next_pos = (cur_pos.0, cur_pos.1 + 1);
                         last_move_dir = 'D';
                     }
                     // その他は実装を楽するため端折る
                     _ => unreachable!(),
                 }
-            } else {
-                cur_ans.push(last_move_dir);
             }
-            cur_move_len += 1;
             cur_pos = next_pos;
+        }
+    }
+
+    while start_time.elapsed() < break_time {
+        let mut cur_ans = vec![];
+        let mut cur_move_len: usize = 0;
+
+        let mut cur_pos = (0, 0);
+        let mut deck = VecDeque::new();
+        let mut cleared = vec![false; CARD_KIND_NUM];
+
+        // pair_order 順に最短経路を通って回収
+
+        // 全部片側を回収する
+        for &card_num in &pair_order {
+            let cur_path = shorter_path(cur_pos, card_pos[card_num].0, card_pos[card_num].1);
+
+            for p in cur_path {
+                // 同じ数字が連続するなら先に取る
+                if let Some(deck_top) = deck.pop_back() {
+                    if deck_top == ann[cur_pos.0][cur_pos.1] {
+                        cur_ans.push('Z');
+                        cleared[deck_top] = true;
+                        ann[cur_pos.0][cur_pos.1] = NO_CARD;
+                    } else {
+                        deck.push_back(deck_top);
+                    }
+                }
+                cur_ans.push(p);
+                cur_pos = next_pos_wo_check(cur_pos, p);
+            }
+            cur_ans.push('Z');
+            deck.push_back(card_num);
+            ann[cur_pos.0][cur_pos.1] = NO_CARD;
         }
 
         // 回収パートに工夫がないので
@@ -202,6 +267,8 @@ fn main() {
             ans = cur_ans;
             ans_move_len = cur_move_len;
         }
+        // TODO: debug
+        break;
     }
 
     for a in ans {
