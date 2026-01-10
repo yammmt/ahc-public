@@ -12,7 +12,7 @@ use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 // use superslice::Ext;
 
-const TIME_LIMIT_MS: u64 = 1800;
+const TIME_LIMIT_MS: u64 = 1980;
 
 const N: usize = 20;
 const CARD_KIND_NUM: usize = 200;
