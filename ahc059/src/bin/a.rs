@@ -1,16 +1,9 @@
-// use itertools::Itertools;
-// use permutohedron::heap_recursive;
-// use petgraph::unionfind::UnionFind;
 use proconio::fastout;
 use proconio::input;
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
-// use std::collections::BinaryHeap;
-// use std::collections::HashSet;
-// use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
-// use superslice::Ext;
 
 const TIME_LIMIT_MS: u64 = 1980;
 
