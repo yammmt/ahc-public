@@ -1,0 +1,19 @@
+[package]
+name = "ahc059"
+version = "0.1.0"
+edition = "2024"
+
+# dependencies added to new project
+[dependencies]
+ac-library-rs = "=0.2.0"
+itertools = "=0.14.0"
+ordered-float = "=5.0.0"
+petgraph = "=0.8.2"
+permutohedron = "=0.2.4"
+proconio = { version = "=0.5.0", features = ["derive"] }
+rand = { version = "=0.9.2", features = ["small_rng"] }
+superslice = "=1.0.0"
+
+[profile.release]
+lto = true
+panic = 'abort'
