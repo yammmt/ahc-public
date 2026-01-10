@@ -116,6 +116,11 @@ fn main() {
                 }
             }
 
+            if in_deck_num == CARD_KIND_NUM {
+                // 無駄に動かない
+                break;
+            }
+
             let mut next_pos = next_pos_wo_check(cur_pos, last_move_dir);
             if next_pos.0 >= N || next_pos.1 >= N {
                 match last_move_dir {
