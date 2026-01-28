@@ -221,11 +221,20 @@ fn main() {
             // 乱択山登り
             let a = rng.random_range(0..CARD_KIND_NUM);
             let b = rng.random_range(0..CARD_KIND_NUM);
-            if rng.random_bool(0.5) {
-                pair_order_cur.swap(a, b);
-            } else {
-                let (l, r) = if a <= b { (a, b) } else { (b, a) };
-                pair_order_cur[l..=r].reverse();
+            match rng.random_range(0..3) {
+                0 => {
+                    // 2 点入れ替え
+                    pair_order_cur.swap(a, b);
+                }
+                1 => {
+                    // 区間反転
+                    let (l, r) = if a <= b { (a, b) } else { (b, a) };
+                    pair_order_cur[l..=r].reverse();
+                }
+                _ => {
+                    // 1 枚の回収順を反転 (side_id を反転)
+                    pair_order_cur[a].1 ^= 1;
+                }
             }
         }
 
