@@ -74,20 +74,16 @@ fn shortest_path_plain(start_pos: (usize, usize), goal_pos: (usize, usize)) -> V
     ans
 }
 
-fn shorter_path(
+fn choose_side_id(
     cur_pos: (usize, usize),
     card_pos0: (usize, usize),
     card_pos1: (usize, usize),
-) -> Vec<char> {
+) -> u8 {
     let len0 = (cur_pos.0 as isize - card_pos0.0 as isize).abs()
         + (cur_pos.1 as isize - card_pos0.1 as isize).abs();
     let len1 = (cur_pos.0 as isize - card_pos1.0 as isize).abs()
         + (cur_pos.1 as isize - card_pos1.1 as isize).abs();
-    if len0 < len1 {
-        shortest_path_plain(cur_pos, card_pos0)
-    } else {
-        shortest_path_plain(cur_pos, card_pos1)
-    }
+    if len0 <= len1 { 0 } else { 1 }
 }
 
 fn make_pairs_move(
@@ -180,7 +176,7 @@ fn main() {
     let mut ans_move_len = usize::MAX;
 
     // 初期値は DD...D->R->UU...U->... の愚直一本道
-    let mut pair_order = vec![];
+    let mut pair_order: Vec<(usize, u8)> = vec![];
     {
         let mut cur_pos = (0, 0);
         let mut in_deck = vec![false; CARD_KIND_NUM];
@@ -190,7 +186,7 @@ fn main() {
         // とりあえず全部片側を回収する
         while in_deck_num < CARD_KIND_NUM {
             if !in_deck[ann[cur_pos.0][cur_pos.1]] {
-                pair_order.push(ann[cur_pos.0][cur_pos.1]);
+                pair_order.push((ann[cur_pos.0][cur_pos.1], 0));
                 in_deck[ann[cur_pos.0][cur_pos.1]] = true;
                 in_deck_num += 1;
             }
@@ -243,8 +239,20 @@ fn main() {
         // pair_order 順に最短経路を通って回収
 
         // 全部片側を回収する
-        for &card_num in &pair_order_cur {
-            let cur_path = shorter_path(cur_pos, card_pos[card_num].0, card_pos[card_num].1);
+        for (card_num, side_id) in pair_order_cur.iter_mut() {
+            let chosen_side = if is_first_try {
+                let side = choose_side_id(cur_pos, card_pos[*card_num].0, card_pos[*card_num].1);
+                *side_id = side;
+                side
+            } else {
+                *side_id
+            };
+            let target_pos = if chosen_side == 0 {
+                card_pos[*card_num].0
+            } else {
+                card_pos[*card_num].1
+            };
+            let cur_path = shortest_path_plain(cur_pos, target_pos);
 
             for p in cur_path {
                 // 同じ数字が連続するなら先に取る
@@ -262,7 +270,7 @@ fn main() {
                 cur_move_len += 1;
             }
             cur_ans.push('Z');
-            deck.push_back(card_num);
+            deck.push_back(*card_num);
             ann_cur[cur_pos.0][cur_pos.1] = NO_CARD;
         }
 
