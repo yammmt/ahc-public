@@ -225,7 +225,12 @@ fn main() {
             // 乱択山登り
             let a = rng.random_range(0..CARD_KIND_NUM);
             let b = rng.random_range(0..CARD_KIND_NUM);
-            pair_order_cur.swap(a, b);
+            if rng.random_bool(0.5) {
+                pair_order_cur.swap(a, b);
+            } else {
+                let (l, r) = if a <= b { (a, b) } else { (b, a) };
+                pair_order_cur[l..=r].reverse();
+            }
         }
 
         let mut cur_ans = vec![];
