@@ -185,9 +185,17 @@ fn main() {
 
         // とりあえず全部片側を回収する
         while in_deck_num < CARD_KIND_NUM {
-            if !in_deck[ann[cur_pos.0][cur_pos.1]] {
-                pair_order.push((ann[cur_pos.0][cur_pos.1], 0));
-                in_deck[ann[cur_pos.0][cur_pos.1]] = true;
+            let cur_card = ann[cur_pos.0][cur_pos.1];
+            if !in_deck[cur_card] {
+                pair_order.push((
+                    cur_card,
+                    if cur_pos == card_pos[cur_card].0 {
+                        0
+                    } else {
+                        1
+                    },
+                ));
+                in_deck[cur_card] = true;
                 in_deck_num += 1;
             }
 
