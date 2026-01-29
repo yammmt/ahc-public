@@ -248,15 +248,8 @@ fn main() {
         // pair_order 順に最短経路を通って回収
 
         // 全部片側を回収する
-        for (card_num, side_id) in pair_order_cur.iter_mut() {
-            let chosen_side = if is_first_try {
-                let side = choose_side_id(cur_pos, card_pos[*card_num].0, card_pos[*card_num].1);
-                *side_id = side;
-                side
-            } else {
-                *side_id
-            };
-            let target_pos = if chosen_side == 0 {
+        for (card_num, side_id) in &pair_order_cur {
+            let target_pos = if *side_id == 0 {
                 card_pos[*card_num].0
             } else {
                 card_pos[*card_num].1
