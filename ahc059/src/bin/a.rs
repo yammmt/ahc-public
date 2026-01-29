@@ -266,16 +266,7 @@ fn main() {
             let cur_path = shortest_path_plain(cur_pos, target_pos);
 
             for p in cur_path {
-                // 同じ数字が連続するなら先に取る
-                if let Some(deck_top) = deck.pop_back() {
-                    if deck_top == ann_cur[cur_pos.0][cur_pos.1] {
-                        cur_ans.push('Z');
-                        cleared[deck_top] = true;
-                        ann_cur[cur_pos.0][cur_pos.1] = NO_CARD;
-                    } else {
-                        deck.push_back(deck_top);
-                    }
-                }
+                // 同じ数字が連続するなら先に取る, は逆効果だったのでしない
                 cur_ans.push(p);
                 cur_pos = next_pos_wo_check(cur_pos, p);
                 cur_move_len += 1;
