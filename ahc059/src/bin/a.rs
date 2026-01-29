@@ -236,8 +236,9 @@ fn main() {
                 }
                 1 => {
                     // 区間反転
-                    let (l, r) = if a <= b { (a, b) } else { (b, a) };
-                    pair_order_cur[l..=r].reverse();
+                    let len = rng.random_range(5..=100);
+                    let r = (a + len).min(CARD_KIND_NUM - 1);
+                    pair_order_cur[a..=r].reverse();
                 }
                 _ => {
                     // 1 枚の回収順を反転 (side_id を反転)
