@@ -9,8 +9,8 @@ const TIME_LIMIT_MS: u64 = 1980;
 
 // 焼きなまし法の温度パラメータ
 // 高すぎると良解を破壊してしまうため、少し低めに設定して山登りに近づける
-const START_TEMP: f64 = 0.5;
-const END_TEMP: f64 = 0.01;
+const START_TEMP: f64 = 1.0;
+const END_TEMP: f64 = 0.0;
 
 const N: usize = 20;
 const CARD_KIND_NUM: usize = 200;
@@ -227,16 +227,21 @@ fn main() {
         if !is_first_try {
             // 近傍解の生成
             let neighbor_type = rng.random_range(0..100);
-            if neighbor_type < 20 {
-                // 2 点入れ替え
+            if neighbor_type < 40 {
+                // 2 点入れ替え (近傍限定)
+                // 遠方同士のスワップは破壊的すぎるため、近い距離のものに限る
                 let a = rng.random_range(0..CARD_KIND_NUM);
-                let b = rng.random_range(0..CARD_KIND_NUM);
+                let dist = rng.random_range(1..=20);
+                let b = if rng.random_bool(0.5) {
+                    (a + dist).min(CARD_KIND_NUM - 1)
+                } else {
+                    a.saturating_sub(dist)
+                };
                 pair_order_cur.swap(a, b);
             } else if neighbor_type < 90 {
                 // 区間反転 (2-opt)
-                // 2-opt は TSP 系の問題で強力なので確率を高める
                 let a = rng.random_range(0..CARD_KIND_NUM);
-                let len = rng.random_range(2..=50); // 短めの反転を多めに
+                let len = rng.random_range(2..=50);
                 let r = (a + len).min(CARD_KIND_NUM - 1);
                 pair_order_cur[a..=r].reverse();
             } else {
