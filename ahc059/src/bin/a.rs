@@ -7,6 +7,11 @@ use std::time::{Duration, Instant};
 
 const TIME_LIMIT_MS: u64 = 1980;
 
+// 焼きなまし法の温度パラメータ
+// 高すぎると良解を破壊してしまうため、少し低めに設定して山登りに近づける
+const START_TEMP: f64 = 0.5;
+const END_TEMP: f64 = 0.01;
+
 const N: usize = 20;
 const CARD_KIND_NUM: usize = 200;
 const NO_CARD: usize = 9999;
@@ -89,31 +94,20 @@ fn choose_side_id(
 fn make_pairs_move(
     ans: &mut Vec<char>,
     cur_move_len: &mut usize,
-    deck: &mut VecDeque<usize>,
+    deck: &mut VecDeque<(usize, (usize, usize))>,
     cur_pos: &mut (usize, usize),
-    ann: &mut Vec<Vec<usize>>,
 ) {
-    // 未回収カードの位置を舐めておく
-    let mut card_pos = vec![(0, 0); CARD_KIND_NUM];
-    for i in 0..N {
-        for j in 0..N {
-            if ann[i][j] != NO_CARD {
-                card_pos[ann[i][j]] = (i, j);
-            }
-        }
-    }
-
     // 上から順にペアを作っていく
-    while let Some(card_no) = deck.pop_back() {
-        let p = shortest_path(*cur_pos, card_no, &card_pos);
+    while let Some((card_no, target_pos)) = deck.pop_back() {
+        // カードのもう片割れの位置へ移動
+        let p = shortest_path_plain(*cur_pos, target_pos);
         for c in p {
             ans.push(c);
             *cur_move_len += 1;
         }
         ans.push('Z');
 
-        *cur_pos = card_pos[card_no];
-        ann[cur_pos.0][cur_pos.1] = NO_CARD;
+        *cur_pos = target_pos;
     }
 }
 
@@ -158,22 +152,19 @@ fn main() {
 
     // Visualizer を見ると, 後半のグラデーションが汚く, 赤マスが離れた位置にある
 
-    // pair 位置
-    let mut card_pos = vec![((DUMMY, DUMMY), (DUMMY, DUMMY)); CARD_KIND_NUM];
+    let mut all_card_locations = vec![Vec::new(); CARD_KIND_NUM];
     for i in 0..N {
         for j in 0..N {
             let no = ann[i][j];
-
-            if card_pos[no].0 == (DUMMY, DUMMY) {
-                card_pos[no].0 = (i, j);
-            } else {
-                card_pos[no].1 = (i, j);
-            }
+            all_card_locations[no].push((i, j));
         }
     }
 
-    let mut ans = vec![];
-    let mut ans_move_len = usize::MAX;
+    let mut best_ans = vec![];
+    let mut best_move_len = usize::MAX;
+
+    // 現在の解（焼きなまし法用）
+    let mut cur_move_len_sa: usize = usize::MAX;
 
     // 初期値は DD...D->R->UU...U->... の愚直一本道
     let mut pair_order: Vec<(usize, u8)> = vec![];
@@ -187,14 +178,13 @@ fn main() {
         while in_deck_num < CARD_KIND_NUM {
             let cur_card = ann[cur_pos.0][cur_pos.1];
             if !in_deck[cur_card] {
-                pair_order.push((
-                    cur_card,
-                    if cur_pos == card_pos[cur_card].0 {
-                        0
-                    } else {
-                        1
-                    },
-                ));
+                // all_card_locations[cur_card][0] か [1] か判定
+                let idx = if cur_pos == all_card_locations[cur_card][0] {
+                    0
+                } else {
+                    1
+                };
+                pair_order.push((cur_card, idx));
                 in_deck[cur_card] = true;
                 in_deck_num += 1;
             }
@@ -221,29 +211,38 @@ fn main() {
     }
 
     let mut is_first_try = true;
+    // デバッグ用カウンタ
+    let mut iteration_count: usize = 0;
+    let mut accept_count: usize = 0;
+    let mut improve_count: usize = 0;
+    let mut best_update_count: usize = 0;
+    let mut worsen_accept_count: usize = 0; // 改悪を受け入れた回数
+    let mut total_cur_move_len: usize = 0; // 評価した解のスコア合計（平均計算用）
+
     while start_time.elapsed() < break_time {
-        // HACK: 初期盤面の複製は遅そう, 使用状況をいちいち初期化した方がよいかも
-        let mut ann_cur = ann.clone();
+        iteration_count += 1;
+
+        // 高速化のため ann_cur の複製を削除
         let mut pair_order_cur = pair_order.clone();
         if !is_first_try {
-            // 乱択山登り
-            let a = rng.random_range(0..CARD_KIND_NUM);
-            let b = rng.random_range(0..CARD_KIND_NUM);
-            match rng.random_range(0..3) {
-                0 => {
-                    // 2 点入れ替え
-                    pair_order_cur.swap(a, b);
-                }
-                1 => {
-                    // 区間反転
-                    let len = rng.random_range(5..=100);
-                    let r = (a + len).min(CARD_KIND_NUM - 1);
-                    pair_order_cur[a..=r].reverse();
-                }
-                _ => {
-                    // 1 枚の回収順を反転 (side_id を反転)
-                    pair_order_cur[a].1 ^= 1;
-                }
+            // 近傍解の生成
+            let neighbor_type = rng.random_range(0..100);
+            if neighbor_type < 20 {
+                // 2 点入れ替え
+                let a = rng.random_range(0..CARD_KIND_NUM);
+                let b = rng.random_range(0..CARD_KIND_NUM);
+                pair_order_cur.swap(a, b);
+            } else if neighbor_type < 90 {
+                // 区間反転 (2-opt)
+                // 2-opt は TSP 系の問題で強力なので確率を高める
+                let a = rng.random_range(0..CARD_KIND_NUM);
+                let len = rng.random_range(2..=50); // 短めの反転を多めに
+                let r = (a + len).min(CARD_KIND_NUM - 1);
+                pair_order_cur[a..=r].reverse();
+            } else {
+                // 1 枚の回収順を反転 (side_id を反転)
+                let a = rng.random_range(0..CARD_KIND_NUM);
+                pair_order_cur[a].1 ^= 1;
             }
         }
 
@@ -252,49 +251,105 @@ fn main() {
 
         let mut cur_pos = (0, 0);
         let mut deck = VecDeque::new();
-        let mut cleared = vec![false; CARD_KIND_NUM];
+        // let mut cleared = vec![false; CARD_KIND_NUM]; // 未使用
 
         // pair_order 順に最短経路を通って回収
 
         // 全部片側を回収する
         for (card_num, side_id) in &pair_order_cur {
-            let target_pos = if *side_id == 0 {
-                card_pos[*card_num].0
-            } else {
-                card_pos[*card_num].1
-            };
+            // side_id は選んだ方 (0 or 1). 残っている方は (1 ^ side_id)
+            let target_pos = all_card_locations[*card_num][*side_id as usize];
+            let remaining_pos = all_card_locations[*card_num][(*side_id ^ 1) as usize];
+
             let cur_path = shortest_path_plain(cur_pos, target_pos);
 
             for p in cur_path {
-                // 同じ数字が連続するなら先に取る, は逆効果だったのでしない
                 cur_ans.push(p);
                 cur_pos = next_pos_wo_check(cur_pos, p);
                 cur_move_len += 1;
             }
             cur_ans.push('Z');
-            deck.push_back(*card_num);
-            ann_cur[cur_pos.0][cur_pos.1] = NO_CARD;
+            deck.push_back((*card_num, remaining_pos));
         }
 
         // 回収パートに工夫がないので
-        make_pairs_move(
-            &mut cur_ans,
-            &mut cur_move_len,
-            &mut deck,
-            &mut cur_pos,
-            &mut ann_cur,
-        );
+        make_pairs_move(&mut cur_ans, &mut cur_move_len, &mut deck, &mut cur_pos);
 
-        if cur_move_len < ans_move_len {
-            ans = cur_ans;
-            ans_move_len = cur_move_len;
+        total_cur_move_len += cur_move_len;
+
+        // 焼きなまし法の受け入れ判定
+        let delta = cur_move_len as f64 - cur_move_len_sa as f64;
+        let accept = if is_first_try {
+            true
+        } else {
+            if delta <= 0.0 {
+                // 改善解は常に受け入れ
+                improve_count += 1;
+                true
+            } else {
+                // 改悪解は確率的に受け入れ
+                // 温度計算は accept 判定時のみ行う（軽量化）
+                let elapsed = start_time.elapsed().as_secs_f64();
+                let time_ratio = (elapsed / (TIME_LIMIT_MS as f64 / 1000.0)).min(1.0);
+                // 指数冷却を採用
+                let temp = START_TEMP * (END_TEMP / START_TEMP).powf(time_ratio);
+                let prob = (-delta / temp).exp();
+                let r = rng.random::<f64>();
+                if r < prob {
+                    worsen_accept_count += 1;
+                    true
+                } else {
+                    false
+                }
+            }
+        };
+
+        if accept {
+            accept_count += 1;
+            // 変な挙動がないかチェック (デバッグ用)
+            // if cur_move_len_sa != usize::MAX && cur_move_len > cur_move_len_sa && delta <= 0.0 {
+            //     eprintln!("Bug: Worsening score accepted as improvement!");
+            // }
+            cur_move_len_sa = cur_move_len;
             pair_order = pair_order_cur;
+
+            // 最良解の更新
+            if cur_move_len < best_move_len {
+                best_update_count += 1;
+                best_ans = cur_ans;
+                best_move_len = cur_move_len;
+            }
         }
 
         is_first_try = false;
     }
 
-    for a in ans {
+    eprintln!("=== デバッグ情報 ===");
+    eprintln!("試行回数: {}", iteration_count);
+    eprintln!(
+        "accept 回数: {} ({:.2}%)",
+        accept_count,
+        accept_count as f64 / iteration_count as f64 * 100.0
+    );
+    eprintln!(
+        "  - 改善で accept: {} ({:.2}%)",
+        improve_count,
+        improve_count as f64 / iteration_count as f64 * 100.0
+    );
+    eprintln!(
+        "  - 改悪で accept: {} ({:.2}%)",
+        worsen_accept_count,
+        worsen_accept_count as f64 / iteration_count as f64 * 100.0
+    );
+    eprintln!("best 更新回数: {}", best_update_count);
+    eprintln!("最終 best_move_len: {}", best_move_len);
+    eprintln!("最終 cur_move_len_sa: {}", cur_move_len_sa);
+    eprintln!(
+        "評価した解の平均スコア: {:.1}",
+        total_cur_move_len as f64 / iteration_count as f64
+    );
+
+    for a in best_ans {
         println!("{a}");
     }
 }
