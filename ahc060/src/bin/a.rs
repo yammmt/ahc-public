@@ -163,8 +163,16 @@ fn main() {
         let mut vcur = 0;
         // 直前に来た頂点を記録（最初は存在しない）
         let mut prev_vertex: Option<usize> = None;
+        // 無限ループ防止用カウンタ
+        let max_iterations = t * 2;
+        let mut iterations = 0;
 
         loop {
+            iterations += 1;
+            if iterations > max_iterations || ans.len() >= t - 10 {
+                break;
+            }
+
             // 有効な経路を探す
             let mut found_valid = false;
             let mut vnext = 0;
@@ -236,7 +244,12 @@ fn main() {
                     visited_detour[dv] = true;
                     que_detour.push_back((dv, vec![dv]));
 
+                    let mut bfs_iterations = 0;
                     while let Some((v, path_so_far)) = que_detour.pop_front() {
+                        bfs_iterations += 1;
+                        if bfs_iterations > n * 2 {
+                            break; // BFSの無限ループ防止
+                        }
                         for &nv in &edges[v] {
                             if visited_detour[nv] {
                                 continue;
