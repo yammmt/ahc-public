@@ -457,7 +457,6 @@ fn main() {
 
     // Solution 構造体を構築
     let mut solution = Solution::from_ans(&ans, k);
-    let mut best_solution = solution.clone();
 
     let mut cur_score = calc_score(&ans, n, k);
     let mut best_score = cur_score;
@@ -525,7 +524,6 @@ fn main() {
                     if new_score > best_score {
                         best_score = new_score;
                         best_ans = new_ans;
-                        best_solution = solution.clone();
                     }
                 } else {
                     solution.segments[seg_idx].paint_at = old_paint;
@@ -594,7 +592,6 @@ fn main() {
                     if new_score > best_score {
                         best_score = new_score;
                         best_ans = new_ans;
-                        best_solution = solution.clone();
                     }
                 } else {
                     for (si, old_p) in old_paints.into_iter().enumerate() {
@@ -671,7 +668,6 @@ fn main() {
                     if new_score > best_score {
                         best_score = new_score;
                         best_ans = new_ans;
-                        best_solution = solution.clone();
                     }
                 } else {
                     solution.segments[idx] = old_seg0;
@@ -729,7 +725,6 @@ fn main() {
                     if new_score > best_score {
                         best_score = new_score;
                         best_ans = new_ans;
-                        best_solution = solution.clone();
                     }
                 } else {
                     solution.segments[idx] = old_seg0;
@@ -806,7 +801,6 @@ fn main() {
                     if new_score > best_score {
                         best_score = new_score;
                         best_ans = new_ans;
-                        best_solution = solution.clone();
                     }
                 } else {
                     solution.segments.remove(idx + 1);
