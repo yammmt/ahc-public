@@ -459,15 +459,25 @@ fn main() {
     let mut solution = Solution::from_ans(&ans, k);
     let mut best_solution = solution.clone();
 
-    let mut best_score = calc_score(&ans, n, k);
+    let mut cur_score = calc_score(&ans, n, k);
+    let mut best_score = cur_score;
     let mut best_ans = ans.clone();
     // eprintln!("score: {best_score}");
 
-    // 山登り法
+    // 焼きなまし法のパラメータ
+    let start_temp: f64 = 10.0;
+    let end_temp: f64 = 0.1;
+    let time_limit = break_time.as_secs_f64();
+
+    // 焼きなまし法
     while start_time.elapsed() < break_time {
+        let elapsed = start_time.elapsed().as_secs_f64();
+        let progress = elapsed / time_limit;
+        let temp = start_temp * (end_temp / start_temp).powf(progress);
+
         // 近傍操作を選択
         // 0,1: 塗り替え操作、2,3,4: 訪問順操作
-        let op = rng.gen_range(0..5);
+        let op = rng.random_range(0..5);
 
         match op {
             0 => {
@@ -499,11 +509,17 @@ fn main() {
                 }
 
                 let new_ans = solution.to_ans(n);
-                let cur_score = calc_score(&new_ans, n, k);
-                if cur_score > best_score {
-                    best_score = cur_score;
-                    best_ans = new_ans;
-                    best_solution = solution.clone();
+                let new_score = calc_score(&new_ans, n, k);
+                let diff = new_score as f64 - cur_score as f64;
+                let accept = diff > 0.0 || rng.random::<f64>() < (diff / temp).exp();
+
+                if accept {
+                    cur_score = new_score;
+                    if new_score > best_score {
+                        best_score = new_score;
+                        best_ans = new_ans;
+                        best_solution = solution.clone();
+                    }
                 } else {
                     solution.segments[seg_idx].paint_at = old_paint;
                 }
@@ -562,11 +578,17 @@ fn main() {
                 }
 
                 let new_ans = solution.to_ans(n);
-                let cur_score = calc_score(&new_ans, n, k);
-                if cur_score > best_score {
-                    best_score = cur_score;
-                    best_ans = new_ans;
-                    best_solution = solution.clone();
+                let new_score = calc_score(&new_ans, n, k);
+                let diff = new_score as f64 - cur_score as f64;
+                let accept = diff > 0.0 || rng.random::<f64>() < (diff / temp).exp();
+
+                if accept {
+                    cur_score = new_score;
+                    if new_score > best_score {
+                        best_score = new_score;
+                        best_ans = new_ans;
+                        best_solution = solution.clone();
+                    }
                 } else {
                     for (si, old_p) in old_paints.into_iter().enumerate() {
                         solution.segments[si].paint_at = old_p;
@@ -633,11 +655,17 @@ fn main() {
                 }
 
                 let new_ans = solution.to_ans(n);
-                let cur_score = calc_score(&new_ans, n, k);
-                if cur_score > best_score {
-                    best_score = cur_score;
-                    best_ans = new_ans;
-                    best_solution = solution.clone();
+                let new_score = calc_score(&new_ans, n, k);
+                let diff = new_score as f64 - cur_score as f64;
+                let accept = diff > 0.0 || rng.random::<f64>() < (diff / temp).exp();
+
+                if accept {
+                    cur_score = new_score;
+                    if new_score > best_score {
+                        best_score = new_score;
+                        best_ans = new_ans;
+                        best_solution = solution.clone();
+                    }
                 } else {
                     solution.segments[idx] = old_seg0;
                     solution.segments[idx + 1] = old_seg1;
@@ -685,11 +713,17 @@ fn main() {
                 }
 
                 let new_ans = solution.to_ans(n);
-                let cur_score = calc_score(&new_ans, n, k);
-                if cur_score > best_score {
-                    best_score = cur_score;
-                    best_ans = new_ans;
-                    best_solution = solution.clone();
+                let new_score = calc_score(&new_ans, n, k);
+                let diff = new_score as f64 - cur_score as f64;
+                let accept = diff > 0.0 || rng.random::<f64>() < (diff / temp).exp();
+
+                if accept {
+                    cur_score = new_score;
+                    if new_score > best_score {
+                        best_score = new_score;
+                        best_ans = new_ans;
+                        best_solution = solution.clone();
+                    }
                 } else {
                     solution.segments[idx] = old_seg0;
                     solution.segments.insert(idx + 1, old_seg1);
@@ -756,11 +790,17 @@ fn main() {
                 }
 
                 let new_ans = solution.to_ans(n);
-                let cur_score = calc_score(&new_ans, n, k);
-                if cur_score > best_score {
-                    best_score = cur_score;
-                    best_ans = new_ans;
-                    best_solution = solution.clone();
+                let new_score = calc_score(&new_ans, n, k);
+                let diff = new_score as f64 - cur_score as f64;
+                let accept = diff > 0.0 || rng.random::<f64>() < (diff / temp).exp();
+
+                if accept {
+                    cur_score = new_score;
+                    if new_score > best_score {
+                        best_score = new_score;
+                        best_ans = new_ans;
+                        best_solution = solution.clone();
+                    }
                 } else {
                     solution.segments.remove(idx + 1);
                     solution.segments[idx] = old_seg;
