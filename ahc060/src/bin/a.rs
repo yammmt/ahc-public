@@ -251,6 +251,111 @@ fn calc_icecream(path: &Vec<usize>, is_white: &Vec<bool>) -> Vec<bool> {
     ret
 }
 
+/// ランダムウォークでショップ間の経路を生成
+/// from_shop から to_shop への経路を返す（始点を除き、終点を含む）
+/// max_extra_steps: 最短経路からの追加ステップ数の上限
+fn random_path(
+    from_shop: usize,
+    to_shop: usize,
+    edges: &Vec<Vec<usize>>,
+    k: usize,
+    n: usize,
+    rng: &mut SmallRng,
+    max_extra_steps: usize,
+) -> Option<Vec<usize>> {
+    // BFSで最短距離を計算
+    let mut dist = vec![usize::MAX; n];
+    let mut que = VecDeque::new();
+    que.push_back(to_shop);
+    dist[to_shop] = 0;
+
+    while let Some(v) = que.pop_front() {
+        for &next in &edges[v] {
+            if dist[next] == usize::MAX {
+                dist[next] = dist[v] + 1;
+                que.push_back(next);
+            }
+        }
+    }
+
+    if dist[from_shop] == usize::MAX {
+        return None;
+    }
+
+    let shortest = dist[from_shop];
+    let max_len = shortest + max_extra_steps;
+
+    // ランダムウォークで経路を生成
+    let mut path = vec![];
+    let mut cur = from_shop;
+    let mut prev = from_shop; // 直前の頂点を記録
+    let mut visited_count = vec![0usize; n];
+    visited_count[from_shop] = 1;
+
+    while cur != to_shop {
+        if path.len() >= max_len {
+            // 経路が長すぎる場合、最短経路にフォールバック
+            return None;
+        }
+
+        // 次の頂点を選択（直前の頂点には戻らない、中間ショップを経由しない）
+        let neighbors: Vec<usize> = edges[cur]
+            .iter()
+            .filter(|&&v| {
+                // 直前の頂点には戻らない
+                // 目的地以外のショップ（v < k && v != to_shop）は経由しない
+                v != prev
+                    && dist[v] != usize::MAX
+                    && visited_count[v] < 2
+                    && (v >= k || v == to_shop)
+            })
+            .cloned()
+            .collect();
+
+        if neighbors.is_empty() {
+            return None;
+        }
+
+        // 重み付き選択: ゴールに近い頂点を優先
+        let mut weights: Vec<f64> = neighbors
+            .iter()
+            .map(|&v| {
+                let d = dist[v] as f64;
+                if d < dist[cur] as f64 {
+                    3.0 // 近づく方向を優先
+                } else if d == dist[cur] as f64 {
+                    1.0 // 同じ距離
+                } else {
+                    0.3 // 遠ざかる方向（探索のため少し許可）
+                }
+            })
+            .collect();
+
+        let total: f64 = weights.iter().sum();
+        for w in &mut weights {
+            *w /= total;
+        }
+
+        let r: f64 = rng.random();
+        let mut cumsum = 0.0;
+        let mut next = neighbors[0];
+        for (i, &w) in weights.iter().enumerate() {
+            cumsum += w;
+            if r < cumsum {
+                next = neighbors[i];
+                break;
+            }
+        }
+
+        path.push(next);
+        visited_count[next] += 1;
+        prev = cur;
+        cur = next;
+    }
+
+    Some(path)
+}
+
 #[fastout]
 fn main() {
     let start_time = Instant::now();
@@ -475,11 +580,11 @@ fn main() {
         let temp = start_temp * (end_temp / start_temp).powf(progress);
 
         // 近傍操作を選択
-        // 0,1: 塗り替え操作、2,3,4: 訪問順操作
+        // 0,1: 塗り替え操作、2,3,4,5: 訪問順操作
         // パス操作:塗替え をいい感じにする
         let op = if rng.random_bool(0.90) {
             // パス操作
-            rng.random_range(2..5)
+            rng.random_range(2..6)
         } else {
             // 塗替え操作
             rng.random_range(0..2)
@@ -804,6 +909,59 @@ fn main() {
                     }
                 } else {
                     solution.segments.remove(idx + 1);
+                    solution.segments[idx] = old_seg;
+                }
+            }
+            5 => {
+                // 操作5: 同じショップ間で別経路を試す
+                if solution.segments.is_empty() {
+                    continue;
+                }
+
+                let idx = rng.random_range(0..solution.segments.len());
+                let from_shop = solution.segments[idx].from_shop;
+                let to_shop = solution.segments[idx].to_shop;
+
+                // ランダムウォークで新しい経路を生成
+                let max_extra = rng.random_range(0..4);
+                let new_path_opt =
+                    random_path(from_shop, to_shop, &edges, k, n, &mut rng, max_extra);
+
+                if new_path_opt.is_none() {
+                    continue;
+                }
+
+                let new_full_path = new_path_opt.unwrap();
+                // 経路からショップを除いた木の頂点のみを抽出
+                let new_tree_path: Vec<usize> =
+                    new_full_path.iter().filter(|&&v| v >= k).cloned().collect();
+
+                let old_seg = solution.segments[idx].clone();
+
+                solution.segments[idx] = Segment {
+                    from_shop: from_shop,
+                    to_shop: to_shop,
+                    path: new_tree_path,
+                    paint_at: None,
+                };
+
+                if !solution.is_valid(t, n, k) {
+                    solution.segments[idx] = old_seg;
+                    continue;
+                }
+
+                let new_ans = solution.to_ans(n);
+                let new_score = calc_score(&new_ans, n, k);
+                let diff = new_score as f64 - cur_score as f64;
+                let accept = diff > 0.0 || rng.random::<f64>() < (diff / temp).exp();
+
+                if accept {
+                    cur_score = new_score;
+                    if new_score > best_score {
+                        best_score = new_score;
+                        best_ans = new_ans;
+                    }
+                } else {
                     solution.segments[idx] = old_seg;
                 }
             }
