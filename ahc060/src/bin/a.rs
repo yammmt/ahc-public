@@ -57,22 +57,25 @@ fn bfs(
 }
 
 /// スコアを返す. WA 判定はめんどいので略
+/// 塗り替えは移動後に行うため、収穫してから塗り替える順序で処理
 fn calc_score(ans: &Vec<(isize, bool)>, n: usize, k: usize) -> usize {
     let mut is_white = vec![true; n];
     let mut icecreams = vec![HashSet::new(); k];
 
-    let mut vcur = 0;
     let mut icecur = vec![];
     for &(a, do_paint) in ans {
-        if (a as usize) < k {
-            icecreams[a as usize].insert(icecur.clone());
+        let v = a as usize;
+        if v < k {
+            // ショップに到着：納品
+            icecreams[v].insert(icecur.clone());
             icecur.clear();
         } else {
-            icecur.push(is_white[a as usize]);
-        }
-        vcur = a as usize;
-        if do_paint {
-            is_white[vcur] = false;
+            // 木に到着：収穫（現在の色を取得）
+            icecur.push(is_white[v]);
+            // 塗り替え（行動2）は収穫後に行う
+            if do_paint && is_white[v] {
+                is_white[v] = false;
+            }
         }
     }
 
@@ -80,6 +83,22 @@ fn calc_score(ans: &Vec<(isize, bool)>, n: usize, k: usize) -> usize {
     icecreams.iter().for_each(|a| ret += a.len());
 
     ret
+}
+
+/// 総ステップ数を計算（移動 + 有効な塗り替え）
+/// 同じ頂点での2回目以降の塗り替えはカウントしない
+fn calc_steps(ans: &Vec<(isize, bool)>, n: usize, k: usize) -> usize {
+    let mut painted = vec![false; n];
+    let mut steps = 0;
+    for &(a, do_paint) in ans {
+        steps += 1; // 移動
+        let v = a as usize;
+        if v >= k && do_paint && !painted[v] {
+            steps += 1; // 塗り替え（初回のみ）
+            painted[v] = true;
+        }
+    }
+    steps
 }
 
 fn calc_icecream(path: &Vec<usize>, is_white: &Vec<bool>) -> Vec<bool> {
@@ -165,7 +184,7 @@ fn main() {
                 skip_count += 1;
             }
 
-            if ans.len() + pathcur.len() >= t {
+            if ans.len() + pathcur.len() >= t - m + k {
                 break;
             }
 
@@ -176,25 +195,122 @@ fn main() {
         }
     }
     let mut best_score = calc_score(&ans, n, k);
+    let mut best_ans = ans.clone();
     // eprintln!("score: {best_score}");
 
-    // 乱択
-    while start_time.elapsed() < break_time {
-        break;
-
-        let mut cur: Vec<(isize, bool)> = vec![];
-
-        // TODO
-        // ans の長さに bool を入れていないので注意
-
-        let cur_score = calc_score(&cur, n, k);
-        if cur_score > best_score {
-            best_score = cur_score;
-            ans = cur;
+    // 各木の頂点について、訪問するインデックスのリストを収集
+    let mut visit_indices: Vec<Vec<usize>> = vec![vec![]; n];
+    for (i, &(a, _)) in ans.iter().enumerate() {
+        let v = a as usize;
+        if v >= k {
+            visit_indices[v].push(i);
         }
     }
 
-    for a in ans {
+    // 複数回訪問する木の頂点のリスト
+    let multi_visit_vertices: Vec<usize> = (k..n).filter(|&v| visit_indices[v].len() > 1).collect();
+
+    // 山登り法
+    while start_time.elapsed() < break_time {
+        // 近傍操作を選択
+        let op = rng.gen_range(0..2);
+
+        match op {
+            0 => {
+                // 操作1: ランダムな訪問の塗り替えフラグを反転
+                // ただし、その頂点で既に別の訪問で塗り替えている場合は、そちらをOFFにする
+                let all_tree_visits: Vec<usize> = ans
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, (a, _))| (*a as usize) >= k)
+                    .map(|(i, _)| i)
+                    .collect();
+
+                if all_tree_visits.is_empty() {
+                    continue;
+                }
+
+                let idx = all_tree_visits[rng.gen_range(0..all_tree_visits.len())];
+                let v = ans[idx].0 as usize;
+
+                if ans[idx].1 {
+                    // 塗り替えをOFFにする
+                    ans[idx].1 = false;
+                } else {
+                    // 塗り替えをONにする前に、同じ頂点の他の訪問の塗り替えをOFFに
+                    for &other_idx in &visit_indices[v] {
+                        ans[other_idx].1 = false;
+                    }
+                    ans[idx].1 = true;
+                }
+
+                // ステップ数チェック
+                if calc_steps(&ans, n, k) > t {
+                    // 元に戻す
+                    for &other_idx in &visit_indices[v] {
+                        ans[other_idx].1 = best_ans[other_idx].1;
+                    }
+                    continue;
+                }
+
+                let cur_score = calc_score(&ans, n, k);
+                if cur_score > best_score {
+                    best_score = cur_score;
+                    best_ans = ans.clone();
+                } else {
+                    // 元に戻す
+                    for &other_idx in &visit_indices[v] {
+                        ans[other_idx].1 = best_ans[other_idx].1;
+                    }
+                }
+            }
+            1 => {
+                // 操作2: 複数回訪問する頂点で、塗り替えタイミングを変更
+                if multi_visit_vertices.is_empty() {
+                    continue;
+                }
+
+                let v = multi_visit_vertices[rng.gen_range(0..multi_visit_vertices.len())];
+                let visits = &visit_indices[v];
+
+                // 現在塗り替えが有効な訪問を探す
+                let current_paint_idx = visits.iter().find(|&&i| ans[i].1).copied();
+
+                // 新しい塗り替え位置をランダムに選択
+                let new_idx = visits[rng.gen_range(0..visits.len())];
+
+                // 全てOFFにしてから新しい位置をON
+                for &i in visits {
+                    ans[i].1 = false;
+                }
+                // 現在と同じ位置ならOFFのまま、違う位置ならON
+                if current_paint_idx != Some(new_idx) {
+                    ans[new_idx].1 = true;
+                }
+
+                // ステップ数チェック
+                if calc_steps(&ans, n, k) > t {
+                    for &i in visits {
+                        ans[i].1 = best_ans[i].1;
+                    }
+                    continue;
+                }
+
+                let cur_score = calc_score(&ans, n, k);
+                if cur_score > best_score {
+                    best_score = cur_score;
+                    best_ans = ans.clone();
+                } else {
+                    for &i in visits {
+                        ans[i].1 = best_ans[i].1;
+                    }
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    for a in best_ans {
         println!("{}", a.0);
         if a.1 {
             println!("-1");
