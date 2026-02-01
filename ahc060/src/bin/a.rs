@@ -9,6 +9,148 @@ use std::time::{Duration, Instant};
 // 2 s
 const TIME_LIMIT_MS: u64 = 1980;
 
+/// セグメント: ショップからショップへの1区間
+#[derive(Clone, Debug)]
+struct Segment {
+    from_shop: usize,        // 出発ショップ
+    to_shop: usize,          // 到着ショップ
+    path: Vec<usize>,        // 経由する頂点（木の頂点のみ、ショップは含まない）
+    paint_at: Option<usize>, // この区間内で塗り替える位置（pathのインデックス）
+}
+
+/// 解をセグメントの列として管理
+#[derive(Clone, Debug)]
+struct Solution {
+    segments: Vec<Segment>,
+}
+
+impl Solution {
+    /// セグメント列からフラットな ans を生成
+    fn to_ans(&self, n: usize) -> Vec<(isize, bool)> {
+        let mut painted = vec![false; n];
+        let mut ans = vec![];
+        for seg in &self.segments {
+            // 木の頂点を追加
+            for (i, &v) in seg.path.iter().enumerate() {
+                let do_paint = seg.paint_at == Some(i) && !painted[v];
+                if do_paint {
+                    painted[v] = true;
+                }
+                ans.push((v as isize, do_paint));
+            }
+            // 到着ショップを追加
+            ans.push((seg.to_shop as isize, false));
+        }
+        ans
+    }
+
+    /// フラットな ans からセグメント列を構築
+    fn from_ans(ans: &Vec<(isize, bool)>, k: usize) -> Self {
+        let mut segments = vec![];
+        let mut current_from = 0usize;
+        let mut current_path = vec![];
+        let mut current_paint_at = None;
+
+        for (i, &(v, do_paint)) in ans.iter().enumerate() {
+            let v = v as usize;
+            if v < k {
+                // ショップに到着
+                segments.push(Segment {
+                    from_shop: current_from,
+                    to_shop: v,
+                    path: current_path.clone(),
+                    paint_at: current_paint_at,
+                });
+                current_from = v;
+                current_path.clear();
+                current_paint_at = None;
+            } else {
+                // 木の頂点
+                if do_paint {
+                    current_paint_at = Some(current_path.len());
+                }
+                current_path.push(v);
+            }
+        }
+
+        Solution { segments }
+    }
+
+    /// 総ステップ数を計算
+    fn calc_steps(&self, n: usize) -> usize {
+        let mut painted = vec![false; n];
+        let mut steps = 0;
+        for seg in &self.segments {
+            for (i, &v) in seg.path.iter().enumerate() {
+                steps += 1;
+                if seg.paint_at == Some(i) && !painted[v] {
+                    steps += 1;
+                    painted[v] = true;
+                }
+            }
+            steps += 1; // ショップへの移動
+        }
+        steps
+    }
+
+    /// 接続が正しいかチェック
+    fn is_connected(&self) -> bool {
+        for i in 1..self.segments.len() {
+            if self.segments[i - 1].to_shop != self.segments[i].from_shop {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// 「前回移動元に戻れない」制約のチェック
+    fn check_no_immediate_return(&self, k: usize) -> bool {
+        for i in 1..self.segments.len() {
+            let prev_seg = &self.segments[i - 1];
+            let cur_seg = &self.segments[i];
+
+            // 前セグメントの最後の頂点（到着ショップの直前）
+            let prev_last = if prev_seg.path.is_empty() {
+                prev_seg.from_shop
+            } else {
+                *prev_seg.path.last().unwrap()
+            };
+
+            // 現セグメントの最初の頂点
+            let cur_first = if cur_seg.path.is_empty() {
+                cur_seg.to_shop
+            } else {
+                cur_seg.path[0]
+            };
+
+            if cur_first == prev_last {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// 全ての制約を満たすかチェック
+    fn is_valid(&self, t: usize, n: usize, k: usize) -> bool {
+        if self.segments.is_empty() {
+            return true;
+        }
+        if self.segments[0].from_shop != 0 {
+            return false;
+        }
+        if !self.is_connected() {
+            return false;
+        }
+        if !self.check_no_immediate_return(k) {
+            return false;
+        }
+        if self.calc_steps(n) > t {
+            return false;
+        }
+        true
+    }
+}
+
 /// ショップ間の最短移動経路を `cycles` に格納して返す.
 /// 返す経路には始点は含まないが, 終点は含まれる.
 fn bfs(
@@ -312,116 +454,316 @@ fn main() {
             vcur = vnext;
         }
     }
+
+    // Solution 構造体を構築
+    let mut solution = Solution::from_ans(&ans, k);
+    let mut best_solution = solution.clone();
+
     let mut best_score = calc_score(&ans, n, k);
     let mut best_ans = ans.clone();
     // eprintln!("score: {best_score}");
 
-    // 各木の頂点について、訪問するインデックスのリストを収集
-    let mut visit_indices: Vec<Vec<usize>> = vec![vec![]; n];
-    for (i, &(a, _)) in ans.iter().enumerate() {
-        let v = a as usize;
-        if v >= k {
-            visit_indices[v].push(i);
-        }
-    }
-
-    // 複数回訪問する木の頂点のリスト
-    let multi_visit_vertices: Vec<usize> = (k..n).filter(|&v| visit_indices[v].len() > 1).collect();
-
     // 山登り法
     while start_time.elapsed() < break_time {
         // 近傍操作を選択
-        let op = rng.gen_range(0..2);
+        // 0,1: 塗り替え操作、2,3,4: 訪問順操作
+        let op = rng.gen_range(0..5);
 
         match op {
             0 => {
-                // 操作1: ランダムな訪問の塗り替えフラグを反転
-                // ただし、その頂点で既に別の訪問で塗り替えている場合は、そちらをOFFにする
-                let all_tree_visits: Vec<usize> = ans
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, (a, _))| (*a as usize) >= k)
-                    .map(|(i, _)| i)
-                    .collect();
-
-                if all_tree_visits.is_empty() {
+                // 操作0: ランダムな訪問の塗り替えフラグを反転
+                if solution.segments.is_empty() {
                     continue;
                 }
 
-                let idx = all_tree_visits[rng.gen_range(0..all_tree_visits.len())];
-                let v = ans[idx].0 as usize;
+                // ランダムなセグメントを選択
+                let seg_idx = rng.gen_range(0..solution.segments.len());
+                if solution.segments[seg_idx].path.is_empty() {
+                    continue;
+                }
 
-                if ans[idx].1 {
-                    // 塗り替えをOFFにする
-                    ans[idx].1 = false;
+                let old_paint = solution.segments[seg_idx].paint_at;
+                let path_len = solution.segments[seg_idx].path.len();
+
+                // 塗り替え位置を変更（None または ランダムな位置）
+                let new_paint = if rng.gen_bool(0.3) {
+                    None
                 } else {
-                    // 塗り替えをONにする前に、同じ頂点の他の訪問の塗り替えをOFFに
-                    for &other_idx in &visit_indices[v] {
-                        ans[other_idx].1 = false;
-                    }
-                    ans[idx].1 = true;
-                }
+                    Some(rng.gen_range(0..path_len))
+                };
+                solution.segments[seg_idx].paint_at = new_paint;
 
-                // ステップ数チェック
-                if calc_steps(&ans, n, k) > t {
-                    // 元に戻す
-                    for &other_idx in &visit_indices[v] {
-                        ans[other_idx].1 = best_ans[other_idx].1;
-                    }
+                if !solution.is_valid(t, n, k) {
+                    solution.segments[seg_idx].paint_at = old_paint;
                     continue;
                 }
 
-                let cur_score = calc_score(&ans, n, k);
+                let new_ans = solution.to_ans(n);
+                let cur_score = calc_score(&new_ans, n, k);
                 if cur_score > best_score {
                     best_score = cur_score;
-                    best_ans = ans.clone();
+                    best_ans = new_ans;
+                    best_solution = solution.clone();
                 } else {
-                    // 元に戻す
-                    for &other_idx in &visit_indices[v] {
-                        ans[other_idx].1 = best_ans[other_idx].1;
-                    }
+                    solution.segments[seg_idx].paint_at = old_paint;
                 }
             }
             1 => {
-                // 操作2: 複数回訪問する頂点で、塗り替えタイミングを変更
-                if multi_visit_vertices.is_empty() {
+                // 操作1: 複数のセグメントで同じ頂点を通る場合、塗り替えタイミングを移動
+                if solution.segments.is_empty() {
                     continue;
                 }
 
-                let v = multi_visit_vertices[rng.gen_range(0..multi_visit_vertices.len())];
-                let visits = &visit_indices[v];
-
-                // 現在塗り替えが有効な訪問を探す
-                let current_paint_idx = visits.iter().find(|&&i| ans[i].1).copied();
-
-                // 新しい塗り替え位置をランダムに選択
-                let new_idx = visits[rng.gen_range(0..visits.len())];
-
-                // 全てOFFにしてから新しい位置をON
-                for &i in visits {
-                    ans[i].1 = false;
-                }
-                // 現在と同じ位置ならOFFのまま、違う位置ならON
-                if current_paint_idx != Some(new_idx) {
-                    ans[new_idx].1 = true;
+                // ランダムなセグメントを選び、そのパス内の頂点を選ぶ
+                let seg_idx = rng.gen_range(0..solution.segments.len());
+                if solution.segments[seg_idx].path.is_empty() {
+                    continue;
                 }
 
-                // ステップ数チェック
-                if calc_steps(&ans, n, k) > t {
-                    for &i in visits {
-                        ans[i].1 = best_ans[i].1;
+                let path_idx = rng.gen_range(0..solution.segments[seg_idx].path.len());
+                let target_v = solution.segments[seg_idx].path[path_idx];
+
+                // 同じ頂点を含む他のセグメントを探す
+                let mut candidates: Vec<(usize, usize)> = vec![];
+                for (si, seg) in solution.segments.iter().enumerate() {
+                    for (pi, &v) in seg.path.iter().enumerate() {
+                        if v == target_v {
+                            candidates.push((si, pi));
+                        }
+                    }
+                }
+
+                if candidates.len() <= 1 {
+                    continue;
+                }
+
+                // 現在の塗り替え位置を保存
+                let old_paints: Vec<Option<usize>> =
+                    solution.segments.iter().map(|s| s.paint_at).collect();
+
+                // 全セグメントでこの頂点の塗り替えをOFFに
+                for &(si, _) in &candidates {
+                    if let Some(paint_idx) = solution.segments[si].paint_at {
+                        if solution.segments[si].path.get(paint_idx) == Some(&target_v) {
+                            solution.segments[si].paint_at = None;
+                        }
+                    }
+                }
+
+                // ランダムな位置でONに
+                let (new_si, new_pi) = candidates[rng.gen_range(0..candidates.len())];
+                solution.segments[new_si].paint_at = Some(new_pi);
+
+                if !solution.is_valid(t, n, k) {
+                    for (si, old_p) in old_paints.into_iter().enumerate() {
+                        solution.segments[si].paint_at = old_p;
                     }
                     continue;
                 }
 
-                let cur_score = calc_score(&ans, n, k);
+                let new_ans = solution.to_ans(n);
+                let cur_score = calc_score(&new_ans, n, k);
                 if cur_score > best_score {
                     best_score = cur_score;
-                    best_ans = ans.clone();
+                    best_ans = new_ans;
+                    best_solution = solution.clone();
                 } else {
-                    for &i in visits {
-                        ans[i].1 = best_ans[i].1;
+                    for (si, old_p) in old_paints.into_iter().enumerate() {
+                        solution.segments[si].paint_at = old_p;
                     }
+                }
+            }
+            2 => {
+                // 操作2: 2つの隣接セグメントの中間ショップを変更
+                if solution.segments.len() < 2 {
+                    continue;
+                }
+
+                let idx = rng.gen_range(0..solution.segments.len() - 1);
+                let from_shop = solution.segments[idx].from_shop;
+                let end_shop = solution.segments[idx + 1].to_shop;
+
+                // 新しい中間ショップをランダムに選択
+                let new_mid = rng.gen_range(0..k);
+                if new_mid == from_shop || new_mid == end_shop {
+                    continue;
+                }
+
+                // cycles から経路を取得
+                let path1_opt = cycles[from_shop]
+                    .iter()
+                    .find(|(to, _)| *to == new_mid)
+                    .map(|(_, p)| p.clone());
+                let path2_opt = cycles[new_mid]
+                    .iter()
+                    .find(|(to, _)| *to == end_shop)
+                    .map(|(_, p)| p.clone());
+
+                if path1_opt.is_none() || path2_opt.is_none() {
+                    continue;
+                }
+
+                let path1 = path1_opt.unwrap();
+                let path2 = path2_opt.unwrap();
+
+                // 経路から到着ショップを除いた木の頂点のみを抽出
+                let tree_path1: Vec<usize> = path1.iter().filter(|&&v| v >= k).cloned().collect();
+                let tree_path2: Vec<usize> = path2.iter().filter(|&&v| v >= k).cloned().collect();
+
+                let old_seg0 = solution.segments[idx].clone();
+                let old_seg1 = solution.segments[idx + 1].clone();
+
+                solution.segments[idx] = Segment {
+                    from_shop: from_shop,
+                    to_shop: new_mid,
+                    path: tree_path1,
+                    paint_at: None,
+                };
+                solution.segments[idx + 1] = Segment {
+                    from_shop: new_mid,
+                    to_shop: end_shop,
+                    path: tree_path2,
+                    paint_at: None,
+                };
+
+                if !solution.is_valid(t, n, k) {
+                    solution.segments[idx] = old_seg0;
+                    solution.segments[idx + 1] = old_seg1;
+                    continue;
+                }
+
+                let new_ans = solution.to_ans(n);
+                let cur_score = calc_score(&new_ans, n, k);
+                if cur_score > best_score {
+                    best_score = cur_score;
+                    best_ans = new_ans;
+                    best_solution = solution.clone();
+                } else {
+                    solution.segments[idx] = old_seg0;
+                    solution.segments[idx + 1] = old_seg1;
+                }
+            }
+            3 => {
+                // 操作3: セグメントを削除（2つのセグメントを1つに統合）
+                if solution.segments.len() < 2 {
+                    continue;
+                }
+
+                let idx = rng.gen_range(0..solution.segments.len() - 1);
+                let from_shop = solution.segments[idx].from_shop;
+                let end_shop = solution.segments[idx + 1].to_shop;
+
+                // cycles から直接経路を取得
+                let direct_path_opt = cycles[from_shop]
+                    .iter()
+                    .find(|(to, _)| *to == end_shop)
+                    .map(|(_, p)| p.clone());
+
+                if direct_path_opt.is_none() {
+                    continue;
+                }
+
+                let direct_path = direct_path_opt.unwrap();
+                let tree_path: Vec<usize> =
+                    direct_path.iter().filter(|&&v| v >= k).cloned().collect();
+
+                let old_seg0 = solution.segments[idx].clone();
+                let old_seg1 = solution.segments[idx + 1].clone();
+
+                solution.segments[idx] = Segment {
+                    from_shop: from_shop,
+                    to_shop: end_shop,
+                    path: tree_path,
+                    paint_at: None,
+                };
+                solution.segments.remove(idx + 1);
+
+                if !solution.is_valid(t, n, k) {
+                    solution.segments[idx] = old_seg0;
+                    solution.segments.insert(idx + 1, old_seg1);
+                    continue;
+                }
+
+                let new_ans = solution.to_ans(n);
+                let cur_score = calc_score(&new_ans, n, k);
+                if cur_score > best_score {
+                    best_score = cur_score;
+                    best_ans = new_ans;
+                    best_solution = solution.clone();
+                } else {
+                    solution.segments[idx] = old_seg0;
+                    solution.segments.insert(idx + 1, old_seg1);
+                }
+            }
+            4 => {
+                // 操作4: セグメントを挿入（1つのセグメントを2つに分割）
+                if solution.segments.is_empty() {
+                    continue;
+                }
+
+                let idx = rng.gen_range(0..solution.segments.len());
+                let from_shop = solution.segments[idx].from_shop;
+                let to_shop = solution.segments[idx].to_shop;
+
+                // 中間ショップをランダムに選択
+                let mid_shop = rng.gen_range(0..k);
+                if mid_shop == from_shop || mid_shop == to_shop {
+                    continue;
+                }
+
+                // cycles から経路を取得
+                let path1_opt = cycles[from_shop]
+                    .iter()
+                    .find(|(to, _)| *to == mid_shop)
+                    .map(|(_, p)| p.clone());
+                let path2_opt = cycles[mid_shop]
+                    .iter()
+                    .find(|(to, _)| *to == to_shop)
+                    .map(|(_, p)| p.clone());
+
+                if path1_opt.is_none() || path2_opt.is_none() {
+                    continue;
+                }
+
+                let path1 = path1_opt.unwrap();
+                let path2 = path2_opt.unwrap();
+
+                let tree_path1: Vec<usize> = path1.iter().filter(|&&v| v >= k).cloned().collect();
+                let tree_path2: Vec<usize> = path2.iter().filter(|&&v| v >= k).cloned().collect();
+
+                let old_seg = solution.segments[idx].clone();
+
+                solution.segments[idx] = Segment {
+                    from_shop: from_shop,
+                    to_shop: mid_shop,
+                    path: tree_path1,
+                    paint_at: None,
+                };
+                solution.segments.insert(
+                    idx + 1,
+                    Segment {
+                        from_shop: mid_shop,
+                        to_shop: to_shop,
+                        path: tree_path2,
+                        paint_at: None,
+                    },
+                );
+
+                if !solution.is_valid(t, n, k) {
+                    solution.segments.remove(idx + 1);
+                    solution.segments[idx] = old_seg;
+                    continue;
+                }
+
+                let new_ans = solution.to_ans(n);
+                let cur_score = calc_score(&new_ans, n, k);
+                if cur_score > best_score {
+                    best_score = cur_score;
+                    best_ans = new_ans;
+                    best_solution = solution.clone();
+                } else {
+                    solution.segments.remove(idx + 1);
+                    solution.segments[idx] = old_seg;
                 }
             }
             _ => unreachable!(),
