@@ -14,7 +14,7 @@ const TIME_LIMIT_MS: u64 = 1980;
 fn bfs(
     vstart: usize,
     edges: &Vec<Vec<usize>>,
-    cycles: &mut Vec<Vec<(usize, Vec<isize>)>>,
+    cycles: &mut Vec<Vec<(usize, Vec<usize>)>>,
     n: usize,
     k: usize,
 ) {
@@ -31,14 +31,14 @@ fn bfs(
         comes_from[vcur] = Some(vfrom);
         if vcur != vstart && vcur < k {
             // goal
-            let mut path = vec![vcur as isize];
+            let mut path = vec![vcur];
             let mut v = vcur;
             while let Some(vprev) = comes_from[v] {
                 if vprev == v {
                     break;
                 }
 
-                path.push(vprev as isize);
+                path.push(vprev);
                 v = vprev;
             }
             // 始点を除く
@@ -57,23 +57,22 @@ fn bfs(
 }
 
 /// スコアを返す. WA 判定はめんどいので略
-fn calc_score(ans: &Vec<isize>, n: usize, k: usize) -> usize {
+fn calc_score(ans: &Vec<(isize, bool)>, n: usize, k: usize) -> usize {
     let mut is_white = vec![true; n];
     let mut icecreams = vec![HashSet::new(); k];
 
     let mut vcur = 0;
     let mut icecur = vec![];
-    for &a in ans {
-        if a == -1 {
-            is_white[vcur] = false;
+    for &(a, do_paint) in ans {
+        if (a as usize) < k {
+            icecreams[a as usize].insert(icecur.clone());
+            icecur.clear();
         } else {
-            if a < k as isize {
-                icecreams[a as usize].insert(icecur.clone());
-                icecur.clear();
-            } else {
-                icecur.push(is_white[a as usize]);
-            }
-            vcur = a as usize;
+            icecur.push(is_white[a as usize]);
+        }
+        vcur = a as usize;
+        if do_paint {
+            is_white[vcur] = false;
         }
     }
 
@@ -130,7 +129,7 @@ fn main() {
     //   頂点間の距離に依っては味変してもスコアが伸びなくなるし, それを引きそう
     // とりあえず B でやってみる
 
-    let mut cycles: Vec<Vec<(usize, Vec<isize>)>> = vec![vec![]; k];
+    let mut cycles: Vec<Vec<(usize, Vec<usize>)>> = vec![vec![]; k];
     for i in 0..k {
         bfs(i, &edges, &mut cycles, n, k);
     }
@@ -139,7 +138,7 @@ fn main() {
 
     // 初期解の生成
     // それぞれのショップ到達ごとに次に向かうショップをローテーションするだけ
-    let mut ans: Vec<isize> = Vec::with_capacity(t);
+    let mut ans: Vec<(isize, bool)> = Vec::with_capacity(t);
     {
         let mut nth_visit = vec![0; k];
         let mut vcur = 0;
@@ -147,18 +146,18 @@ fn main() {
             let mut cur_i = nth_visit[vcur] % cycles[vcur].len();
             let (mut vnext, mut pathcur) = cycles[vcur][cur_i].clone();
             // 前回パスに戻る経路は禁止
-            // pathcur[0] は次に向かう最初の頂点、ans[ans.len() - 2] は直前に来た頂点
+            // pathcur[0] は次に向かう最初の頂点、ans[ans.len() - 2].0 は直前に来た頂点
             // 全ての経路が禁止パスの場合は無限ループを避けるためカウンタで制限
             let mut skip_count = 0;
             while ans.len() >= 2
-                && pathcur[0] as isize == ans[ans.len() - 2]
+                && pathcur[0] as isize == ans[ans.len() - 2].0
                 && skip_count < cycles[vcur].len()
             {
                 // eprintln!(
                 //     "DEBUG: skipping path. vcur={}, pathcur[0]={}, ans[-2]={}",
                 //     vcur,
                 //     pathcur[0],
-                //     ans[ans.len() - 2]
+                //     ans[ans.len() - 2].0
                 // );
                 nth_visit[vcur] += 1;
                 cur_i = nth_visit[vcur] % cycles[vcur].len();
@@ -170,7 +169,7 @@ fn main() {
                 break;
             }
 
-            pathcur.iter().for_each(|p| ans.push(*p as isize));
+            pathcur.iter().for_each(|p| ans.push((*p as isize, false)));
 
             nth_visit[vcur] += 1;
             vcur = vnext;
@@ -183,9 +182,10 @@ fn main() {
     while start_time.elapsed() < break_time {
         break;
 
-        let mut cur = vec![];
+        let mut cur: Vec<(isize, bool)> = vec![];
 
         // TODO
+        // ans の長さに bool を入れていないので注意
 
         let cur_score = calc_score(&cur, n, k);
         if cur_score > best_score {
@@ -195,6 +195,9 @@ fn main() {
     }
 
     for a in ans {
-        println!("{a}");
+        println!("{}", a.0);
+        if a.1 {
+            println!("-1");
+        }
     }
 }
