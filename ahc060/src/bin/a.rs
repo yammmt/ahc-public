@@ -161,36 +161,141 @@ fn main() {
     {
         let mut nth_visit = vec![0; k];
         let mut vcur = 0;
+        // 直前に来た頂点を記録（最初は存在しない）
+        let mut prev_vertex: Option<usize> = None;
+
         loop {
-            let mut cur_i = nth_visit[vcur] % cycles[vcur].len();
-            let (mut vnext, mut pathcur) = cycles[vcur][cur_i].clone();
-            // 前回パスに戻る経路は禁止
-            // pathcur[0] は次に向かう最初の頂点、ans[ans.len() - 2].0 は直前に来た頂点
-            // 全ての経路が禁止パスの場合は無限ループを避けるためカウンタで制限
-            let mut skip_count = 0;
-            while ans.len() >= 2
-                && pathcur[0] as isize == ans[ans.len() - 2].0
-                && skip_count < cycles[vcur].len()
-            {
-                // eprintln!(
-                //     "DEBUG: skipping path. vcur={}, pathcur[0]={}, ans[-2]={}",
-                //     vcur,
-                //     pathcur[0],
-                //     ans[ans.len() - 2].0
-                // );
-                nth_visit[vcur] += 1;
-                cur_i = nth_visit[vcur] % cycles[vcur].len();
-                (vnext, pathcur) = cycles[vcur][cur_i].clone();
-                skip_count += 1;
+            // 有効な経路を探す
+            let mut found_valid = false;
+            let mut vnext = 0;
+            let mut pathcur = vec![];
+
+            // 全ての到達可能なショップを試す
+            for attempt in 0..cycles[vcur].len() {
+                let cur_i = (nth_visit[vcur] + attempt) % cycles[vcur].len();
+                let (to_shop, path) = &cycles[vcur][cur_i];
+
+                // 前回の移動元に戻る経路は禁止
+                let first_vertex = if path.is_empty() { *to_shop } else { path[0] };
+                if let Some(prev) = prev_vertex {
+                    if first_vertex == prev {
+                        continue; // この経路は禁止
+                    }
+                }
+
+                // 有効な経路を見つけた
+                vnext = *to_shop;
+                pathcur = path.clone();
+                nth_visit[vcur] += attempt + 1;
+                found_valid = true;
+                break;
+            }
+
+            if !found_valid {
+                // 全ての経路が禁止されている場合、隣接する木の頂点に一歩移動して回避
+                // prev_vertex 以外の隣接頂点を探す
+                let mut detour_vertex: Option<usize> = None;
+                for &neighbor in &edges[vcur] {
+                    if Some(neighbor) != prev_vertex {
+                        detour_vertex = Some(neighbor);
+                        break;
+                    }
+                }
+
+                if let Some(dv) = detour_vertex {
+                    // 迂回頂点に移動
+                    ans.push((dv as isize, false));
+                    prev_vertex = Some(vcur);
+
+                    // 迂回頂点がショップの場合、そこを新しい現在地とする
+                    if dv < k {
+                        vcur = dv;
+                        continue;
+                    }
+
+                    // 迂回頂点が木の場合、そこから最寄りのショップへ移動
+                    // 簡易実装: 迂回頂点の隣接頂点でショップを探す
+                    let mut found_shop = false;
+                    for &neighbor2 in &edges[dv] {
+                        if neighbor2 < k && neighbor2 != vcur {
+                            ans.push((neighbor2 as isize, false));
+                            prev_vertex = Some(dv);
+                            vcur = neighbor2;
+                            found_shop = true;
+                            break;
+                        }
+                    }
+                    if found_shop {
+                        continue;
+                    }
+
+                    // 隣接にショップがない場合、さらに探索（BFS）
+                    let mut visited_detour = vec![false; n];
+                    let mut que_detour = VecDeque::new();
+                    visited_detour[vcur] = true;
+                    visited_detour[dv] = true;
+                    que_detour.push_back((dv, vec![dv]));
+
+                    while let Some((v, path_so_far)) = que_detour.pop_front() {
+                        for &nv in &edges[v] {
+                            if visited_detour[nv] {
+                                continue;
+                            }
+                            visited_detour[nv] = true;
+                            let mut new_path = path_so_far.clone();
+                            new_path.push(nv);
+
+                            if nv < k {
+                                // ショップに到達
+                                // path_so_far の最初の要素は既に追加済み（dv）
+                                for i in 1..new_path.len() {
+                                    ans.push((new_path[i] as isize, false));
+                                }
+                                prev_vertex = if new_path.len() >= 2 {
+                                    Some(new_path[new_path.len() - 2])
+                                } else {
+                                    Some(dv)
+                                };
+                                vcur = nv;
+                                found_shop = true;
+                                break;
+                            }
+                            que_detour.push_back((nv, new_path));
+                        }
+                        if found_shop {
+                            break;
+                        }
+                    }
+
+                    if !found_shop {
+                        break; // 本当にどこにも行けない場合は終了
+                    }
+                } else {
+                    break; // 迂回先もない場合は終了
+                }
+                continue;
             }
 
             if ans.len() + pathcur.len() >= t - m + k {
                 break;
             }
 
-            pathcur.iter().for_each(|p| ans.push((*p as isize, false)));
+            // 経路を追加
+            for &p in pathcur.iter() {
+                ans.push((p as isize, false));
+            }
 
-            nth_visit[vcur] += 1;
+            // 直前の頂点を更新: 到着ショップ(vnext)の直前にいた頂点
+            // pathcur = [途中の木..., 到着ショップ] なので、
+            // pathcur.len() >= 2 なら pathcur[len-2] が到着ショップの直前
+            // pathcur.len() == 1 なら 現在のショップ(vcur)から直接到着ショップに行った
+            if pathcur.len() >= 2 {
+                prev_vertex = Some(pathcur[pathcur.len() - 2]);
+            } else {
+                // 2つのショップが直接繋がっている場合、直前は現在のショップ
+                prev_vertex = Some(vcur);
+            }
+
             vcur = vnext;
         }
     }
