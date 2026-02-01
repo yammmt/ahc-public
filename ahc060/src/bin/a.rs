@@ -494,7 +494,7 @@ fn main() {
                 }
 
                 // ランダムなセグメントを選択
-                let seg_idx = rng.gen_range(0..solution.segments.len());
+                let seg_idx = rng.random_range(0..solution.segments.len());
                 if solution.segments[seg_idx].path.is_empty() {
                     continue;
                 }
@@ -503,10 +503,10 @@ fn main() {
                 let path_len = solution.segments[seg_idx].path.len();
 
                 // 塗り替え位置を変更（None または ランダムな位置）
-                let new_paint = if rng.gen_bool(0.3) {
+                let new_paint = if rng.random_bool(0.3) {
                     None
                 } else {
-                    Some(rng.gen_range(0..path_len))
+                    Some(rng.random_range(0..path_len))
                 };
                 solution.segments[seg_idx].paint_at = new_paint;
 
@@ -538,12 +538,12 @@ fn main() {
                 }
 
                 // ランダムなセグメントを選び、そのパス内の頂点を選ぶ
-                let seg_idx = rng.gen_range(0..solution.segments.len());
+                let seg_idx = rng.random_range(0..solution.segments.len());
                 if solution.segments[seg_idx].path.is_empty() {
                     continue;
                 }
 
-                let path_idx = rng.gen_range(0..solution.segments[seg_idx].path.len());
+                let path_idx = rng.random_range(0..solution.segments[seg_idx].path.len());
                 let target_v = solution.segments[seg_idx].path[path_idx];
 
                 // 同じ頂点を含む他のセグメントを探す
@@ -574,7 +574,7 @@ fn main() {
                 }
 
                 // ランダムな位置でONに
-                let (new_si, new_pi) = candidates[rng.gen_range(0..candidates.len())];
+                let (new_si, new_pi) = candidates[rng.random_range(0..candidates.len())];
                 solution.segments[new_si].paint_at = Some(new_pi);
 
                 if !solution.is_valid(t, n, k) {
@@ -608,12 +608,12 @@ fn main() {
                     continue;
                 }
 
-                let idx = rng.gen_range(0..solution.segments.len() - 1);
+                let idx = rng.random_range(0..solution.segments.len() - 1);
                 let from_shop = solution.segments[idx].from_shop;
                 let end_shop = solution.segments[idx + 1].to_shop;
 
                 // 新しい中間ショップをランダムに選択
-                let new_mid = rng.gen_range(0..k);
+                let new_mid = rng.random_range(0..k);
                 if new_mid == from_shop || new_mid == end_shop {
                     continue;
                 }
@@ -684,7 +684,7 @@ fn main() {
                     continue;
                 }
 
-                let idx = rng.gen_range(0..solution.segments.len() - 1);
+                let idx = rng.random_range(0..solution.segments.len() - 1);
                 let from_shop = solution.segments[idx].from_shop;
                 let end_shop = solution.segments[idx + 1].to_shop;
 
@@ -742,12 +742,12 @@ fn main() {
                     continue;
                 }
 
-                let idx = rng.gen_range(0..solution.segments.len());
+                let idx = rng.random_range(0..solution.segments.len());
                 let from_shop = solution.segments[idx].from_shop;
                 let to_shop = solution.segments[idx].to_shop;
 
                 // 中間ショップをランダムに選択
-                let mid_shop = rng.gen_range(0..k);
+                let mid_shop = rng.random_range(0..k);
                 if mid_shop == from_shop || mid_shop == to_shop {
                     continue;
                 }
