@@ -465,7 +465,7 @@ fn main() {
     // eprintln!("score: {best_score}");
 
     // 焼きなまし法のパラメータ
-    let start_temp: f64 = 10.0;
+    let start_temp: f64 = 5.0;
     let end_temp: f64 = 0.1;
     let time_limit = break_time.as_secs_f64();
 
