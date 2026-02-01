@@ -580,14 +580,17 @@ fn main() {
         let temp = start_temp * (end_temp / start_temp).powf(progress);
 
         // 近傍操作を選択
-        // 0,1: 塗り替え操作、2,3,4,5: 訪問順操作
-        // パス操作:塗替え をいい感じにする
-        let op = if rng.random_bool(0.90) {
-            // パス操作
-            rng.random_range(2..6)
-        } else {
-            // 塗替え操作
+        // 0,1: 塗り替え操作、2,3,4: その他パス操作、5: ランダムウォーク
+        let r = rng.random_range(0..10);
+        let op = if r < 1 {
+            // 塗替え操作 (10%)
             rng.random_range(0..2)
+        } else if r < 5 {
+            // ランダムウォーク (40%)
+            5
+        } else {
+            // その他パス操作 (50%)
+            rng.random_range(2..5)
         };
 
         match op {
