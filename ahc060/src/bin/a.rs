@@ -477,7 +477,14 @@ fn main() {
 
         // 近傍操作を選択
         // 0,1: 塗り替え操作、2,3,4: 訪問順操作
-        let op = rng.random_range(0..5);
+        // パス操作:塗替え をいい感じにする
+        let op = if rng.random_bool(0.90) {
+            // パス操作
+            rng.random_range(2..5)
+        } else {
+            // 塗替え操作
+            rng.random_range(0..2)
+        };
 
         match op {
             0 => {
