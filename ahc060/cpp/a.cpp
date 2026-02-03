@@ -19,6 +19,7 @@ struct Xorshift
 
 int N, M, K, T;
 vector<vector<int>> adj;
+vector<unordered_set<int>> adjSet; // 隣接チェック用
 vector<int> X, Y;
 vector<vector<int>> dist;   // dist[i][j] = 頂点iから頂点jへの最短距離
 vector<vector<int>> parent; // 最短経路復元用
@@ -108,17 +109,8 @@ SimResult simulate(const State &state)
             // 行動1: 移動
             int nextPos = action;
 
-            // 隣接チェック
-            bool found = false;
-            for (int neighbor : adj[pos])
-            {
-                if (neighbor == nextPos)
-                {
-                    found = true;
-                    break;
-                }
-            }
-            if (!found)
+            // 隣接チェック（O(1)）
+            if (adjSet[pos].find(nextPos) == adjSet[pos].end())
                 return {0, false};
 
             // 前回の移動元には戻れない
@@ -144,9 +136,13 @@ SimResult simulate(const State &state)
     }
 
     int score = 0;
+    int minCount = INT_MAX, maxCount = 0;
     for (int i = 0; i < K; i++)
     {
-        score += shopInventory[i].size();
+        int cnt = shopInventory[i].size();
+        score += cnt;
+        minCount = min(minCount, cnt);
+        maxCount = max(maxCount, cnt);
     }
     return {score, true};
 }
@@ -384,7 +380,7 @@ State generateNeighbor(const State &current)
     }
     else if (opType < 55)
     {
-        // 操作3: 末尾に行動を追加（最寄りショップへ）
+        // 操作3: 末尾に行動を追加
         if (neighbor.actions.size() < (size_t)T)
         {
             int pos = 0, prevPos = -1;
@@ -397,57 +393,22 @@ State generateNeighbor(const State &current)
                 }
             }
 
-            // 木にいる場合は最寄りのショップへ向かう
-            if (pos >= K)
+            // ランダムに追加
+            int addCount = rng.next(50) + 1;
+            for (int i = 0; i < addCount && neighbor.actions.size() < (size_t)T; i++)
             {
-                int targetShop = -1;
-                int minDist = INT_MAX;
-                for (int shop = 0; shop < K; shop++)
+                vector<int> candidates;
+                for (int v : adj[pos])
                 {
-                    if (dist[pos][shop] < minDist)
-                    {
-                        minDist = dist[pos][shop];
-                        targetShop = shop;
-                    }
+                    if (v != prevPos)
+                        candidates.push_back(v);
                 }
-                vector<int> path = getPath(pos, targetShop);
-                for (int nextPos : path)
-                {
-                    if (neighbor.actions.size() >= (size_t)T)
-                        break;
-                    if (nextPos == prevPos)
-                        break;
-                    neighbor.actions.push_back(nextPos);
-                    prevPos = pos;
-                    pos = nextPos;
-                }
-            }
-
-            // ランダムに継続
-            vector<int> candidates;
-            for (int v : adj[pos])
-            {
-                if (v != prevPos)
-                    candidates.push_back(v);
-            }
-            if (!candidates.empty())
-            {
-                int addCount = rng.next(50) + 1;
-                for (int i = 0; i < addCount && neighbor.actions.size() < (size_t)T; i++)
-                {
-                    if (candidates.empty())
-                        break;
-                    int nextPos = candidates[rng.next(candidates.size())];
-                    neighbor.actions.push_back(nextPos);
-                    prevPos = pos;
-                    pos = nextPos;
-                    candidates.clear();
-                    for (int v : adj[pos])
-                    {
-                        if (v != prevPos)
-                            candidates.push_back(v);
-                    }
-                }
+                if (candidates.empty())
+                    break;
+                int nextPos = candidates[rng.next(candidates.size())];
+                neighbor.actions.push_back(nextPos);
+                prevPos = pos;
+                pos = nextPos;
             }
         }
     }
@@ -625,17 +586,8 @@ void repair(State &state)
         }
         else
         {
-            // 行動1: 隣接かつ前回位置でないかチェック
-            bool valid = false;
-            for (int v : adj[pos])
-            {
-                if (v == action && v != prevPos)
-                {
-                    valid = true;
-                    break;
-                }
-            }
-            if (valid)
+            // 行動1: 隣接かつ前回位置でないかチェック（O(1)）
+            if (action != prevPos && adjSet[pos].find(action) != adjSet[pos].end())
             {
                 newActions.push_back(action);
                 prevPos = pos;
@@ -660,12 +612,15 @@ int main()
     cin >> N >> M >> K >> T;
 
     adj.resize(N);
+    adjSet.resize(N);
     for (int i = 0; i < M; i++)
     {
         int a, b;
         cin >> a >> b;
         adj[a].push_back(b);
         adj[b].push_back(a);
+        adjSet[a].insert(b);
+        adjSet[b].insert(a);
     }
 
     X.resize(N);
@@ -805,17 +760,8 @@ int main()
                 continue;
             }
 
-            // 隣接チェック
-            bool isAdj = false;
-            for (int v : adj[pos])
-            {
-                if (v == action)
-                {
-                    isAdj = true;
-                    break;
-                }
-            }
-            if (!isAdj)
+            // 隣接チェック（O(1)）
+            if (adjSet[pos].find(action) == adjSet[pos].end())
                 break; // 不正な移動が見つかったら打ち切り
             if (action == prevPos)
                 break; // 前回位置への移動も打ち切り
