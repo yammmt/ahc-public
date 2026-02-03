@@ -460,7 +460,7 @@ State generateNeighbor(const State &current)
             neighbor.actions.erase(neighbor.actions.begin() + idx);
         }
     }
-    else if (opType < 90)
+    else if (opType < 95)
     {
         // 操作6: 2点間を最短経路で繋ぎ直す
         if (neighbor.actions.size() > 20)
