@@ -225,7 +225,7 @@ fn main() {
     }
 
     // player_pos これで保存されたっけか
-    let player_pos = sxym.clone();
+    let mut player_pos = sxym.clone();
     let owners = vec![vec![CELL_NO_OWNER; N]; N];
     let levels = vec![vec![0; N]; N];
     let mut board = Board {
@@ -284,6 +284,9 @@ fn main() {
                     continue;
                 }
 
+                // 既に相手がいる位置は避けずともよい, どいてくれる場合があるので
+                // プレイヤー数少ないので許容できる
+                // || (player_pos.contains(&(ni, nj)) && board.owners[ni][nj] != 0)
                 for d in &DIRS {
                     let ni = pi.wrapping_add_signed(d.0);
                     let nj = pj.wrapping_add_signed(d.1);
@@ -311,12 +314,13 @@ fn main() {
             // 駒の移動先は捨てる, 現在位置とマスの現況さえわかればよいので
             _txym: [(usize, usize); player_num],
             // ターン終了時駒位置
-            player_pos: [(usize, usize); player_num],
+            pp: [(usize, usize); player_num],
             // 各マスの所有者
             owners: [[isize; N]; N],
             // レベル
             levels: [[usize; N]; N],
         }
+        player_pos = pp;
         board.owners = owners;
         board.levels = levels;
     }
