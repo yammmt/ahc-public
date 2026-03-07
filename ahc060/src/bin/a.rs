@@ -10,10 +10,20 @@ const TIME_LIMIT_MS: u64 = 1980;
 
 const COLOR_CHANGE_PCT: u64 = 1;
 
-#[derive(Default)]
+#[derive(Clone, Copy, Default)]
 struct Pos {
     cur: usize,
     prev: usize,
+}
+
+fn does_score_raise(
+    icecream: &[bool],
+    delivered: &[HashSet<Vec<bool>>],
+    cur_v: Pos,
+    next_v: usize,
+    k: usize,
+) -> bool {
+    cur_v.prev != next_v && next_v < k && !delivered[next_v].contains(icecream)
 }
 
 fn main() {
@@ -52,7 +62,7 @@ fn main() {
             // 納品してスコアが増えるなら納品する
             let mut delivered = false;
             for &v in &edges[cur_pos.cur] {
-                if v < k && v != cur_pos.prev && !icecream_delivered[v].contains(&cur_icecream) {
+                if does_score_raise(&cur_icecream, &icecream_delivered, cur_pos, v, k) {
                     cur_moves.push(v as isize);
                     icecream_delivered[v].insert(cur_icecream.clone());
                     cur_score += 1;
