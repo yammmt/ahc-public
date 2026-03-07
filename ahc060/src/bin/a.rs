@@ -9,7 +9,7 @@ const T_MAX: usize = 10000;
 
 // 2 s
 // BFS 部分が遅すぎるのであまり回せない
-const TIME_LIMIT_MS: u64 = 1900;
+const TIME_LIMIT_MS: u64 = 1930;
 
 // 色編が貪欲探索失敗時のみになっているので, 変えてやったほうが次回の探索でうまくいき易いっぽい
 // が, 後半にネタ切れとなるリスクがある
@@ -22,11 +22,35 @@ struct Pos {
     prev: usize,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+struct IceCream {
+    taste: u128,
+    len: usize,
+}
+
+impl IceCream {
+    fn add_white(&mut self) {
+        debug_assert!(self.len < 127);
+        self.len += 1;
+    }
+
+    fn add_red(&mut self) {
+        debug_assert!(self.len < 127);
+        self.taste |= 1 << self.len;
+        self.len += 1;
+    }
+
+    fn clear(&mut self) {
+        self.taste = 0;
+        self.len = 0;
+    }
+}
+
 // FIXME: 使う
 #[allow(dead_code)]
 fn does_score_raise(
-    icecream: &[bool],
-    delivered: &[HashSet<Vec<bool>>],
+    icecream: &IceCream,
+    delivered: &[HashSet<IceCream>],
     cur_v: Pos,
     next_v: usize,
     k: usize,
@@ -35,8 +59,8 @@ fn does_score_raise(
 }
 
 fn score_raise_path(
-    icecream: &[bool],
-    delivered: &[HashSet<Vec<bool>>],
+    icecream: IceCream,
+    delivered: &[HashSet<IceCream>],
     is_red: &[bool],
     max_depth: usize,
     edges: &[Vec<usize>],
@@ -45,7 +69,7 @@ fn score_raise_path(
 ) -> Option<Vec<Pos>> {
     let mut que = VecDeque::new();
     // (経路, アイスクリーム)
-    que.push_back((vec![begin_pos], icecream.to_vec()));
+    que.push_back((vec![begin_pos], icecream));
     while let Some((vpos, cur_icecream)) = que.pop_front() {
         let cur_pos = *vpos.last().unwrap();
 
@@ -77,7 +101,12 @@ fn score_raise_path(
                     prev: cur_pos.cur,
                 });
                 let mut next_icecream = cur_icecream.clone();
-                next_icecream.push(is_red[next_pos]);
+                if is_red[next_pos] {
+                    next_icecream.add_red();
+                } else {
+                    next_icecream.add_white();
+                }
+
                 que.push_back((v, next_icecream));
             }
         }
@@ -116,12 +145,12 @@ fn main() {
         let mut cur_moves = Vec::with_capacity(T_MAX);
         let mut icecream_delivered = vec![HashSet::new(); k];
 
-        let mut cur_icecream = vec![];
+        let mut cur_icecream = IceCream { taste: 0, len: 0 };
         let mut cur_pos = Pos::default();
         while cur_moves.len() < T_MAX {
             // 納品してスコアが増えるなら納品する
             if let Some(vpath) = score_raise_path(
-                &cur_icecream,
+                cur_icecream,
                 &icecream_delivered,
                 &is_red,
                 PATH_SEARCH_MAX_LEN.min(T_MAX - cur_moves.len()),
@@ -136,7 +165,11 @@ fn main() {
                         icecream_delivered[v.cur].insert(cur_icecream.clone());
                         cur_icecream.clear();
                     } else {
-                        cur_icecream.push(is_red[v.cur]);
+                        if is_red[v.cur] {
+                            cur_icecream.add_red();
+                        } else {
+                            cur_icecream.add_white();
+                        }
                     }
                 }
                 cur_score += 1;
@@ -177,7 +210,11 @@ fn main() {
                 cur_icecream.clear();
             } else {
                 // 収穫
-                cur_icecream.push(is_red[next_pos]);
+                if is_red[next_pos] {
+                    cur_icecream.add_red();
+                } else {
+                    cur_icecream.add_white();
+                }
 
                 if !is_red[next_pos]
                     && cur_moves.len() < T_MAX - 1
