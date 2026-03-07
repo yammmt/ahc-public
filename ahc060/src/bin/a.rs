@@ -6,10 +6,14 @@ use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 const T_MAX: usize = 10000;
-// 2 s
-const TIME_LIMIT_MS: u64 = 1800;
 
-const COLOR_CHANGE_PCT: u64 = 1;
+// 2 s
+// BFS 部分が遅すぎるのであまり回せない
+const TIME_LIMIT_MS: u64 = 1900;
+
+// 色編が貪欲探索失敗時のみになっているので, 変えてやったほうが次回の探索でうまくいき易いっぽい
+// が, 後半にネタ切れとなるリスクがある
+const COLOR_CHANGE_PCT: u64 = 7;
 const PATH_SEARCH_MAX_LEN: usize = 8;
 
 #[derive(Clone, Copy, Default)]
