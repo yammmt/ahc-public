@@ -2,13 +2,15 @@ use proconio::input;
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 use std::collections::HashSet;
+use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 const T_MAX: usize = 10000;
 // 2 s
-const TIME_LIMIT_MS: u64 = 1980;
+const TIME_LIMIT_MS: u64 = 1800;
 
 const COLOR_CHANGE_PCT: u64 = 1;
+const PATH_SEARCH_MAX_LEN: usize = 8;
 
 #[derive(Clone, Copy, Default)]
 struct Pos {
@@ -16,6 +18,8 @@ struct Pos {
     prev: usize,
 }
 
+// FIXME: 使う
+#[allow(dead_code)]
 fn does_score_raise(
     icecream: &[bool],
     delivered: &[HashSet<Vec<bool>>],
@@ -24,6 +28,58 @@ fn does_score_raise(
     k: usize,
 ) -> bool {
     cur_v.prev != next_v && next_v < k && !delivered[next_v].contains(icecream)
+}
+
+fn score_raise_path(
+    icecream: &[bool],
+    delivered: &[HashSet<Vec<bool>>],
+    is_red: &[bool],
+    max_depth: usize,
+    edges: &[Vec<usize>],
+    begin_pos: Pos,
+    k: usize,
+) -> Option<Vec<Pos>> {
+    let mut que = VecDeque::new();
+    // (経路, アイスクリーム)
+    que.push_back((vec![begin_pos], icecream.to_vec()));
+    while let Some((vpos, cur_icecream)) = que.pop_front() {
+        let cur_pos = *vpos.last().unwrap();
+
+        // 店は現れないとする
+
+        for &next_pos in &edges[cur_pos.cur] {
+            if next_pos == cur_pos.prev {
+                continue;
+            }
+
+            if next_pos < k {
+                // 納品判定
+                if !delivered[next_pos].contains(&cur_icecream) {
+                    let mut ret = vpos.clone();
+                    ret.push(Pos {
+                        cur: next_pos,
+                        prev: cur_pos.cur,
+                    });
+                    return Some(ret);
+                }
+            } else {
+                if vpos.len() == max_depth {
+                    continue;
+                }
+
+                let mut v = vpos.clone();
+                v.push(Pos {
+                    cur: next_pos,
+                    prev: cur_pos.cur,
+                });
+                let mut next_icecream = cur_icecream.clone();
+                next_icecream.push(is_red[next_pos]);
+                que.push_back((v, next_icecream));
+            }
+        }
+    }
+
+    None
 }
 
 fn main() {
@@ -60,22 +116,28 @@ fn main() {
         let mut cur_pos = Pos::default();
         while cur_moves.len() < T_MAX {
             // 納品してスコアが増えるなら納品する
-            let mut delivered = false;
-            for &v in &edges[cur_pos.cur] {
-                if does_score_raise(&cur_icecream, &icecream_delivered, cur_pos, v, k) {
-                    cur_moves.push(v as isize);
-                    icecream_delivered[v].insert(cur_icecream.clone());
-                    cur_score += 1;
-                    cur_icecream.clear();
-
-                    cur_pos.prev = cur_pos.cur;
-                    cur_pos.cur = v;
-
-                    delivered = true;
-                    break;
+            if let Some(vpath) = score_raise_path(
+                &cur_icecream,
+                &icecream_delivered,
+                &is_red,
+                PATH_SEARCH_MAX_LEN.min(T_MAX - cur_moves.len()),
+                &edges,
+                cur_pos,
+                k,
+            ) {
+                for &v in vpath.iter().skip(1) {
+                    cur_moves.push(v.cur as isize);
+                    if v.cur < k {
+                        // 納品パスだから店は最後に一度しか現れない
+                        icecream_delivered[v.cur].insert(cur_icecream.clone());
+                        cur_icecream.clear();
+                    } else {
+                        cur_icecream.push(is_red[v.cur]);
+                    }
                 }
-            }
-            if delivered {
+                cur_score += 1;
+                cur_pos = *vpath.last().unwrap();
+
                 continue;
             }
 
