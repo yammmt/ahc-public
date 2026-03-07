@@ -79,9 +79,27 @@ fn main() {
                 continue;
             }
 
+            // 納品済みのアイスを可能な限り納品しない, を実現する仕組み
+            let candidates: Vec<_> = edges[cur_pos.cur]
+                .iter()
+                .copied()
+                .filter(|&v| {
+                    if v == cur_pos.prev {
+                        return false;
+                    }
+                    if v < k && icecream_delivered[v].contains(&cur_icecream) {
+                        return false;
+                    }
+                    true
+                })
+                .collect();
             let mut next_pos = cur_pos.prev;
             while next_pos == cur_pos.prev {
-                next_pos = edges[cur_pos.cur][rng.random_range(0..edges[cur_pos.cur].len())];
+                next_pos = if !candidates.is_empty() {
+                    candidates[rng.random_range(0..candidates.len())]
+                } else {
+                    edges[cur_pos.cur][rng.random_range(0..edges[cur_pos.cur].len())]
+                };
             }
 
             cur_moves.push(next_pos as isize);
