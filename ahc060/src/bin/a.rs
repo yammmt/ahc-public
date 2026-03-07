@@ -49,6 +49,26 @@ fn main() {
         let mut cur_icecream = vec![];
         let mut cur_pos = Pos::default();
         while cur_moves.len() < T_MAX {
+            // 納品してスコアが増えるなら納品する
+            let mut delivered = false;
+            for &v in &edges[cur_pos.cur] {
+                if v < k && v != cur_pos.prev && !icecream_delivered[v].contains(&cur_icecream) {
+                    cur_moves.push(v as isize);
+                    icecream_delivered[v].insert(cur_icecream.clone());
+                    cur_score += 1;
+                    cur_icecream.clear();
+
+                    cur_pos.prev = cur_pos.cur;
+                    cur_pos.cur = v;
+
+                    delivered = true;
+                    break;
+                }
+            }
+            if delivered {
+                continue;
+            }
+
             let mut next_pos = cur_pos.prev;
             while next_pos == cur_pos.prev {
                 next_pos = edges[cur_pos.cur][rng.random_range(0..edges[cur_pos.cur].len())];
