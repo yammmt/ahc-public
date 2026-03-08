@@ -16,7 +16,7 @@ const TIME_LIMIT_MS: u64 = 1930;
 const COLOR_CHANGE_PCT: u64 = 7;
 const PATH_SEARCH_MAX_LEN: usize = 8;
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 struct Pos {
     cur: usize,
     prev: usize,
@@ -46,6 +46,126 @@ impl IceCream {
     }
 }
 
+#[derive(Debug, Default)]
+struct State {
+    // 変わるもの
+    pos: Pos,
+    icecream: IceCream,
+    delivered: Vec<HashSet<IceCream>>,
+    is_red: Vec<bool>,
+    score: usize,
+    // 変わらないもの
+    k: usize,
+    edges: Vec<Vec<usize>>,
+}
+
+impl State {
+    fn apply_move(&mut self, vnext: usize) {
+        debug_assert!(vnext != self.pos.prev);
+        self.pos.prev = self.pos.cur;
+        self.pos.cur = vnext;
+
+        if self.pos.cur < self.k {
+            // 店到着
+            self.score -= self.delivered[self.pos.cur].len();
+            self.delivered[self.pos.cur].insert(self.icecream);
+            self.score += self.delivered[self.pos.cur].len();
+
+            self.icecream.clear();
+        } else {
+            // アイスクリーム回収
+            if self.is_red[self.pos.cur] {
+                self.icecream.add_red();
+            } else {
+                self.icecream.add_white();
+            }
+        }
+    }
+
+    fn change_color(&mut self, v: usize) {
+        self.is_red[v] = true;
+    }
+
+    fn score_raise_path(&self, max_depth: usize) -> Option<Vec<Pos>> {
+        let mut que = VecDeque::new();
+        // (経路, アイスクリーム)
+        que.push_back((vec![self.pos], self.icecream));
+        while let Some((vpos, cur_icecream)) = que.pop_front() {
+            let cur_pos = *vpos.last().unwrap();
+
+            // 店は現れないとする
+
+            for &next_pos in &self.edges[cur_pos.cur] {
+                if next_pos == cur_pos.prev {
+                    continue;
+                }
+
+                if next_pos < self.k {
+                    // 納品判定
+                    if !self.delivered[next_pos].contains(&cur_icecream) {
+                        let mut ret = vpos.clone();
+                        ret.push(Pos {
+                            cur: next_pos,
+                            prev: cur_pos.cur,
+                        });
+                        return Some(ret);
+                    }
+                } else {
+                    if vpos.len() == max_depth {
+                        continue;
+                    }
+
+                    let mut v = vpos.clone();
+                    v.push(Pos {
+                        cur: next_pos,
+                        prev: cur_pos.cur,
+                    });
+                    let mut next_icecream = cur_icecream.clone();
+                    if self.is_red[next_pos] {
+                        next_icecream.add_red();
+                    } else {
+                        next_icecream.add_white();
+                    }
+
+                    que.push_back((v, next_icecream));
+                }
+            }
+        }
+
+        None
+    }
+
+    fn random_next_pos(&self, rng: &mut SmallRng) -> Pos {
+        // 納品済みのアイスは可能な限り納品しない
+        let candidates: Vec<_> = self.edges[self.pos.cur]
+            .iter()
+            .copied()
+            .filter(|&v| {
+                if v == self.pos.prev {
+                    return false;
+                }
+                if v < self.k && self.delivered[v].contains(&self.icecream) {
+                    return false;
+                }
+                true
+            })
+            .collect();
+        let mut next_pos = self.pos.prev;
+        while next_pos == self.pos.prev {
+            next_pos = if !candidates.is_empty() {
+                candidates[rng.random_range(0..candidates.len())]
+            } else {
+                self.edges[self.pos.cur][rng.random_range(0..self.edges[self.pos.cur].len())]
+            };
+        }
+
+        Pos {
+            cur: next_pos,
+            prev: self.pos.cur,
+        }
+    }
+}
+
 // FIXME: 使う
 #[allow(dead_code)]
 fn does_score_raise(
@@ -56,63 +176,6 @@ fn does_score_raise(
     k: usize,
 ) -> bool {
     cur_v.prev != next_v && next_v < k && !delivered[next_v].contains(icecream)
-}
-
-fn score_raise_path(
-    icecream: IceCream,
-    delivered: &[HashSet<IceCream>],
-    is_red: &[bool],
-    max_depth: usize,
-    edges: &[Vec<usize>],
-    begin_pos: Pos,
-    k: usize,
-) -> Option<Vec<Pos>> {
-    let mut que = VecDeque::new();
-    // (経路, アイスクリーム)
-    que.push_back((vec![begin_pos], icecream));
-    while let Some((vpos, cur_icecream)) = que.pop_front() {
-        let cur_pos = *vpos.last().unwrap();
-
-        // 店は現れないとする
-
-        for &next_pos in &edges[cur_pos.cur] {
-            if next_pos == cur_pos.prev {
-                continue;
-            }
-
-            if next_pos < k {
-                // 納品判定
-                if !delivered[next_pos].contains(&cur_icecream) {
-                    let mut ret = vpos.clone();
-                    ret.push(Pos {
-                        cur: next_pos,
-                        prev: cur_pos.cur,
-                    });
-                    return Some(ret);
-                }
-            } else {
-                if vpos.len() == max_depth {
-                    continue;
-                }
-
-                let mut v = vpos.clone();
-                v.push(Pos {
-                    cur: next_pos,
-                    prev: cur_pos.cur,
-                });
-                let mut next_icecream = cur_icecream.clone();
-                if is_red[next_pos] {
-                    next_icecream.add_red();
-                } else {
-                    next_icecream.add_white();
-                }
-
-                que.push_back((v, next_icecream));
-            }
-        }
-    }
-
-    None
 }
 
 fn main() {
@@ -140,97 +203,45 @@ fn main() {
     let mut ans_moves = Vec::with_capacity(T_MAX);
     while start_time.elapsed() < break_time {
         // TODO: ループごとに領域確保入るので遅いはず
-        let mut is_red = vec![false; n];
-        let mut cur_score = 0;
+        let mut state = State {
+            pos: Pos::default(),
+            icecream: IceCream::default(),
+            delivered: vec![HashSet::new(); n],
+            is_red: vec![false; n],
+            score: 0,
+            k,
+            edges: edges.clone(),
+        };
         let mut cur_moves = Vec::with_capacity(T_MAX);
-        let mut icecream_delivered = vec![HashSet::new(); k];
 
-        let mut cur_icecream = IceCream { taste: 0, len: 0 };
-        let mut cur_pos = Pos::default();
         while cur_moves.len() < T_MAX {
             // 納品してスコアが増えるなら納品する
-            if let Some(vpath) = score_raise_path(
-                cur_icecream,
-                &icecream_delivered,
-                &is_red,
-                PATH_SEARCH_MAX_LEN.min(T_MAX - cur_moves.len()),
-                &edges,
-                cur_pos,
-                k,
-            ) {
+            if let Some(vpath) =
+                state.score_raise_path(PATH_SEARCH_MAX_LEN.min(T_MAX - cur_moves.len()))
+            {
                 for &v in vpath.iter().skip(1) {
                     cur_moves.push(v.cur as isize);
-                    if v.cur < k {
-                        // 納品パスだから店は最後に一度しか現れない
-                        icecream_delivered[v.cur].insert(cur_icecream.clone());
-                        cur_icecream.clear();
-                    } else {
-                        if is_red[v.cur] {
-                            cur_icecream.add_red();
-                        } else {
-                            cur_icecream.add_white();
-                        }
-                    }
+                    state.apply_move(v.cur);
                 }
-                cur_score += 1;
-                cur_pos = *vpath.last().unwrap();
 
                 continue;
             }
 
-            // 納品済みのアイスを可能な限り納品しない, を実現する仕組み
-            let candidates: Vec<_> = edges[cur_pos.cur]
-                .iter()
-                .copied()
-                .filter(|&v| {
-                    if v == cur_pos.prev {
-                        return false;
-                    }
-                    if v < k && icecream_delivered[v].contains(&cur_icecream) {
-                        return false;
-                    }
-                    true
-                })
-                .collect();
-            let mut next_pos = cur_pos.prev;
-            while next_pos == cur_pos.prev {
-                next_pos = if !candidates.is_empty() {
-                    candidates[rng.random_range(0..candidates.len())]
-                } else {
-                    edges[cur_pos.cur][rng.random_range(0..edges[cur_pos.cur].len())]
-                };
+            let next_pos = state.random_next_pos(&mut rng);
+            cur_moves.push(next_pos.cur as isize);
+            state.apply_move(next_pos.cur);
+            if next_pos.cur >= state.k
+                && !state.is_red[next_pos.cur]
+                && cur_moves.len() < T_MAX - 1
+                && rng.random_range(1..=100) <= COLOR_CHANGE_PCT
+            {
+                cur_moves.push(-1);
+                state.change_color(next_pos.cur);
             }
-
-            cur_moves.push(next_pos as isize);
-            if next_pos < k {
-                // 納品
-                cur_score -= icecream_delivered[next_pos].len();
-                icecream_delivered[next_pos].insert(cur_icecream.clone());
-                cur_score += icecream_delivered[next_pos].len();
-                cur_icecream.clear();
-            } else {
-                // 収穫
-                if is_red[next_pos] {
-                    cur_icecream.add_red();
-                } else {
-                    cur_icecream.add_white();
-                }
-
-                if !is_red[next_pos]
-                    && cur_moves.len() < T_MAX - 1
-                    && rng.random_range(1..=100) <= COLOR_CHANGE_PCT
-                {
-                    cur_moves.push(-1);
-                    is_red[next_pos] = true;
-                }
-            }
-
-            cur_pos.prev = cur_pos.cur;
-            cur_pos.cur = next_pos;
         }
 
-        if cur_score > ans_score {
-            ans_score = cur_score;
+        if state.score > ans_score {
+            ans_score = state.score;
             ans_moves = cur_moves;
         }
     }
