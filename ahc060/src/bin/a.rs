@@ -11,9 +11,7 @@ const T_MAX: usize = 10000;
 // BFS 部分が遅すぎるのであまり回せない
 const TIME_LIMIT_MS: u64 = 1930;
 
-// 色編が貪欲探索失敗時のみになっているので, 変えてやったほうが次回の探索でうまくいき易いっぽい
-// が, 後半にネタ切れとなるリスクがある
-const COLOR_CHANGE_PCT: u64 = 7;
+const COLOR_CHANGE_PCT: u64 = 5;
 const PATH_SEARCH_MAX_LEN: usize = 8;
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -219,9 +217,27 @@ fn main() {
             if let Some(vpath) =
                 state.score_raise_path(PATH_SEARCH_MAX_LEN.min(T_MAX - cur_moves.len()))
             {
-                for &v in vpath.iter().skip(1) {
+                for (i, v) in vpath.iter().skip(1).enumerate() {
                     cur_moves.push(v.cur as isize);
                     state.apply_move(v.cur);
+
+                    if v.cur < k
+                        || state.is_red[v.cur]
+                        || cur_moves.len() + (vpath.len() - i) == T_MAX
+                    {
+                        continue;
+                    }
+
+                    let mut could_change_color = true;
+                    for j in i + 2..vpath.len() {
+                        if vpath[j].cur == v.cur {
+                            could_change_color = false;
+                        }
+                    }
+                    if could_change_color && rng.random_range(1..=100) <= 1 {
+                        cur_moves.push(-1);
+                        state.change_color(v.cur);
+                    }
                 }
 
                 continue;
