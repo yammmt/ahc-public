@@ -68,7 +68,7 @@ impl State {
     fn get_my_score(&self) -> f64 {
         let scores = self.get_all_scores();
         let enemy_max = *scores.iter().skip(1).max().unwrap();
-        scores[0] as f64 / enemy_max as f64
+        (1e+5 * (1.0 + scores[0] as f64 / enemy_max as f64).log2()).round()
     }
 
     /// player が可能な行動をすべて返す
