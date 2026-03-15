@@ -139,15 +139,23 @@ impl State {
             };
 
             if self.owners[m.0][m.1] == CELL_NO_OWNER {
+                // 占領
                 self.owners[m.0][m.1] = i as isize;
-            } else if self.owners[m.0][m.1] != i as isize {
+                self.levels[m.0][m.1] = 1;
+                self.pos[i] = m;
+            } else if self.owners[m.0][m.1] == i as isize {
+                // 強化
+                self.levels[m.0][m.1] = (self.levels[m.0][m.1] + 1).min(self.max_level);
+                self.pos[i] = m;
+            } else {
+                // 攻撃
                 self.levels[m.0][m.1] -= 1;
                 if self.levels[m.0][m.1] == 0 {
                     self.owners[m.0][m.1] = i as isize;
+                    self.levels[m.0][m.1] = 1;
+                    self.pos[i] = m;
                 }
             }
-            self.levels[m.0][m.1] = (self.levels[m.0][m.1] + 1).min(self.max_level);
-            self.pos[i] = m;
         }
     }
 
