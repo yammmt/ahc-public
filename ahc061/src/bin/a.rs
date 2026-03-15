@@ -12,6 +12,7 @@ const DIRS: [(isize, isize); 4] = [(-1, 0), (1, 0), (0, -1), (0, 1)];
 
 const TIME_LIMIT_MS: u64 = 18;
 const MC_DEPTH: usize = 10;
+const EPSILON: f64 = 0.8;
 
 #[derive(Clone, Copy, Debug)]
 struct State {
@@ -104,6 +105,53 @@ impl State {
         count
     }
 
+    /// 敵が「最もスコアが得られる手」を簡易的に選ぶための評価関数
+    fn get_best_move_for_player(
+        &self,
+        p_idx: usize,
+        candidates: &[(u8, u8)],
+        count: usize,
+        values: &[[u16; N]; N],
+        rng: &mut SmallRng,
+    ) -> (u8, u8) {
+        if rng.random_bool(EPSILON) {
+            return candidates[rng.random_range(0..count)];
+        }
+
+        let mut best_m = candidates[0];
+        let mut max_gain = -1.0;
+
+        for i in 0..count {
+            let (mi, mj) = (candidates[i].0 as usize, candidates[i].1 as usize);
+            let val = values[mi][mj] as f64;
+            let owner = self.owners[mi][mj];
+            let level = self.levels[mi][mj];
+
+            let gain = if owner == CELL_NO_OWNER {
+                // 占領
+                val
+            } else if owner == p_idx as i8 {
+                // 強化
+                if level < self.max_level { val } else { 0.0 }
+            } else if level == 1 {
+                // 攻撃成功（奪取）
+                val
+            } else {
+                // 攻撃中（まだ奪えないのでこのターンの加算はなし）
+                0.0
+            };
+
+            if gain > max_gain {
+                max_gain = gain;
+                best_m = candidates[i];
+            } else if (gain - max_gain).abs() < f64::EPSILON && rng.random_bool(0.5) {
+                best_m = candidates[i]; // 同じ評価ならランダムに
+            }
+        }
+
+        best_m
+    }
+
     fn advance(&mut self, moves: &[(u8, u8)]) {
         let mut actual_moves = [true; MAX_PLAYERS];
         // 競合解決
@@ -170,7 +218,7 @@ fn playout(
             } else {
                 let count = s.get_possible_moves(p, &mut move_buffer);
                 // countは必ず1以上（現在地が含まれるため）
-                turn_moves[p] = move_buffer[rng.random_range(0..count)];
+                turn_moves[p] = s.get_best_move_for_player(p, &move_buffer, count, values, rng);
             }
         }
         s.advance(&turn_moves);
