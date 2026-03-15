@@ -217,8 +217,23 @@ fn main() {
 
     for _ in 0..T_MAX {
         let start_time = Instant::now();
+        let mut move_candidates_pre = [(0u8, 0u8); 100];
+        let n_moves_pre = state.get_possible_moves(0, &mut move_candidates_pre);
+
         let mut move_candidates = [(0u8, 0u8); 100];
-        let n_moves = state.get_possible_moves(0, &mut move_candidates);
+        let mut n_moves = 0;
+        for i in 0..n_moves_pre {
+            let mi = move_candidates_pre[i].0 as usize;
+            let mj = move_candidates_pre[i].1 as usize;
+            if !(state.owners[mi][mj] == 0 && state.levels[mi][mj] == state.max_level) {
+                move_candidates[n_moves] = move_candidates_pre[i];
+                n_moves += 1;
+            }
+        }
+        if n_moves == 0 {
+            move_candidates = move_candidates_pre;
+            n_moves = n_moves_pre;
+        }
 
         let mut scores = vec![0.0; n_moves];
         let mut tries = vec![0; n_moves];
