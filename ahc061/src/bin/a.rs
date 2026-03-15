@@ -1,6 +1,9 @@
 use proconio::{input, source::line::LineSource};
+use rand::rngs::SmallRng;
+use rand::{Rng, SeedableRng};
 use std::collections::VecDeque;
 use std::io::{Write, stdout};
+use std::time::{Duration, Instant};
 
 #[allow(unused_macros)]
 macro_rules! debug {
@@ -13,9 +16,13 @@ macro_rules! debug {
 
 const CELL_NO_OWNER: isize = -1;
 
+#[allow(dead_code)]
 const CELL_FREE: usize = 0;
+#[allow(dead_code)]
 const CELL_MINE: usize = 1;
+#[allow(dead_code)]
 const CELL_ENEMY_LVL1: usize = 2;
+#[allow(dead_code)]
 const CELL_ENEMY_LVL2: usize = 3;
 
 const DIRS: [(isize, isize); 4] = [(-1, 0), (1, 0), (0, -1), (0, 1)];
@@ -23,25 +30,158 @@ const DIRS: [(isize, isize); 4] = [(-1, 0), (1, 0), (0, -1), (0, 1)];
 // 2 s
 #[allow(dead_code)]
 const TIME_LIMIT_MS: u64 = 1980;
+// 2000/100 より小さな値
+const TIME_LIMIT_MC_1TURN_MS: u64 = 18;
+const MC_DEPTH: usize = 10;
 
 const N: usize = 10;
 const T: usize = 100;
 
-#[derive(Debug)]
-struct Board {
+#[derive(Clone, Debug)]
+struct State {
     owners: Vec<Vec<isize>>,
     levels: Vec<Vec<usize>>,
+    pos: Vec<(usize, usize)>,
     values: Vec<Vec<usize>>,
-    max_level: usize,
     player_num: usize,
+    max_level: usize,
+    rng: SmallRng,
 }
 
+impl State {
+    fn get_all_scores(&self) -> Vec<usize> {
+        let mut ret = vec![0; self.player_num];
+
+        for i in 0..N {
+            for j in 0..N {
+                if self.owners[i][j] == CELL_NO_OWNER {
+                    continue;
+                }
+
+                ret[self.owners[i][j] as usize] += self.levels[i][j] * self.values[i][j];
+            }
+        }
+
+        ret
+    }
+
+    fn get_my_score(&self) -> f64 {
+        let scores = self.get_all_scores();
+        let enemy_max = *scores.iter().skip(1).max().unwrap();
+        scores[0] as f64 / enemy_max as f64
+    }
+
+    /// player が可能な行動をすべて返す
+    fn get_possible_moves(&self, player_idx: isize) -> Vec<(usize, usize)> {
+        let mut ret = vec![];
+        let mut visited = vec![vec![false; N]; N];
+        let mut que = VecDeque::new();
+        que.push_back(self.pos[player_idx as usize]);
+        while let Some((ci, cj)) = que.pop_front() {
+            if visited[ci][cj] {
+                continue;
+            }
+
+            visited[ci][cj] = true;
+            ret.push((ci, cj));
+            if self.owners[ci][cj] != player_idx {
+                continue;
+            }
+
+            for &(di, dj) in &DIRS {
+                let ni = ci.wrapping_add_signed(di);
+                let nj = cj.wrapping_add_signed(dj);
+                if ni >= N || nj >= N {
+                    continue;
+                }
+
+                let mut enemy_exists = false;
+                for i in 0..self.player_num {
+                    if i as isize != player_idx && self.pos[i] == (ni, nj) {
+                        enemy_exists = true;
+                        break;
+                    }
+                }
+                if enemy_exists {
+                    continue;
+                }
+
+                que.push_back((ni, nj));
+            }
+        }
+
+        ret
+    }
+
+    /// 全プレイヤーの行動を受け取り, 1 ターン進める
+    fn advance(&mut self, moves: &[(usize, usize)]) {
+        let mut actual_moves = vec![None; self.player_num];
+        for i in 0..self.player_num {
+            actual_moves[i] = Some(moves[i]);
+            let (mi, mj) = moves[i];
+            for j in 0..i {
+                if actual_moves[i] == actual_moves[j] {
+                    if self.owners[mi][mj] == i as isize {
+                        actual_moves[j] = None;
+                    } else if self.owners[mi][mj] == j as isize {
+                        actual_moves[i] = None;
+                    } else {
+                        actual_moves[i] = None;
+                        actual_moves[j] = None;
+                    }
+                }
+            }
+        }
+
+        for i in 0..self.player_num {
+            let Some(m) = actual_moves[i] else {
+                continue;
+            };
+
+            if self.owners[m.0][m.1] == CELL_NO_OWNER {
+                self.owners[m.0][m.1] = i as isize;
+            } else if self.owners[m.0][m.1] != i as isize {
+                self.levels[m.0][m.1] -= 1;
+                if self.levels[m.0][m.1] == 0 {
+                    self.owners[m.0][m.1] = i as isize;
+                }
+            }
+            self.levels[m.0][m.1] = (self.levels[m.0][m.1] + 1).min(self.max_level);
+            self.pos[i] = m;
+        }
+    }
+
+    /// 指定ターン数だけ擬似的にゲームを行い, その結果得られた自身のスコアを返す.
+    fn playout(&self, first_move: (usize, usize), depth: usize) -> f64 {
+        let mut s = self.clone();
+        let mut moves = Vec::with_capacity(s.player_num);
+        for i in 0..depth {
+            for j in 0..s.player_num {
+                if i == 0 && j == 0 {
+                    moves.push(first_move);
+                    continue;
+                }
+
+                let p = s.get_possible_moves(j as isize);
+                moves.push(p[s.rng.random_range(0..p.len())]);
+            }
+
+            s.advance(&moves);
+            moves.clear();
+        }
+
+        s.get_my_score()
+    }
+}
+
+#[allow(dead_code)]
 #[derive(Clone, Debug)]
 struct Weight {
     free_cell: f64,
     my_cell: f64,
     enemy_cell_lvl1: f64,
     enemy_cell_lvl2: f64,
+    random: f64,
 }
 
 impl Default for Weight {
@@ -51,161 +191,9 @@ impl Default for Weight {
             my_cell: 1.0,
             enemy_cell_lvl1: 1.0,
             enemy_cell_lvl2: 1.0,
+            random: 0.8,
         }
     }
-}
-
-/// AI スコアを計算して返す.
-fn ai_move_candidates(
-    ps: (usize, usize),
-    board: &Board,
-    weights: &[Weight],
-) -> Vec<Vec<(f64, (usize, usize))>> {
-    let me = board.owners[ps.0][ps.1] as usize;
-    let mut candidates = vec![vec![]; 4];
-
-    // TODO: 一々メモリ確保が走るので遅い
-    let mut visited = vec![vec![false; N]; N];
-    let mut que = VecDeque::new();
-    que.push_back(ps);
-    while let Some((pi, pj)) = que.pop_front() {
-        if visited[pi][pj] {
-            continue;
-        }
-
-        visited[pi][pj] = true;
-        if board.owners[pi][pj] == me as isize {
-            if board.levels[pi][pj] < board.max_level {
-                candidates[CELL_MINE]
-                    .push((board.values[pi][pj] as f64 * weights[me].my_cell, (pi, pj)));
-            }
-        } else if board.owners[pi][pj] == CELL_NO_OWNER {
-            candidates[CELL_FREE].push((
-                board.values[pi][pj] as f64 * weights[me].free_cell,
-                (pi, pj),
-            ));
-        } else if board.levels[pi][pj] == 1 {
-            candidates[CELL_ENEMY_LVL1].push((
-                board.values[pi][pj] as f64 * weights[me].enemy_cell_lvl1,
-                (pi, pj),
-            ));
-        } else {
-            candidates[CELL_ENEMY_LVL2].push((
-                board.values[pi][pj] as f64 * weights[me].enemy_cell_lvl2,
-                (pi, pj),
-            ));
-        }
-
-        // 今が自身領土でなければ移動不可
-        if board.owners[pi][pj] != me as isize {
-            continue;
-        }
-
-        for d in &DIRS {
-            let ni = pi.wrapping_add_signed(d.0);
-            let nj = pj.wrapping_add_signed(d.1);
-            if ni >= N
-                || nj >= N
-                || visited[ni][nj]
-                || (board.owners[ni][nj] != me as isize && board.owners[ni][nj] != CELL_NO_OWNER)
-            {
-                continue;
-            }
-
-            que.push_back((ni, nj));
-        }
-    }
-
-    // desc
-    candidates[CELL_FREE].sort_unstable_by(|a, b| b.0.total_cmp(&a.0));
-    candidates[CELL_MINE].sort_unstable_by(|a, b| b.0.total_cmp(&a.0));
-    candidates[CELL_ENEMY_LVL1].sort_unstable_by(|a, b| b.0.total_cmp(&a.0));
-    candidates[CELL_ENEMY_LVL2].sort_unstable_by(|a, b| b.0.total_cmp(&a.0));
-
-    candidates
-}
-
-/// 与えられた行動候補からもっともそれらしい行動を返す.
-fn actual_ai_move(candidates: &Vec<Vec<(f64, (usize, usize))>>) -> (usize, usize) {
-    let mut ret = (-1.0, (0, 0));
-    // 二次元配列の参照順を逆にすると定数倍高速化
-    for i in 0..4 {
-        if let Some(&c) = candidates[i].first()
-            && c.0 > ret.0
-        {
-            ret = c;
-        }
-    }
-
-    ret.1
-}
-
-/// 現在の盤面のスコアを O(N^2) で計算して返す.
-fn calc_scores(board: &Board) -> Vec<usize> {
-    let mut ret = vec![0; board.player_num];
-
-    for i in 0..N {
-        for j in 0..N {
-            if board.owners[i][j] == CELL_NO_OWNER {
-                continue;
-            }
-
-            ret[board.owners[i][j] as usize] += board.levels[i][j] * board.values[i][j];
-        }
-    }
-
-    ret
-}
-
-/// 移動を反映したスコアを返す.
-/// ここで返すスコアは厳密なスコアでなく, 本来のスコア計算に用いられる S_0/S_A を返す.
-/// 不正な移動は弾かない.
-/// 現状, スコアを計算するだけであり, 盤面の更新は行っていない. このため複数手先を予想することはできない.
-fn simulate_update(moves_to: &[(usize, usize)], scores: &[usize], board: &Board) -> f64 {
-    // 競合解決
-    let mut actual_moves = vec![None; board.player_num];
-    for i in 0..board.player_num {
-        actual_moves[i] = Some(moves_to[i]);
-        let (mi, mj) = moves_to[i];
-        for j in 0..i {
-            if actual_moves[i] == actual_moves[j] {
-                if board.owners[mi][mj] == i as isize {
-                    actual_moves[j] = None;
-                } else if board.owners[mi][mj] == j as isize {
-                    actual_moves[i] = None;
-                } else {
-                    actual_moves[i] = None;
-                    actual_moves[j] = None;
-                }
-            }
-        }
-    }
-
-    // スコア差分の計算
-    let mut new_scores = scores.to_vec();
-    for i in 0..board.player_num {
-        let Some((mi, mj)) = actual_moves[i] else {
-            continue;
-        };
-
-        if board.owners[mi][mj] == CELL_NO_OWNER {
-            // 占領: 誰のマスでもない
-            new_scores[i] += board.values[mi][mj];
-        } else if board.owners[mi][mj] == i as isize && board.levels[mi][mj] < board.max_level {
-            // 強化
-            new_scores[i] += board.values[mi][mj];
-        } else {
-            // 攻撃
-            let j = board.owners[mi][mj] as usize;
-            new_scores[j] -= board.values[mi][mj];
-            if board.levels[mi][mj] == 1 {
-                new_scores[i] += board.values[mi][mj];
-            }
-        }
-    }
-
-    let enemy_max = *new_scores.iter().skip(1).max().unwrap();
-    new_scores[0] as f64 / enemy_max as f64
 }
 
 fn main() {
@@ -224,87 +212,50 @@ fn main() {
         sxym: [(usize, usize); player_num],
     }
 
-    // player_pos これで保存されたっけか
-    let mut player_pos = sxym.clone();
+    let pos = sxym.clone();
     let owners = vec![vec![CELL_NO_OWNER; N]; N];
     let levels = vec![vec![0; N]; N];
-    let mut board = Board {
+    let rng = SmallRng::seed_from_u64(1);
+    let mut state = State {
         owners,
         levels,
+        pos: pos.clone(),
         values,
-        max_level,
         player_num,
+        max_level,
+        rng,
     };
-    for (i, p) in player_pos.iter().enumerate() {
-        board.owners[p.0][p.1] = i as isize;
-        board.levels[p.0][p.1] = 1;
+    for (i, p) in pos.iter().enumerate() {
+        state.owners[p.0][p.1] = i as isize;
+        state.levels[p.0][p.1] = 1;
     }
 
-    let weights = vec![Weight::default(); player_num];
+    // TODO: パラメータ推定を入れると改善する
+    let _weights = vec![Weight::default(); player_num];
 
     for _ in 0..T {
-        let score = calc_scores(&board);
-
-        // TODO: 一々メモリ確保走るので遅い
-        let mut move_candidates = vec![vec![]; player_num];
-        // 敵
-        for i in 1..player_num {
-            // BFS でおけるマスを全部調べる
-            move_candidates[i] = ai_move_candidates(player_pos[i], &board, &weights)
+        let start_time = Instant::now();
+        let my_possible_moves = state.get_possible_moves(0);
+        let mut scores = vec![0.0; my_possible_moves.len()];
+        let mut tries = vec![0; my_possible_moves.len()];
+        let mut moves_i = 0;
+        while start_time.elapsed() < Duration::from_millis(TIME_LIMIT_MC_1TURN_MS) {
+            scores[moves_i] += state.playout(my_possible_moves[moves_i], MC_DEPTH);
+            tries[moves_i] += 1;
+            moves_i = (moves_i + 1) % my_possible_moves.len();
         }
 
-        // AI の行動を決め打ちする
-        let mut all_moves = vec![(0, 0); player_num];
-        for i in 1..player_num {
-            all_moves[i] = actual_ai_move(&move_candidates[i]);
-        }
-
-        // 自身の行動すべてに対してスコア変化を計算する
-        // TODO: BFS また書くの？
-        let mut my_move = (0.0, (0, 0));
-        {
-            let mut que = VecDeque::new();
-            let mut visited = vec![vec![false; N]; N];
-            que.push_back(player_pos[0]);
-            while let Some((pi, pj)) = que.pop_front() {
-                if visited[pi][pj] {
-                    continue;
-                }
-
-                visited[pi][pj] = true;
-
-                all_moves[0] = (pi, pj);
-                let score_cur = simulate_update(&all_moves, &score, &board);
-                if score_cur > my_move.0 {
-                    my_move = (score_cur, (pi, pj));
-                }
-
-                // 今が自身領土でなければ移動不可
-                if board.owners[pi][pj] != 0 {
-                    continue;
-                }
-
-                // 既に相手がいる位置は避けずともよい, どいてくれる場合があるので
-                // プレイヤー数少ないので許容できる
-                // || (player_pos.contains(&(ni, nj)) && board.owners[ni][nj] != 0)
-                for d in &DIRS {
-                    let ni = pi.wrapping_add_signed(d.0);
-                    let nj = pj.wrapping_add_signed(d.1);
-                    if ni >= N
-                        || nj >= N
-                        || visited[ni][nj]
-                        || (board.owners[ni][nj] != 0 && board.owners[ni][nj] != CELL_NO_OWNER)
-                    {
-                        continue;
-                    }
-
-                    que.push_back((ni, nj));
-                }
+        let mut my_move = (0, 0);
+        let mut my_score = 0.0;
+        for i in 0..my_possible_moves.len() {
+            let s = scores[i] / tries[i] as f64;
+            if s > my_score {
+                my_move = my_possible_moves[i];
+                my_score = s;
             }
         }
 
-        // TODO: なにか出す
-        println!("{} {}", my_move.1.0, my_move.1.1);
+        println!("{} {}", my_move.0, my_move.1);
         stdout().flush().unwrap();
 
         // 読み込む
@@ -312,16 +263,16 @@ fn main() {
         input! {
             from &mut source,
             // 駒の移動先は捨てる, 現在位置とマスの現況さえわかればよいので
-            _txym: [(usize, usize); player_num],
+            _txym: [(usize, usize); state.player_num],
             // ターン終了時駒位置
-            pp: [(usize, usize); player_num],
+            pp: [(usize, usize); state.player_num],
             // 各マスの所有者
             owners: [[isize; N]; N],
             // レベル
             levels: [[usize; N]; N],
         }
-        player_pos = pp;
-        board.owners = owners;
-        board.levels = levels;
+        state.pos = pp;
+        state.owners = owners;
+        state.levels = levels;
     }
 }
