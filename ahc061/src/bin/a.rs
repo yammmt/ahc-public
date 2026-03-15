@@ -120,7 +120,7 @@ impl State {
             actual_moves[i] = Some(moves[i]);
             let (mi, mj) = moves[i];
             for j in 0..i {
-                if actual_moves[i] == actual_moves[j] {
+                if actual_moves[i] == Some(moves[j]) {
                     if self.owners[mi][mj] == i as isize {
                         actual_moves[j] = None;
                     } else if self.owners[mi][mj] == j as isize {
