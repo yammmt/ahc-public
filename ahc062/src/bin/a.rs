@@ -1,5 +1,7 @@
 use proconio::fastout;
 use proconio::input;
+use rand::rngs::SmallRng;
+use rand::{Rng, SeedableRng};
 use std::time::{Duration, Instant};
 
 // 固定
@@ -12,9 +14,72 @@ fn twod_to_oned(i: usize, j: usize) -> usize {
     i * N + j
 }
 
+/// 区間 [i, j] でのスコアを計算する
+fn calc_score(i: usize, j: usize, path: &[(usize, usize)], ann: &Vec<Vec<usize>>) -> usize {
+    let mut ret = 0;
+    for a in i..=j {
+        let ii = path[a].0;
+        let jj = path[a].1;
+        ret += a * ann[ii][jj];
+    }
+    ret
+}
+
+/// 区間 [i, j] を反転した場合のスコア差分を計算する
+/// 値が正であれば, スコアは改善する
+fn calc_reverse_score_diff(
+    i: usize,
+    j: usize,
+    path: &[(usize, usize)],
+    ann: &Vec<Vec<usize>>,
+) -> isize {
+    let mut ret = 0;
+
+    for k in i..=j {
+        let (r, c) = path[k];
+        let val = ann[r][c] as isize;
+
+        let old_idx = k as isize;
+        let new_idx = (i + j - k) as isize;
+
+        // (新しい位置 - 元の位置) * マスの値 = そのマスのスコア変化
+        ret += (new_idx - old_idx) * val;
+    }
+    ret
+}
+
+/// i から j までの経路を反転できるなら true
+fn could_reversed(i: usize, j: usize, paths: &[(usize, usize)]) -> bool {
+    // (i-1) -> i -> (i+1) -> ... -> j -> (j+1)
+    // (i-1) -> j -> (j-1) -> ... -> i -> (j+1)
+
+    // i-1 と j が隣接か
+    if i > 0 {
+        let dist = (paths[i - 1].0 as isize - paths[j].0 as isize)
+            .abs()
+            .max((paths[i - 1].1 as isize - paths[j].1 as isize).abs());
+        if dist > 1 {
+            return false;
+        }
+    }
+
+    // i と j+1 が隣接か
+    if j + 1 < N * N {
+        let dist = (paths[i].0 as isize - paths[j + 1].0 as isize)
+            .abs()
+            .max((paths[i].1 as isize - paths[j + 1].1 as isize).abs());
+        if dist > 1 {
+            return false;
+        }
+    }
+
+    true
+}
+
 #[fastout]
 fn main() {
     let start_time = Instant::now();
+    let mut rng = SmallRng::seed_from_u64(0);
 
     input! {
         _n: usize,
@@ -34,13 +99,36 @@ fn main() {
             cur_path[twod_to_oned(i, j)] = (i, jj);
         }
     }
+    let mut cur_score = calc_score(0, N * N - 1, &cur_path, &ann);
 
-    let mut ans = cur_path.clone();
+    let mut ans_path = cur_path.clone();
+    let mut ans_score = cur_score;
     while start_time.elapsed() < Duration::from_millis(TIME_LIMIT_MS) {
-        break;
+        // TODO: おそらくほとんど反転不可
+        let i = rng.random_range(0..N * N);
+        let j = rng.random_range(0..N * N);
+        if !could_reversed(i, j, &cur_path) {
+            continue;
+        }
+
+        // とりあえず山登り
+
+        let score_diff = calc_reverse_score_diff(i, j, &cur_path, &ann);
+
+        if score_diff > 0 {
+            // TODO: 遅い
+            cur_path[i..=j].reverse();
+            cur_score = (cur_score as isize + score_diff) as usize;
+
+            if cur_score > ans_score {
+                // TODO: 遅い
+                ans_path = cur_path.clone();
+                ans_score = cur_score;
+            }
+        }
     }
 
     for i in 0..N * N {
-        println!("{} {}", ans[i].0, ans[i].1);
+        println!("{} {}", ans_path[i].0, ans_path[i].1);
     }
 }
