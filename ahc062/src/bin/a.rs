@@ -6,6 +6,7 @@ use rand::{Rng, SeedableRng};
 use std::time::{Duration, Instant};
 
 const N: usize = 200;
+const NN: usize = N * N;
 const DIRS: [(isize, isize); 9] = [
     (-1, -1),
     (-1, 0),
@@ -20,105 +21,65 @@ const DIRS: [(isize, isize); 9] = [
 
 const TIME_LIMIT_MS: u64 = 2950;
 
+struct ScoreManager {
+    sum_v: Vec<isize>,
+    sum_iv: Vec<isize>,
+}
+
+impl ScoreManager {
+    fn new(path: &[(usize, usize)], ann: &Vec<Vec<usize>>) -> Self {
+        let mut sm = Self {
+            sum_v: vec![0; NN + 1],
+            sum_iv: vec![0; NN + 1],
+        };
+        sm.update_all(path, ann);
+        sm
+    }
+
+    fn update_all(&mut self, path: &[(usize, usize)], ann: &Vec<Vec<usize>>) {
+        let mut cur_v = 0;
+        let mut cur_iv = 0;
+        for i in 0..NN {
+            let val = ann[path[i].0][path[i].1] as isize;
+            cur_v += val;
+            cur_iv += i as isize * val;
+            self.sum_v[i + 1] = cur_v;
+            self.sum_iv[i + 1] = cur_iv;
+        }
+    }
+
+    fn diff_reverse(&self, i: usize, j: usize) -> isize {
+        let s1 = self.sum_v[j + 1] - self.sum_v[i];
+        let s2 = self.sum_iv[j + 1] - self.sum_iv[i];
+        (i + j) as isize * s1 - 2 * s2
+    }
+
+    fn diff_shift(&self, i: usize, j: usize, k: usize) -> isize {
+        let s_val = self.sum_v[j + 1] - self.sum_v[i];
+        let move_dist = if k < i {
+            (k + 1) as isize - i as isize
+        } else {
+            k as isize - j as isize
+        };
+        let mut diff = s_val * move_dist;
+
+        if k < i {
+            let other_v = self.sum_v[i] - self.sum_v[k + 1];
+            diff += (j - i + 1) as isize * other_v;
+        } else {
+            let other_v = self.sum_v[k + 1] - self.sum_v[j + 1];
+            diff -= (j - i + 1) as isize * other_v;
+        }
+        diff
+    }
+}
+
 #[inline]
-fn twod_to_oned(i: usize, j: usize) -> usize {
-    i * N + j
-}
-
-fn calc_score(path: &[(usize, usize)], ann: &Vec<Vec<usize>>) -> usize {
-    path.iter()
-        .enumerate()
-        .map(|(idx, &(r, c))| idx * ann[r][c])
-        .sum()
-}
-
-fn calc_reverse_score_diff(
-    i: usize,
-    j: usize,
-    path: &[(usize, usize)],
-    ann: &Vec<Vec<usize>>,
-) -> isize {
-    let mut ret = 0;
-    let sum_idx = (i + j) as isize;
-    for k in i..=j {
-        let (r, c) = path[k];
-        ret += (sum_idx - 2 * k as isize) * ann[r][c] as isize;
-    }
-    ret
-}
-
-/// 区間 [i, j] を k の直後に移動させる際のスコア差分
-fn calc_shift_score_diff(
-    i: usize,
-    j: usize,
-    k: usize,
-    path: &[(usize, usize)],
-    ann: &Vec<Vec<usize>>,
-) -> isize {
-    let mut section_sum = 0isize;
-    for idx in i..=j {
-        let (r, c) = path[idx];
-        section_sum += ann[r][c] as isize;
-    }
-
-    let move_dist = if k < i {
-        // 前方に移動：インデックスが減る
-        (k + 1) as isize - i as isize
-    } else {
-        // 後方に移動：インデックスが増える
-        k as isize - j as isize
-    };
-
-    // 移動する区間の変化
-    let mut diff = section_sum * move_dist;
-
-    // 押し出される側の区間の変化
-    if k < i {
-        // [k+1, i-1] が後ろにずれる
-        let shift_len = (j - i + 1) as isize;
-        for idx in k + 1..i {
-            let (r, c) = path[idx];
-            diff += shift_len * ann[r][c] as isize;
-        }
-    } else {
-        // [j+1, k] が前にずれる
-        let shift_len = (j - i + 1) as isize;
-        for idx in j + 1..=k {
-            let (r, c) = path[idx];
-            diff -= shift_len * ann[r][c] as isize;
-        }
-    }
-    diff
-}
-
 fn is_adj(p1: (usize, usize), p2: (usize, usize)) -> bool {
     (p1.0 as isize - p2.0 as isize)
         .abs()
         .max((p1.1 as isize - p2.1 as isize).abs())
         <= 1
-}
-
-fn could_reversed(i: usize, j: usize, paths: &[(usize, usize)]) -> bool {
-    if i == 0 || j + 1 >= N * N {
-        return false;
-    }
-    is_adj(paths[i - 1], paths[j]) && is_adj(paths[i], paths[j + 1])
-}
-
-fn could_shifted(i: usize, j: usize, k: usize, paths: &[(usize, usize)]) -> bool {
-    if i == 0 || j + 1 >= N * N || (k >= i - 1 && k <= j) {
-        return false;
-    }
-    // 3 箇所の繋ぎ変えをチェック
-    if !is_adj(paths[i - 1], paths[j + 1]) {
-        return false;
-    }
-    if k + 1 < N * N {
-        is_adj(paths[k], paths[i]) && is_adj(paths[j], paths[k + 1])
-    } else {
-        // 末尾への移動
-        is_adj(paths[k], paths[i])
-    }
 }
 
 #[fastout]
@@ -127,21 +88,19 @@ fn main() {
     let mut rng = SmallRng::seed_from_u64(0);
     input! { _n: usize, ann: [[usize; N]; N] }
 
-    let mut cur_path = [(0, 0); N * N];
+    let mut cur_path = [(0, 0); NN];
     let mut path_order = [[0; N]; N];
     for i in 0..N {
         for j in 0..N {
             let jj = if i % 2 == 0 { j } else { N - j - 1 };
-            let idx = twod_to_oned(i, j);
+            let idx = i * N + j;
             cur_path[idx] = (i, jj);
+            path_order[i][jj] = idx;
         }
     }
-    for idx in 0..N * N {
-        let (r, c) = cur_path[idx];
-        path_order[r][c] = idx;
-    }
 
-    let mut cur_score = calc_score(&cur_path, &ann);
+    let mut sm = ScoreManager::new(&cur_path, &ann);
+    let mut cur_score = sm.sum_iv[NN] as usize;
     let mut ans_path = cur_path.clone();
     let mut ans_score = cur_score;
 
@@ -151,59 +110,79 @@ fn main() {
 
         if rng.random_bool(0.20) {
             // --- Reverse 遷移 ---
-            let i = rng.random_range(1..N * N);
+            let i = rng.gen_range(1..NN);
             let d = DIRS.choose(&mut rng).unwrap();
-            let pos_prev = cur_path[i - 1];
-            let pos_j = (
-                pos_prev.0.wrapping_add_signed(d.0),
-                pos_prev.1.wrapping_add_signed(d.1),
+            let p_prev = cur_path[i - 1];
+            let target = (
+                p_prev.0.wrapping_add_signed(d.0),
+                p_prev.1.wrapping_add_signed(d.1),
             );
-            if pos_j.0 >= N || pos_j.1 >= N {
+            if target.0 >= N || target.1 >= N {
                 continue;
             }
-            let j = path_order[pos_j.0][pos_j.1];
-            let (start, end) = (i.min(j), i.max(j));
+            let j = path_order[target.0][target.1];
 
-            if could_reversed(start, end, &cur_path) {
-                let diff = calc_reverse_score_diff(start, end, &cur_path, &ann);
-                if diff > 0 || rng.random_bool((diff as f64 / temp).exp().min(1.0)) {
+            // 2-opt の対称性を厳密に処理
+            let (start, end) = if i < j {
+                (i, j)
+            } else if j + 1 < i {
+                (j + 1, i - 1)
+            } else {
+                continue;
+            };
+
+            if start < end && (end + 1 == NN || is_adj(cur_path[start], cur_path[end + 1])) {
+                let diff = sm.diff_reverse(start, end);
+                if diff > 0 || (temp > 0.0 && rng.random_bool((diff as f64 / temp).exp().min(1.0)))
+                {
                     cur_path[start..=end].reverse();
                     for idx in start..=end {
                         let (r, c) = cur_path[idx];
                         path_order[r][c] = idx;
                     }
+                    sm.update_all(&cur_path, &ann);
                     cur_score = (cur_score as isize + diff) as usize;
                 }
             }
         } else {
             // --- Shift 遷移 ---
-            let i = rng.random_range(1..N * N - 1);
-            // 短い区間の方が成功しやすい
-            let j = (i + rng.random_range(0..10)).min(N * N - 2);
+            let i = rng.gen_range(1..NN - 1);
+            let j = (i + rng.gen_range(0..15)).min(NN - 2);
+
+            // i に隣接する k を探すことで、有効な Shift を高確率で引き当てる
             let d = DIRS.choose(&mut rng).unwrap();
-            let pos_k = (
-                cur_path[i - 1].0.wrapping_add_signed(d.0),
-                cur_path[i - 1].1.wrapping_add_signed(d.1),
+            let p_i = cur_path[i];
+            let target = (
+                p_i.0.wrapping_add_signed(d.0),
+                p_i.1.wrapping_add_signed(d.1),
             );
-            if pos_k.0 >= N || pos_k.1 >= N {
+            if target.0 >= N || target.1 >= N {
                 continue;
             }
-            let k = path_order[pos_k.0][pos_k.1];
+            let k = path_order[target.0][target.1];
 
-            if could_shifted(i, j, k, &cur_path) {
-                let diff = calc_shift_score_diff(i, j, k, &cur_path, &ann);
-                if diff > 0 || rng.random_bool((diff as f64 / temp).exp().min(1.0)) {
-                    let move_range = if k < i { k + 1..=j } else { i..=k };
-                    if k < i {
-                        cur_path[k + 1..=j].rotate_right(j - i + 1);
-                    } else {
-                        cur_path[i..=k].rotate_left(j - i + 1);
+            if k < i - 1 || k > j {
+                if is_adj(cur_path[i - 1], cur_path[j + 1]) {
+                    // is_adj(cur_path[k], cur_path[i]) は上記 target の取得により保証されている
+                    if k + 1 == NN || is_adj(cur_path[j], cur_path[k + 1]) {
+                        let diff = sm.diff_shift(i, j, k);
+                        if diff > 0
+                            || (temp > 0.0 && rng.random_bool((diff as f64 / temp).exp().min(1.0)))
+                        {
+                            let (range_l, range_r) = if k < i { (k + 1, j) } else { (i, k) };
+                            if k < i {
+                                cur_path[k + 1..=j].rotate_right(j - i + 1);
+                            } else {
+                                cur_path[i..=k].rotate_left(j - i + 1);
+                            }
+                            for idx in range_l..=range_r {
+                                let (r, c) = cur_path[idx];
+                                path_order[r][c] = idx;
+                            }
+                            sm.update_all(&cur_path, &ann);
+                            cur_score = (cur_score as isize + diff) as usize;
+                        }
                     }
-                    for idx in move_range {
-                        let (r, c) = cur_path[idx];
-                        path_order[r][c] = idx;
-                    }
-                    cur_score = (cur_score as isize + diff) as usize;
                 }
             }
         }
