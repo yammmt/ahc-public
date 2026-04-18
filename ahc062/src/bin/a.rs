@@ -141,8 +141,9 @@ fn main() {
         }
 
         let score_diff = calc_reverse_score_diff(start, end, &cur_path, &ann);
+        let temp = 120.0 * (1.0 - start_time.elapsed().as_millis() as f64 / TIME_LIMIT_MS as f64);
 
-        if score_diff > 0 {
+        if score_diff > 0 || rng.random_bool((score_diff as f64 / temp).exp().min(1.0)) {
             cur_path[start..=end].reverse();
             for k in start..=end {
                 let (r, c) = cur_path[k];
