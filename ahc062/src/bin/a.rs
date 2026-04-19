@@ -1,4 +1,5 @@
-// 二列分解で往路小さい値, 復路大きい値, を Gemini に依頼
+// 二列分解で往路小さい値, 復路大きい値
+// AI なし実装はかなり厳しく非現実的？
 // 参考:
 // https://zenn.dev/yoto1980yen/articles/f4867e91ead7f1
 // https://x.com/takytank/status/2032759903467786507?s=20
@@ -8,13 +9,15 @@
 
 use proconio::input;
 
+const N: usize = 200;
+
 fn main() {
     input! {
-        n: usize,
-        a: [[u32; n]; n],
+        _n: usize,
+        ann: [[u32; N]; N],
     }
 
-    let path = solve(n, &a);
+    let path = solve(&ann);
 
     // 出力
     for &(r, c) in &path {
@@ -22,127 +25,121 @@ fn main() {
     }
 }
 
-fn solve(n: usize, a: &[Vec<u32>]) -> Vec<(usize, usize)> {
-    let mut path = Vec::with_capacity(n * n);
-    let mut visited = vec![vec![false; n]; n];
+fn add_to_path(path: &mut Vec<(usize, usize)>, visited: &mut [Vec<bool>], pos: (usize, usize)) {
+    let (r, c) = pos;
+    assert!(!visited[r][c]);
+    path.push(pos);
+    visited[r][c] = true;
+}
 
-    // 解決策1: パス追加と訪問済みの記録を「未訪問の場合のみ」行うクロージャ
-    let mut add_to_path = |r: usize, c: usize| {
-        if !visited[r][c] {
-            path.push((r, c));
-            visited[r][c] = true;
+fn solve(ann: &[Vec<u32>]) -> Vec<(usize, usize)> {
+    let mut path = Vec::with_capacity(N * N);
+    let mut visited = vec![vec![false; N]; N];
+
+    // 初期位置
+    let mut cur_pos = (0, 0);
+    add_to_path(&mut path, &mut visited, cur_pos);
+
+    // 往路
+    for i in 0..N {
+        if i % 2 == 1 {
+            continue;
         }
-    };
 
-    // 【往路】 (Outward Journey) : 左のグループから右のグループへ、小さい数を拾いながら進む
-    for g in 0..n / 2 {
-        let c0 = 2 * g;
-        let c1 = 2 * g + 1;
-
-        if g % 2 == 0 {
-            // 偶数グループ: 下方向へ進む
-            if g == 0 {
-                add_to_path(0, 0); // 初期位置
-                for r in 1..=n - 4 {
-                    if a[r][c0] < a[r][c1] {
-                        add_to_path(r, c0);
-                    } else {
-                        add_to_path(r, c1);
-                    }
-                }
-            } else {
-                add_to_path(2, c0); // 遷移後の開始位置
-                for r in 3..=n - 4 {
-                    if a[r][c0] < a[r][c1] {
-                        add_to_path(r, c0);
-                    } else {
-                        add_to_path(r, c1);
-                    }
-                }
-            }
-
-            // 次のグループへ安全に斜め移動するため、N-3行目は強制的に内側(c0)を踏む
-            add_to_path(n - 3, c0);
-
-            // 下端折り返し (右方向へ)
-            add_to_path(n - 2, c0);
-            add_to_path(n - 1, c0);
-            add_to_path(n - 1, c1);
-            add_to_path(n - 2, c1);
-        } else {
-            // 奇数グループ: 上方向へ進む
-            add_to_path(n - 3, c0); // 遷移後の開始位置
-
-            for r in (3..=n - 4).rev() {
-                if a[r][c0] < a[r][c1] {
-                    add_to_path(r, c0);
+        if (i / 2) % 2 == 0 {
+            // 上から下
+            while cur_pos.0 != N - 3 {
+                cur_pos = if ann[cur_pos.0 + 1][i] < ann[cur_pos.0 + 1][i + 1] {
+                    (cur_pos.0 + 1, i)
                 } else {
-                    add_to_path(r, c1);
-                }
+                    (cur_pos.0 + 1, i + 1)
+                };
+                add_to_path(&mut path, &mut visited, cur_pos);
             }
 
-            // 次のグループへ安全に斜め移動するため、2行目は強制的に内側(c0)を踏む
-            add_to_path(2, c0);
-
-            // 上端折り返し (右方向へ)
-            add_to_path(1, c0);
-            add_to_path(0, c0);
-            add_to_path(0, c1);
-            add_to_path(1, c1);
-        }
-    }
-
-    // 【復路】 (Return Journey) : 右のグループから左のグループへ、未訪問のマスを回収しながら戻る
-    for g in (0..n / 2).rev() {
-        let c0 = 2 * g;
-        let c1 = 2 * g + 1;
-
-        if g % 2 != 0 {
-            // 奇数グループ: 復路は下方向へ進む
-            add_to_path(2, c1);
-            for r in 3..=n - 4 {
-                // 片方が往路で訪問済みなので、両方呼べば未訪問の方が追加される
-                add_to_path(r, c0);
-                add_to_path(r, c1);
-            }
-            add_to_path(n - 3, c1);
-
-            // 下端折り返し
-            add_to_path(n - 2, c1);
-            add_to_path(n - 1, c1);
-            add_to_path(n - 1, c0);
-            add_to_path(n - 2, c0);
+            // 折り返し部は固定
+            add_to_path(&mut path, &mut visited, (N - 2, i));
+            add_to_path(&mut path, &mut visited, (N - 1, i));
+            add_to_path(&mut path, &mut visited, (N - 1, i + 1));
+            add_to_path(&mut path, &mut visited, (N - 2, i + 2));
+            cur_pos = (N - 2, i + 2);
         } else {
-            // 偶数グループ: 復路は上方向へ進む
-            if g == 0 {
-                add_to_path(n - 3, c1);
-                for r in (2..=n - 4).rev() {
-                    add_to_path(r, c0);
-                    add_to_path(r, c1);
-                }
-                // ゴール地点（残った0行目・1行目の回収）
-                add_to_path(1, c0);
-                add_to_path(1, c1);
-                add_to_path(0, c1);
-            } else {
-                add_to_path(n - 3, c1);
-                for r in (3..=n - 4).rev() {
-                    add_to_path(r, c0);
-                    add_to_path(r, c1);
-                }
-                add_to_path(2, c1);
+            // 下から上
+            while cur_pos.0 != 2 {
+                cur_pos = if ann[cur_pos.0 - 1][i] < ann[cur_pos.0 - 1][i + 1] {
+                    (cur_pos.0 - 1, i)
+                } else {
+                    (cur_pos.0 - 1, i + 1)
+                };
+                add_to_path(&mut path, &mut visited, cur_pos);
+            }
 
-                // 上端折り返し
-                add_to_path(1, c1);
-                add_to_path(0, c1);
-                add_to_path(0, c0);
-                add_to_path(1, c0);
+            // 折り返し部は固定
+            add_to_path(&mut path, &mut visited, (1, i));
+            add_to_path(&mut path, &mut visited, (0, i));
+            add_to_path(&mut path, &mut visited, (0, i + 1));
+            if i != N - 2 {
+                // 最終列では折り返せない
+                add_to_path(&mut path, &mut visited, (1, i + 2));
+                cur_pos = (1, i + 2);
+            } else {
+                cur_pos = (0, i + 1);
             }
         }
     }
 
-    // 全てのマスを訪問したかをアサート
-    assert_eq!(path.len(), n * n, "Visited cell count mismatch!");
+    // 復路
+    for i in (0..N).rev() {
+        if i % 2 == 1 {
+            continue;
+        }
+
+        if (i / 2) % 2 == 0 {
+            // 下から上
+            while cur_pos.0 != 2 {
+                cur_pos = if !visited[cur_pos.0 - 1][i] {
+                    (cur_pos.0 - 1, i)
+                } else {
+                    (cur_pos.0 - 1, i + 1)
+                };
+                add_to_path(&mut path, &mut visited, cur_pos);
+            }
+            if i >= 2 {
+                // 折り返し部
+                add_to_path(&mut path, &mut visited, (1, i + 1));
+                add_to_path(&mut path, &mut visited, (0, i + 1));
+                add_to_path(&mut path, &mut visited, (0, i));
+                add_to_path(&mut path, &mut visited, (1, i - 1));
+                cur_pos = (1, i - 1);
+            } else {
+                // 最終列は折り返し考えず続行
+                while cur_pos.0 != 0 {
+                    cur_pos = if !visited[cur_pos.0 - 1][i] {
+                        (cur_pos.0 - 1, i)
+                    } else {
+                        (cur_pos.0 - 1, i + 1)
+                    };
+                    add_to_path(&mut path, &mut visited, cur_pos);
+                }
+            }
+        } else {
+            // 上から下
+            while cur_pos.0 != N - 3 {
+                cur_pos = if !visited[cur_pos.0 + 1][i] {
+                    (cur_pos.0 + 1, i)
+                } else {
+                    (cur_pos.0 + 1, i + 1)
+                };
+                add_to_path(&mut path, &mut visited, cur_pos);
+            }
+            // 折り返し部
+            add_to_path(&mut path, &mut visited, (N - 2, i + 1));
+            add_to_path(&mut path, &mut visited, (N - 1, i + 1));
+            add_to_path(&mut path, &mut visited, (N - 1, i));
+            add_to_path(&mut path, &mut visited, (N - 2, i - 1));
+            cur_pos = (N - 2, i - 1);
+        }
+    }
 
     path
 }
