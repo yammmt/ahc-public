@@ -1,199 +1,148 @@
-use proconio::fastout;
+// 二列分解で往路小さい値, 復路大きい値, を Gemini に依頼
+// 参考:
+// https://zenn.dev/yoto1980yen/articles/f4867e91ead7f1
+// https://x.com/takytank/status/2032759903467786507?s=20
+// https://x.com/hossie/status/2035564922340573188?s=20
+// https://x.com/kadonox/status/2032792699032789366?s=20
+// https://x.com/rotti_coder/status/2032779088541397485?s=20
+
 use proconio::input;
-use rand::rngs::SmallRng;
-use rand::seq::IndexedRandom;
-use rand::{Rng, SeedableRng};
-use std::time::{Duration, Instant};
 
-const N: usize = 200;
-const NN: usize = N * N;
-const DIRS: [(isize, isize); 9] = [
-    (-1, -1),
-    (-1, 0),
-    (-1, 1),
-    (0, -1),
-    (0, 0),
-    (0, 1),
-    (1, -1),
-    (1, 0),
-    (1, 1),
-];
-
-const TIME_LIMIT_MS: u64 = 2950;
-
-struct ScoreManager {
-    sum_v: Vec<isize>,
-    sum_iv: Vec<isize>,
-}
-
-impl ScoreManager {
-    fn new(path: &[(usize, usize)], ann: &Vec<Vec<usize>>) -> Self {
-        let mut sm = Self {
-            sum_v: vec![0; NN + 1],
-            sum_iv: vec![0; NN + 1],
-        };
-        sm.update_all(path, ann);
-        sm
-    }
-
-    fn update_all(&mut self, path: &[(usize, usize)], ann: &Vec<Vec<usize>>) {
-        let mut cur_v = 0;
-        let mut cur_iv = 0;
-        for i in 0..NN {
-            let val = ann[path[i].0][path[i].1] as isize;
-            cur_v += val;
-            cur_iv += i as isize * val;
-            self.sum_v[i + 1] = cur_v;
-            self.sum_iv[i + 1] = cur_iv;
-        }
-    }
-
-    fn diff_reverse(&self, i: usize, j: usize) -> isize {
-        let s1 = self.sum_v[j + 1] - self.sum_v[i];
-        let s2 = self.sum_iv[j + 1] - self.sum_iv[i];
-        (i + j) as isize * s1 - 2 * s2
-    }
-
-    fn diff_shift(&self, i: usize, j: usize, k: usize) -> isize {
-        let s_val = self.sum_v[j + 1] - self.sum_v[i];
-        let move_dist = if k < i {
-            (k + 1) as isize - i as isize
-        } else {
-            k as isize - j as isize
-        };
-        let mut diff = s_val * move_dist;
-
-        if k < i {
-            let other_v = self.sum_v[i] - self.sum_v[k + 1];
-            diff += (j - i + 1) as isize * other_v;
-        } else {
-            let other_v = self.sum_v[k + 1] - self.sum_v[j + 1];
-            diff -= (j - i + 1) as isize * other_v;
-        }
-        diff
-    }
-}
-
-#[inline]
-fn is_adj(p1: (usize, usize), p2: (usize, usize)) -> bool {
-    (p1.0 as isize - p2.0 as isize)
-        .abs()
-        .max((p1.1 as isize - p2.1 as isize).abs())
-        <= 1
-}
-
-#[fastout]
 fn main() {
-    let start_time = Instant::now();
-    let mut rng = SmallRng::seed_from_u64(0);
-    input! { _n: usize, ann: [[usize; N]; N] }
-
-    let mut cur_path = [(0, 0); NN];
-    let mut path_order = [[0; N]; N];
-    for i in 0..N {
-        for j in 0..N {
-            let jj = if i % 2 == 0 { j } else { N - j - 1 };
-            let idx = i * N + j;
-            cur_path[idx] = (i, jj);
-            path_order[i][jj] = idx;
-        }
+    input! {
+        n: usize,
+        a: [[u32; n]; n],
     }
 
-    let mut sm = ScoreManager::new(&cur_path, &ann);
-    let mut cur_score = sm.sum_iv[NN] as usize;
-    let mut ans_path = cur_path.clone();
-    let mut ans_score = cur_score;
+    let path = solve(n, &a);
 
-    while start_time.elapsed() < Duration::from_millis(TIME_LIMIT_MS) {
-        let progress = start_time.elapsed().as_millis() as f64 / TIME_LIMIT_MS as f64;
-        let temp = 100.0 * (1.0 - progress);
-
-        if rng.random_bool(0.20) {
-            // --- Reverse 遷移 ---
-            let i = rng.gen_range(1..NN);
-            let d = DIRS.choose(&mut rng).unwrap();
-            let p_prev = cur_path[i - 1];
-            let target = (
-                p_prev.0.wrapping_add_signed(d.0),
-                p_prev.1.wrapping_add_signed(d.1),
-            );
-            if target.0 >= N || target.1 >= N {
-                continue;
-            }
-            let j = path_order[target.0][target.1];
-
-            // 2-opt の対称性を厳密に処理
-            let (start, end) = if i < j {
-                (i, j)
-            } else if j + 1 < i {
-                (j + 1, i - 1)
-            } else {
-                continue;
-            };
-
-            if start < end && (end + 1 == NN || is_adj(cur_path[start], cur_path[end + 1])) {
-                let diff = sm.diff_reverse(start, end);
-                if diff > 0 || (temp > 0.0 && rng.random_bool((diff as f64 / temp).exp().min(1.0)))
-                {
-                    cur_path[start..=end].reverse();
-                    for idx in start..=end {
-                        let (r, c) = cur_path[idx];
-                        path_order[r][c] = idx;
-                    }
-                    sm.update_all(&cur_path, &ann);
-                    cur_score = (cur_score as isize + diff) as usize;
-                }
-            }
-        } else {
-            // --- Shift 遷移 ---
-            let i = rng.gen_range(1..NN - 1);
-            let j = (i + rng.gen_range(0..15)).min(NN - 2);
-
-            // i に隣接する k を探すことで、有効な Shift を高確率で引き当てる
-            let d = DIRS.choose(&mut rng).unwrap();
-            let p_i = cur_path[i];
-            let target = (
-                p_i.0.wrapping_add_signed(d.0),
-                p_i.1.wrapping_add_signed(d.1),
-            );
-            if target.0 >= N || target.1 >= N {
-                continue;
-            }
-            let k = path_order[target.0][target.1];
-
-            if k < i - 1 || k > j {
-                if is_adj(cur_path[i - 1], cur_path[j + 1]) {
-                    // is_adj(cur_path[k], cur_path[i]) は上記 target の取得により保証されている
-                    if k + 1 == NN || is_adj(cur_path[j], cur_path[k + 1]) {
-                        let diff = sm.diff_shift(i, j, k);
-                        if diff > 0
-                            || (temp > 0.0 && rng.random_bool((diff as f64 / temp).exp().min(1.0)))
-                        {
-                            let (range_l, range_r) = if k < i { (k + 1, j) } else { (i, k) };
-                            if k < i {
-                                cur_path[k + 1..=j].rotate_right(j - i + 1);
-                            } else {
-                                cur_path[i..=k].rotate_left(j - i + 1);
-                            }
-                            for idx in range_l..=range_r {
-                                let (r, c) = cur_path[idx];
-                                path_order[r][c] = idx;
-                            }
-                            sm.update_all(&cur_path, &ann);
-                            cur_score = (cur_score as isize + diff) as usize;
-                        }
-                    }
-                }
-            }
-        }
-
-        if cur_score > ans_score {
-            ans_score = cur_score;
-            ans_path = cur_path.clone();
-        }
-    }
-
-    for (r, c) in ans_path {
+    // 出力
+    for &(r, c) in &path {
         println!("{} {}", r, c);
     }
+}
+
+fn solve(n: usize, a: &[Vec<u32>]) -> Vec<(usize, usize)> {
+    let mut path = Vec::with_capacity(n * n);
+    let mut visited = vec![vec![false; n]; n];
+
+    // 解決策1: パス追加と訪問済みの記録を「未訪問の場合のみ」行うクロージャ
+    let mut add_to_path = |r: usize, c: usize| {
+        if !visited[r][c] {
+            path.push((r, c));
+            visited[r][c] = true;
+        }
+    };
+
+    // 【往路】 (Outward Journey) : 左のグループから右のグループへ、小さい数を拾いながら進む
+    for g in 0..n / 2 {
+        let c0 = 2 * g;
+        let c1 = 2 * g + 1;
+
+        if g % 2 == 0 {
+            // 偶数グループ: 下方向へ進む
+            if g == 0 {
+                add_to_path(0, 0); // 初期位置
+                for r in 1..=n - 4 {
+                    if a[r][c0] < a[r][c1] {
+                        add_to_path(r, c0);
+                    } else {
+                        add_to_path(r, c1);
+                    }
+                }
+            } else {
+                add_to_path(2, c0); // 遷移後の開始位置
+                for r in 3..=n - 4 {
+                    if a[r][c0] < a[r][c1] {
+                        add_to_path(r, c0);
+                    } else {
+                        add_to_path(r, c1);
+                    }
+                }
+            }
+
+            // 次のグループへ安全に斜め移動するため、N-3行目は強制的に内側(c0)を踏む
+            add_to_path(n - 3, c0);
+
+            // 下端折り返し (右方向へ)
+            add_to_path(n - 2, c0);
+            add_to_path(n - 1, c0);
+            add_to_path(n - 1, c1);
+            add_to_path(n - 2, c1);
+        } else {
+            // 奇数グループ: 上方向へ進む
+            add_to_path(n - 3, c0); // 遷移後の開始位置
+
+            for r in (3..=n - 4).rev() {
+                if a[r][c0] < a[r][c1] {
+                    add_to_path(r, c0);
+                } else {
+                    add_to_path(r, c1);
+                }
+            }
+
+            // 次のグループへ安全に斜め移動するため、2行目は強制的に内側(c0)を踏む
+            add_to_path(2, c0);
+
+            // 上端折り返し (右方向へ)
+            add_to_path(1, c0);
+            add_to_path(0, c0);
+            add_to_path(0, c1);
+            add_to_path(1, c1);
+        }
+    }
+
+    // 【復路】 (Return Journey) : 右のグループから左のグループへ、未訪問のマスを回収しながら戻る
+    for g in (0..n / 2).rev() {
+        let c0 = 2 * g;
+        let c1 = 2 * g + 1;
+
+        if g % 2 != 0 {
+            // 奇数グループ: 復路は下方向へ進む
+            add_to_path(2, c1);
+            for r in 3..=n - 4 {
+                // 片方が往路で訪問済みなので、両方呼べば未訪問の方が追加される
+                add_to_path(r, c0);
+                add_to_path(r, c1);
+            }
+            add_to_path(n - 3, c1);
+
+            // 下端折り返し
+            add_to_path(n - 2, c1);
+            add_to_path(n - 1, c1);
+            add_to_path(n - 1, c0);
+            add_to_path(n - 2, c0);
+        } else {
+            // 偶数グループ: 復路は上方向へ進む
+            if g == 0 {
+                add_to_path(n - 3, c1);
+                for r in (2..=n - 4).rev() {
+                    add_to_path(r, c0);
+                    add_to_path(r, c1);
+                }
+                // ゴール地点（残った0行目・1行目の回収）
+                add_to_path(1, c0);
+                add_to_path(1, c1);
+                add_to_path(0, c1);
+            } else {
+                add_to_path(n - 3, c1);
+                for r in (3..=n - 4).rev() {
+                    add_to_path(r, c0);
+                    add_to_path(r, c1);
+                }
+                add_to_path(2, c1);
+
+                // 上端折り返し
+                add_to_path(1, c1);
+                add_to_path(0, c1);
+                add_to_path(0, c0);
+                add_to_path(1, c0);
+            }
+        }
+    }
+
+    // 全てのマスを訪問したかをアサート
+    assert_eq!(path.len(), n * n, "Visited cell count mismatch!");
+
+    path
 }
