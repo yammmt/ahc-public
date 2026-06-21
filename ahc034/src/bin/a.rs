@@ -270,46 +270,48 @@ fn main() {
     };
 
     while board.operations.len() < TURN_MAX && board.cleared < N * N {
-        let nearest_positive_pos = board.nearest_positive_pos(board.pos);
-        let nearest_negative_pos = board.nearest_negative_pos(board.pos);
-
-        // 無限ループ防止: 正負どちらかの島が枯渇した場合は終了
-        if board.hnn[nearest_positive_pos.0][nearest_positive_pos.1] <= 0
-            || board.hnn[nearest_negative_pos.0][nearest_negative_pos.1] >= 0
-        {
-            break;
+        // 1. 最寄りの正の島を探し、入口へ移動
+        let pos_start = board.nearest_positive_pos(board.pos);
+        if board.hnn[pos_start.0][pos_start.1] <= 0 {
+            break; // 正のマスが枯渇
         }
+        board.move_to(pos_start);
 
-        let island_sum_nega = board.island_sum(nearest_negative_pos);
-
-        // 島の入口まで移動する
-        board.move_to(nearest_positive_pos);
-
-        // その島で負総和分を超えない限りに拾えるだけ拾う
-        let path = board.pop_island_paths(board.pos, island_sum_nega.abs() as usize);
-        for p in path {
+        // 2. 正の島を巡回し、限界（今回はusize::MAX）まで積む
+        let load_path = board.pop_island_paths(board.pos, usize::MAX);
+        for p in load_path {
+            if board.operations.len() >= TURN_MAX {
+                break;
+            }
             board.move_to(p);
             let h = board.hnn[board.pos.0][board.pos.1];
             if h > 0 {
-                // 積み込む
                 board.work(Operation::Pop(h as usize));
             }
         }
 
-        // 負島に運ぶ
-        board.move_to(nearest_negative_pos);
+        if board.load == 0 {
+            break; // 積み込み失敗時の無限ループ防止
+        }
 
-        // 負島に落とせるだけ落とす
+        // 3. 最寄りの負の島を探し、入口へ移動
+        let neg_start = board.nearest_negative_pos(board.pos);
+        if board.hnn[neg_start.0][neg_start.1] >= 0 {
+            break; // 負のマスが枯渇
+        }
+        board.move_to(neg_start);
+
+        // 4. 負の島を巡回し、持っている積載量分だけ下ろす
         let dump_path = board.pop_island_paths(board.pos, board.load);
         for p in dump_path {
+            if board.operations.len() >= TURN_MAX || board.load == 0 {
+                break;
+            }
             board.move_to(p);
             let h = board.hnn[board.pos.0][board.pos.1];
-            if h < 0 && board.load > 0 {
-                let dump_amount = (h.abs() as usize).min(board.load);
-                board.work(Operation::Push(dump_amount));
-            }
-            if board.load == 0 {
-                break;
+            if h < 0 {
+                let dump = (h.abs() as usize).min(board.load);
+                board.work(Operation::Push(dump));
             }
         }
     }
