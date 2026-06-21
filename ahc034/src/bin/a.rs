@@ -84,7 +84,8 @@ impl Board {
         }
     }
 
-    fn nearest_negative_pos(&self, (bi, bj): (usize, usize)) -> (usize, usize) {
+    // 現在地から最も近い「正のマス」を探す（島が分断されてもBFSで確実に見つける）
+    fn nearest_positive_pos(&self, (bi, bj): (usize, usize)) -> Option<(usize, usize)> {
         let mut vdq = VecDeque::new();
         let mut visited = vec![vec![false; N]; N];
         vdq.push_back((bi, bj));
@@ -92,40 +93,10 @@ impl Board {
             if visited[ci][cj] {
                 continue;
             }
-
-            visited[ci][cj] = true;
-
-            if self.hnn[ci][cj] < 0 {
-                return (ci, cj);
-            }
-
-            for &d in &Self::DIR {
-                let ni = ci.wrapping_add_signed(d.0);
-                let nj = cj.wrapping_add_signed(d.1);
-                if ni >= N || nj >= N || visited[ni][nj] {
-                    continue;
-                }
-
-                vdq.push_back((ni, nj));
-            }
-        }
-
-        (0, 0)
-    }
-
-    fn nearest_positive_pos(&self, (bi, bj): (usize, usize)) -> (usize, usize) {
-        let mut vdq = VecDeque::new();
-        let mut visited = vec![vec![false; N]; N];
-        vdq.push_back((bi, bj));
-        while let Some((ci, cj)) = vdq.pop_front() {
-            if visited[ci][cj] {
-                continue;
-            }
-
             visited[ci][cj] = true;
 
             if self.hnn[ci][cj] > 0 {
-                return (ci, cj);
+                return Some((ci, cj));
             }
 
             for &d in &Self::DIR {
@@ -134,43 +105,37 @@ impl Board {
                 if ni >= N || nj >= N || visited[ni][nj] {
                     continue;
                 }
-
                 vdq.push_back((ni, nj));
             }
         }
-
-        (0, 0)
+        None
     }
 
-    fn island_sum(&self, (bi, bj): (usize, usize)) -> isize {
+    // 現在地から最も近い「負のマス」を探す
+    fn nearest_negative_pos(&self, (bi, bj): (usize, usize)) -> Option<(usize, usize)> {
         let mut vdq = VecDeque::new();
         let mut visited = vec![vec![false; N]; N];
-        let mut ret = 0;
         vdq.push_back((bi, bj));
         while let Some((ci, cj)) = vdq.pop_front() {
             if visited[ci][cj] {
                 continue;
             }
-
             visited[ci][cj] = true;
-            ret += self.hnn[ci][cj];
+
+            if self.hnn[ci][cj] < 0 {
+                return Some((ci, cj));
+            }
 
             for &d in &Self::DIR {
                 let ni = ci.wrapping_add_signed(d.0);
                 let nj = cj.wrapping_add_signed(d.1);
-                if ni >= N
-                    || nj >= N
-                    || visited[ni][nj]
-                    || !((self.hnn[ci][cj].is_positive() && self.hnn[ni][nj].is_positive())
-                        || (self.hnn[ci][cj].is_negative() && self.hnn[ni][nj].is_negative()))
-                {
+                if ni >= N || nj >= N || visited[ni][nj] {
                     continue;
                 }
-
                 vdq.push_back((ni, nj));
             }
         }
-        ret
+        None
     }
 
     fn move_to(&mut self, (ei, ej): (usize, usize)) {
@@ -196,51 +161,6 @@ impl Board {
                 self.work(Operation::Left);
             }
         }
-    }
-
-    fn pop_island_paths(&self, (bi, bj): (usize, usize), load_max: usize) -> Vec<(usize, usize)> {
-        let mut ret = vec![];
-        let mut load_cur = 0;
-        let mut stack = VecDeque::new();
-        let mut visited = vec![vec![false; N]; N];
-
-        stack.push_back(((bi, bj), false));
-        while let Some(((ci, cj), finished)) = stack.pop_back() {
-            if finished {
-                ret.push((ci, cj));
-                continue;
-            }
-
-            if visited[ci][cj] {
-                continue;
-            }
-
-            visited[ci][cj] = true;
-            ret.push((ci, cj));
-            load_cur += self.hnn[ci][cj].abs();
-            if load_cur >= load_max as isize {
-                return ret;
-            }
-
-            stack.push_back(((ci, cj), true));
-
-            for &d in &Self::DIR {
-                let ni = ci.wrapping_add_signed(d.0);
-                let nj = cj.wrapping_add_signed(d.1);
-                if ni >= N
-                    || nj >= N
-                    || visited[ni][nj]
-                    || !((self.hnn[ci][cj].is_positive() && self.hnn[ni][nj].is_positive())
-                        || (self.hnn[ci][cj].is_negative() && self.hnn[ni][nj].is_negative()))
-                {
-                    continue;
-                }
-
-                stack.push_back(((ni, nj), false));
-            }
-        }
-
-        ret
     }
 }
 
@@ -270,49 +190,42 @@ fn main() {
     };
 
     while board.operations.len() < TURN_MAX && board.cleared < N * N {
-        // 1. 最寄りの正の島を探し、入口へ移動
-        let pos_start = board.nearest_positive_pos(board.pos);
-        if board.hnn[pos_start.0][pos_start.1] <= 0 {
-            break; // 正のマスが枯渇
-        }
-        board.move_to(pos_start);
-
-        // 2. 正の島を巡回し、限界（今回はusize::MAX）まで積む
-        let load_path = board.pop_island_paths(board.pos, usize::MAX);
-        for p in load_path {
-            if board.operations.len() >= TURN_MAX {
-                break;
+        // 1. 最寄りの正のマスを見つけて、そこへ移動して吸えるだけ吸う（これを積載が十分になるか正のマスがなくなるまで繰り返す）
+        let mut collected = false;
+        while board.operations.len() < TURN_MAX {
+            if let Some(target_pos) = board.nearest_positive_pos(board.pos) {
+                board.move_to(target_pos);
+                let h = board.hnn[board.pos.0][board.pos.1];
+                if h > 0 {
+                    board.work(Operation::Pop(h as usize));
+                    collected = true;
+                }
+                // 一定以上積み込んだら一旦下ろしに行く（抱えすぎによる移動コスト増大の防止）
+                if board.load > 50 {
+                    break;
+                }
+            } else {
+                break; // 正のマスが完全になくなった
             }
-            board.move_to(p);
-            let h = board.hnn[board.pos.0][board.pos.1];
-            if h > 0 {
-                board.work(Operation::Pop(h as usize));
-            }
-        }
-
-        if board.load == 0 {
-            break; // 積み込み失敗時の無限ループ防止
         }
 
-        // 3. 最寄りの負の島を探し、入口へ移動
-        let neg_start = board.nearest_negative_pos(board.pos);
-        if board.hnn[neg_start.0][neg_start.1] >= 0 {
-            break; // 負のマスが枯渇
-        }
-        board.move_to(neg_start);
-
-        // 4. 負の島を巡回し、持っている積載量分だけ下ろす
-        let dump_path = board.pop_island_paths(board.pos, board.load);
-        for p in dump_path {
-            if board.operations.len() >= TURN_MAX || board.load == 0 {
-                break;
+        // 2. 抱えた荷物があるなら、最寄りの負のマスへ届ける
+        if board.load > 0 {
+            while board.operations.len() < TURN_MAX && board.load > 0 {
+                if let Some(target_pos) = board.nearest_negative_pos(board.pos) {
+                    board.move_to(target_pos);
+                    let h = board.hnn[board.pos.0][board.pos.1];
+                    if h < 0 {
+                        let dump = (h.abs() as usize).min(board.load);
+                        board.work(Operation::Push(dump));
+                    }
+                } else {
+                    break; // 負のマスが完全になくなった
+                }
             }
-            board.move_to(p);
-            let h = board.hnn[board.pos.0][board.pos.1];
-            if h < 0 {
-                let dump = (h.abs() as usize).min(board.load);
-                board.work(Operation::Push(dump));
-            }
+        } else if !collected {
+            // 正のマスも負のマスも変化させられなかった場合は無限ループ回避のため終了
+            break;
         }
     }
 
