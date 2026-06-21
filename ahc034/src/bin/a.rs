@@ -201,7 +201,7 @@ fn main() {
                     collected = true;
                 }
                 // 一定以上積み込んだら一旦下ろしに行く（抱えすぎによる移動コスト増大の防止）
-                if board.load > 50 {
+                if board.load > 150 {
                     break;
                 }
             } else {
