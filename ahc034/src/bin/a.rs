@@ -1,3 +1,5 @@
+// AI 課金実装コンテスト...
+
 use proconio::fastout;
 use proconio::input;
 
@@ -115,34 +117,37 @@ fn main() {
 
     // 解説放送のルールベースを手実装
 
-    // 左から右に進む -> 右到達したら下, を繰り返す
-    // 列で必要な積み込み量を先に記憶しておき, 左端マスで前借りする
-    // 左端到達時に積荷をすべて下ろす
+    // 左右往復
+    // 列で必要な積み込み量を先に記憶しておき, 分割位置マスで前借りする
+    // 分割位置到達時に積荷をすべて下ろす
     // 最後に左下 -> 左上で辻褄をあわせる
 
-    // 0-origin の偶数番目の左端到着時に行って帰ってくる際の回収量を算出する
-    // 回収量が負ならその分を前借りして掘る
-    // 着数番目到着時には下ろす
+    let storage_j = N / 2;
 
+    // 始点まで動く
+    for _ in 0..storage_j {
+        board.work(Operation::Right);
+    }
+
+    // 左半分
     for i in 0..N / 2 {
-        // 左端から一往復する際の積載量計算
+        // 往復の積載量計算
         let mut h_total = 0;
         let mut h_total_min = 0;
-        for j in 1..N {
+        for j in (0..storage_j).rev() {
             h_total += board.hnn[2 * i][j];
             h_total_min = h_total_min.min(h_total);
         }
-        for j in (0..N).rev() {
+        for j in 0..storage_j {
             h_total += board.hnn[2 * i + 1][j];
             h_total_min = h_total_min.min(h_total);
         }
-        h_total = h_total_min;
 
-        // 左 -> 右
-        for j in 0..N {
-            if j == 0 {
-                if h_total < 0 {
-                    board.work(Operation::Pop(h_total.unsigned_abs()));
+        // 右 -> 左
+        for j in (0..storage_j + 1).rev() {
+            if j == storage_j {
+                if h_total_min < 0 {
+                    board.work(Operation::Pop(h_total_min.unsigned_abs()));
                 }
             } else if board.hnn[2 * i][j] > 0 {
                 board.work(Operation::Pop(board.hnn[2 * i][j].unsigned_abs()));
@@ -150,19 +155,22 @@ fn main() {
                 board.work(Operation::Push(board.hnn[2 * i][j].unsigned_abs()));
             }
 
-            if j == N - 1 {
-                // 右端一マス降りる
+            if j == 0 {
+                // 左端一マス降りる
                 board.work(Operation::Down);
             } else {
-                board.work(Operation::Right);
+                board.work(Operation::Left);
             }
         }
 
-        // 右 -> 左
-        for j in (0..N).rev() {
-            if j == 0 {
+        // 左 -> 右
+        for j in 0..(storage_j + 1) {
+            if j == storage_j {
                 if board.load > 0 {
                     board.work(Operation::Push(board.load));
+                }
+                if i == N / 2 - 1 {
+                    break;
                 }
             } else if board.hnn[2 * i + 1][j] > 0 {
                 board.work(Operation::Pop(board.hnn[2 * i + 1][j].unsigned_abs()));
@@ -170,37 +178,95 @@ fn main() {
                 board.work(Operation::Push(board.hnn[2 * i + 1][j].unsigned_abs()));
             }
 
-            if j == 0 && i != N / 2 - 1 {
+            if j == storage_j && i != N / 2 - 1 {
                 board.work(Operation::Down);
-            } else if j != 0 {
+            } else {
+                board.work(Operation::Right);
+            }
+        }
+    }
+
+    // 右半分
+    for i in (0..N / 2).rev() {
+        // 往復の積載量計算
+        let mut h_total = 0;
+        let mut h_total_min = 0;
+        for j in 1..storage_j {
+            h_total += board.hnn[2 * i + 1][storage_j + j];
+            h_total_min = h_total_min.min(h_total);
+        }
+        for j in (1..storage_j).rev() {
+            h_total += board.hnn[2 * i][storage_j + j];
+            h_total_min = h_total_min.min(h_total);
+        }
+
+        // 左 -> 右
+        for j in 0..storage_j {
+            let j_real = storage_j + j;
+            if j == 0 {
+                if h_total_min < 0 {
+                    board.work(Operation::Pop(h_total_min.unsigned_abs()));
+                }
+            } else if board.hnn[2 * i + 1][j_real] > 0 {
+                board.work(Operation::Pop(board.hnn[2 * i + 1][j_real].unsigned_abs()));
+            } else if board.hnn[2 * i + 1][j_real] < 0 {
+                board.work(Operation::Push(board.hnn[2 * i + 1][j_real].unsigned_abs()));
+            }
+
+            if j_real == N - 1 {
+                board.work(Operation::Up);
+            } else {
+                board.work(Operation::Right);
+            }
+        }
+
+        // 右 -> 左
+        for j in (0..storage_j).rev() {
+            let j_real = storage_j + j;
+            if j == 0 {
+                if board.load > 0 {
+                    board.work(Operation::Push(board.load));
+                }
+                if i == 0 {
+                    break;
+                }
+            } else if board.hnn[2 * i][j_real] > 0 {
+                board.work(Operation::Pop(board.hnn[2 * i][j_real].unsigned_abs()));
+            } else if board.hnn[2 * i][j_real] < 0 {
+                board.work(Operation::Push(board.hnn[2 * i][j_real].unsigned_abs()));
+            }
+
+            if j == 0 {
+                board.work(Operation::Up);
+            } else {
                 board.work(Operation::Left);
             }
         }
     }
 
-    // 最後には上に向かって辻褄
-    for i in (0..N).rev() {
-        if board.hnn[i][0] > 0 {
-            board.work(Operation::Pop(board.hnn[i][0] as usize));
-        } else if board.hnn[i][0] < 0 && board.load > 0 {
+    // 上 -> 下
+    for i in 0..N {
+        if board.hnn[i][storage_j] > 0 {
+            board.work(Operation::Pop(board.hnn[i][storage_j] as usize));
+        } else if board.hnn[i][storage_j] < 0 && board.load > 0 {
             board.work(Operation::Push(
-                board.hnn[i][0].unsigned_abs().min(board.load),
+                board.hnn[i][storage_j].unsigned_abs().min(board.load),
             ));
         }
 
-        if i != 0 {
-            board.work(Operation::Up);
+        if i != N - 1 {
+            board.work(Operation::Down)
         }
     }
 
-    // 下に向かって終わり
-    for i in 0..N {
-        if board.hnn[i][0] < 0 {
-            board.work(Operation::Push(board.hnn[i][0].unsigned_abs()));
+    // 下 -> 上
+    for i in (0..N).rev() {
+        if board.hnn[i][storage_j] < 0 {
+            board.work(Operation::Push(board.hnn[i][storage_j].unsigned_abs()));
         }
 
         if board.cleared < N * N {
-            board.work(Operation::Down);
+            board.work(Operation::Up);
         }
     }
 
