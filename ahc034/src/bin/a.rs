@@ -126,16 +126,17 @@ fn main() {
 
     for i in 0..N / 2 {
         // 左端から一往復する際の積載量計算
-        // TODO: 面倒くさいので, 一旦負マス分だけ全部詰め込む = 最後に特大の正マスができる
         let mut h_total = 0;
-        for j in 0..N {
-            if j != 0 && board.hnn[2 * i][j] < 0 {
-                h_total += board.hnn[2 * i][j];
-            }
-            if board.hnn[2 * i + 1][j] < 0 {
-                h_total += board.hnn[2 * i + 1][j];
-            }
+        let mut h_total_min = 0;
+        for j in 1..N {
+            h_total += board.hnn[2 * i][j];
+            h_total_min = h_total_min.min(h_total);
         }
+        for j in (0..N).rev() {
+            h_total += board.hnn[2 * i + 1][j];
+            h_total_min = h_total_min.min(h_total);
+        }
+        h_total = h_total_min;
 
         // 左 -> 右
         for j in 0..N {
