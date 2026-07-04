@@ -1,13 +1,15 @@
 use proconio::fastout;
 use proconio::input;
-use std::collections::VecDeque;
 
+#[allow(unused)]
 const TURN_MAX: usize = 100_000;
 const N: usize = 20;
 
 #[derive(Debug, Clone, Copy)]
 enum Operation {
+    /// ダンプカーに積み込む, 現在位置に対しての pop
     Pop(usize),
+    /// ダンプカーから下ろす, 現在位置に対しての push
     Push(usize),
     Up,
     Down,
@@ -38,6 +40,7 @@ struct Board {
 }
 
 impl Board {
+    #[allow(unused)]
     const DIR: [(isize, isize); 4] = [(-1, 0), (1, 0), (0, -1), (0, 1)];
 
     fn work(&mut self, op: Operation) {
@@ -52,7 +55,7 @@ impl Board {
                 }
                 self.hnn[i][j] -= x as isize;
                 self.load += x;
-                self.cost += x as usize;
+                self.cost += x;
             }
             Operation::Push(x) => {
                 let (i, j) = self.pos;
@@ -63,7 +66,7 @@ impl Board {
                 }
                 self.hnn[i][j] += x as isize;
                 self.load -= x;
-                self.cost += x as usize;
+                self.cost += x;
             }
             Operation::Up => {
                 self.pos.0 -= 1;
@@ -80,85 +83,6 @@ impl Board {
             Operation::Right => {
                 self.pos.1 += 1;
                 self.cost += 100 + self.load;
-            }
-        }
-    }
-
-    // 現在地から最も近い「正のマス」を探す（島が分断されてもBFSで確実に見つける）
-    fn nearest_positive_pos(&self, (bi, bj): (usize, usize)) -> Option<(usize, usize)> {
-        let mut vdq = VecDeque::new();
-        let mut visited = vec![vec![false; N]; N];
-        vdq.push_back((bi, bj));
-        while let Some((ci, cj)) = vdq.pop_front() {
-            if visited[ci][cj] {
-                continue;
-            }
-            visited[ci][cj] = true;
-
-            if self.hnn[ci][cj] > 0 {
-                return Some((ci, cj));
-            }
-
-            for &d in &Self::DIR {
-                let ni = ci.wrapping_add_signed(d.0);
-                let nj = cj.wrapping_add_signed(d.1);
-                if ni >= N || nj >= N || visited[ni][nj] {
-                    continue;
-                }
-                vdq.push_back((ni, nj));
-            }
-        }
-        None
-    }
-
-    // 現在地から最も近い「負のマス」を探す
-    fn nearest_negative_pos(&self, (bi, bj): (usize, usize)) -> Option<(usize, usize)> {
-        let mut vdq = VecDeque::new();
-        let mut visited = vec![vec![false; N]; N];
-        vdq.push_back((bi, bj));
-        while let Some((ci, cj)) = vdq.pop_front() {
-            if visited[ci][cj] {
-                continue;
-            }
-            visited[ci][cj] = true;
-
-            if self.hnn[ci][cj] < 0 {
-                return Some((ci, cj));
-            }
-
-            for &d in &Self::DIR {
-                let ni = ci.wrapping_add_signed(d.0);
-                let nj = cj.wrapping_add_signed(d.1);
-                if ni >= N || nj >= N || visited[ni][nj] {
-                    continue;
-                }
-                vdq.push_back((ni, nj));
-            }
-        }
-        None
-    }
-
-    fn move_to(&mut self, (ei, ej): (usize, usize)) {
-        let (diff_i, diff_j) = (
-            ei as isize - self.pos.0 as isize,
-            ej as isize - self.pos.1 as isize,
-        );
-        if diff_i > 0 {
-            for _ in 0..diff_i {
-                self.work(Operation::Down);
-            }
-        } else if diff_i < 0 {
-            for _ in 0..diff_i.abs() {
-                self.work(Operation::Up);
-            }
-        }
-        if diff_j > 0 {
-            for _ in 0..diff_j {
-                self.work(Operation::Right);
-            }
-        } else if diff_j < 0 {
-            for _ in 0..diff_j.abs() {
-                self.work(Operation::Left);
             }
         }
     }
@@ -189,43 +113,93 @@ fn main() {
         operations: vec![],
     };
 
-    while board.operations.len() < TURN_MAX && board.cleared < N * N {
-        // 1. 最寄りの正のマスを見つけて、そこへ移動して吸えるだけ吸う（これを積載が十分になるか正のマスがなくなるまで繰り返す）
-        let mut collected = false;
-        while board.operations.len() < TURN_MAX {
-            if let Some(target_pos) = board.nearest_positive_pos(board.pos) {
-                board.move_to(target_pos);
-                let h = board.hnn[board.pos.0][board.pos.1];
-                if h > 0 {
-                    board.work(Operation::Pop(h as usize));
-                    collected = true;
-                }
-                // 一定以上積み込んだら一旦下ろしに行く（抱えすぎによる移動コスト増大の防止）
-                if board.load > 150 {
-                    break;
-                }
-            } else {
-                break; // 正のマスが完全になくなった
+    // 解説放送のルールベースを手実装
+
+    // 左から右に進む -> 右到達したら下, を繰り返す
+    // 列で必要な積み込み量を先に記憶しておき, 左端マスで前借りする
+    // 左端到達時に積荷をすべて下ろす
+    // 最後に左下 -> 左上で辻褄をあわせる
+
+    // 0-origin の偶数番目の左端到着時に行って帰ってくる際の回収量を算出する
+    // 回収量が負ならその分を前借りして掘る
+    // 着数番目到着時には下ろす
+
+    for i in 0..N / 2 {
+        // 左端から一往復する際の積載量計算
+        // TODO: 面倒くさいので, 一旦負マス分だけ全部詰め込む = 最後に特大の正マスができる
+        let mut h_total = 0;
+        for j in 0..N {
+            if j != 0 && board.hnn[2 * i][j] < 0 {
+                h_total += board.hnn[2 * i][j];
+            }
+            if board.hnn[2 * i + 1][j] < 0 {
+                h_total += board.hnn[2 * i + 1][j];
             }
         }
 
-        // 2. 抱えた荷物があるなら、最寄りの負のマスへ届ける
-        if board.load > 0 {
-            while board.operations.len() < TURN_MAX && board.load > 0 {
-                if let Some(target_pos) = board.nearest_negative_pos(board.pos) {
-                    board.move_to(target_pos);
-                    let h = board.hnn[board.pos.0][board.pos.1];
-                    if h < 0 {
-                        let dump = (h.abs() as usize).min(board.load);
-                        board.work(Operation::Push(dump));
-                    }
-                } else {
-                    break; // 負のマスが完全になくなった
+        // 左 -> 右
+        for j in 0..N {
+            if j == 0 {
+                if h_total < 0 {
+                    board.work(Operation::Pop(h_total.unsigned_abs()));
                 }
+            } else if board.hnn[2 * i][j] > 0 {
+                board.work(Operation::Pop(board.hnn[2 * i][j].unsigned_abs()));
+            } else if board.hnn[2 * i][j] < 0 {
+                board.work(Operation::Push(board.hnn[2 * i][j].unsigned_abs()));
             }
-        } else if !collected {
-            // 正のマスも負のマスも変化させられなかった場合は無限ループ回避のため終了
-            break;
+
+            if j == N - 1 {
+                // 右端一マス降りる
+                board.work(Operation::Down);
+            } else {
+                board.work(Operation::Right);
+            }
+        }
+
+        // 右 -> 左
+        for j in (0..N).rev() {
+            if j == 0 {
+                if board.load > 0 {
+                    board.work(Operation::Push(board.load));
+                }
+            } else if board.hnn[2 * i + 1][j] > 0 {
+                board.work(Operation::Pop(board.hnn[2 * i + 1][j].unsigned_abs()));
+            } else if board.hnn[2 * i + 1][j] < 0 {
+                board.work(Operation::Push(board.hnn[2 * i + 1][j].unsigned_abs()));
+            }
+
+            if j == 0 && i != N / 2 - 1 {
+                board.work(Operation::Down);
+            } else if j != 0 {
+                board.work(Operation::Left);
+            }
+        }
+    }
+
+    // 最後には上に向かって辻褄
+    for i in (0..N).rev() {
+        if board.hnn[i][0] > 0 {
+            board.work(Operation::Pop(board.hnn[i][0] as usize));
+        } else if board.hnn[i][0] < 0 && board.load > 0 {
+            board.work(Operation::Push(
+                board.hnn[i][0].unsigned_abs().min(board.load),
+            ));
+        }
+
+        if i != 0 {
+            board.work(Operation::Up);
+        }
+    }
+
+    // 下に向かって終わり
+    for i in 0..N {
+        if board.hnn[i][0] < 0 {
+            board.work(Operation::Push(board.hnn[i][0].unsigned_abs()));
+        }
+
+        if board.cleared < N * N {
+            board.work(Operation::Down);
         }
     }
 
