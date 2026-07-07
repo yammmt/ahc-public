@@ -45,6 +45,51 @@ impl Board {
     #[allow(unused)]
     const DIR: [(isize, isize); 4] = [(-1, 0), (1, 0), (0, -1), (0, 1)];
 
+    /// 指定位置に 1 マスだけ移動する.マス間の距離が 1 でなければ assert する.
+    fn move_to(&mut self, (r_nxt, c_nxt): (usize, usize)) {
+        let (r_cur, c_cur) = self.pos;
+        let r_diff = r_nxt as isize - r_cur as isize;
+        let c_diff = c_nxt as isize - c_cur as isize;
+        assert_eq!(r_diff.abs() + c_diff.abs(), 1);
+
+        if r_diff > 0 {
+            self.work(Operation::Down);
+        } else if r_diff < 0 {
+            self.work(Operation::Up);
+        } else if c_diff > 0 {
+            self.work(Operation::Right);
+        } else if c_diff < 0 {
+            self.work(Operation::Left);
+        } else {
+            unreachable!("move_to failed");
+        }
+    }
+
+    /// ダンプカーに積み込む, 現在位置に対しての pop
+    fn manual_pop(&mut self, amount: usize) {
+        self.work(Operation::Pop(amount));
+    }
+
+    /// ダンプカーから下ろす, 現在位置に対しての push
+    fn manual_push(&mut self, amount: usize) {
+        assert!(amount >= self.load);
+
+        self.work(Operation::Push(amount));
+    }
+
+    /// 現在位置を平らにする.
+    /// 現在位置を埋める場合は平らにならない可能性があるが, 平らにならなかった場合にも
+    /// 特に通知を行わない.
+    fn flatten(&mut self) {
+        let (r, c) = self.pos;
+        let v = self.hnn[r][c];
+        if v > 0 {
+            self.work(Operation::Pop(v.unsigned_abs()));
+        } else if v < 0 && self.load > 0 {
+            self.work(Operation::Push(v.unsigned_abs().min(self.load)));
+        }
+    }
+
     fn work(&mut self, op: Operation) {
         self.operations.push(op);
         match op {
@@ -144,45 +189,32 @@ fn main() {
         }
 
         // 右 -> 左
-        for j in (0..storage_j + 1).rev() {
-            if j == storage_j {
-                if h_total_min < 0 {
-                    board.work(Operation::Pop(h_total_min.unsigned_abs()));
-                }
-            } else if board.hnn[2 * i][j] > 0 {
-                board.work(Operation::Pop(board.hnn[2 * i][j].unsigned_abs()));
-            } else if board.hnn[2 * i][j] < 0 {
-                board.work(Operation::Push(board.hnn[2 * i][j].unsigned_abs()));
-            }
-
-            if j == 0 {
-                // 左端一マス降りる
-                board.work(Operation::Down);
-            } else {
-                board.work(Operation::Left);
-            }
+        let mut routes = vec![];
+        for j in (0..storage_j).rev() {
+            routes.push((2 * i, j));
+        }
+        // 降りて左 -> 右
+        for j in 0..=storage_j {
+            routes.push((2 * i + 1, j));
         }
 
-        // 左 -> 右
-        for j in 0..(storage_j + 1) {
-            if j == storage_j {
-                if board.load > 0 {
-                    board.work(Operation::Push(board.load));
+        for (idx, &(r_nxt, c_nxt)) in routes.iter().enumerate() {
+            if idx == 0 {
+                if h_total_min < 0 {
+                    board.manual_pop(h_total_min.unsigned_abs());
                 }
-                if i == N / 2 - 1 {
-                    break;
-                }
-            } else if board.hnn[2 * i + 1][j] > 0 {
-                board.work(Operation::Pop(board.hnn[2 * i + 1][j].unsigned_abs()));
-            } else if board.hnn[2 * i + 1][j] < 0 {
-                board.work(Operation::Push(board.hnn[2 * i + 1][j].unsigned_abs()));
-            }
-
-            if j == storage_j && i != N / 2 - 1 {
-                board.work(Operation::Down);
             } else {
-                board.work(Operation::Right);
+                board.flatten();
             }
+            board.move_to((r_nxt, c_nxt));
+        }
+        if board.load > 0 {
+            board.manual_push(board.load);
+        }
+
+        // 最終行でなければ, 降りる
+        if 2 * i + 2 < N {
+            board.move_to((2 * i + 2, storage_j));
         }
     }
 
@@ -200,74 +232,62 @@ fn main() {
             h_total_min = h_total_min.min(h_total);
         }
 
+        let mut routes = vec![];
         // 左 -> 右
-        for j in 0..storage_j {
-            let j_real = storage_j + j;
-            if j == 0 {
-                if h_total_min < 0 {
-                    board.work(Operation::Pop(h_total_min.unsigned_abs()));
-                }
-            } else if board.hnn[2 * i + 1][j_real] > 0 {
-                board.work(Operation::Pop(board.hnn[2 * i + 1][j_real].unsigned_abs()));
-            } else if board.hnn[2 * i + 1][j_real] < 0 {
-                board.work(Operation::Push(board.hnn[2 * i + 1][j_real].unsigned_abs()));
-            }
-
-            if j_real == N - 1 {
-                board.work(Operation::Up);
-            } else {
-                board.work(Operation::Right);
-            }
+        for j in 1..storage_j {
+            routes.push((2 * i + 1, storage_j + j));
+        }
+        // 上がって右 -> 左
+        for j in (0..storage_j).rev() {
+            routes.push((2 * i, storage_j + j));
         }
 
-        // 右 -> 左
-        for j in (0..storage_j).rev() {
-            let j_real = storage_j + j;
-            if j == 0 {
-                if board.load > 0 {
-                    board.work(Operation::Push(board.load));
+        for (idx, &(r_nxt, c_nxt)) in routes.iter().enumerate() {
+            if idx == 0 {
+                if h_total_min < 0 {
+                    board.manual_pop(h_total_min.unsigned_abs());
                 }
-                if i == 0 {
-                    break;
-                }
-            } else if board.hnn[2 * i][j_real] > 0 {
-                board.work(Operation::Pop(board.hnn[2 * i][j_real].unsigned_abs()));
-            } else if board.hnn[2 * i][j_real] < 0 {
-                board.work(Operation::Push(board.hnn[2 * i][j_real].unsigned_abs()));
-            }
-
-            if j == 0 {
-                board.work(Operation::Up);
             } else {
-                board.work(Operation::Left);
+                board.flatten();
             }
+            board.move_to((r_nxt, c_nxt));
+        }
+        if board.load > 0 {
+            board.manual_push(board.load);
+        }
+
+        // 最終行 (行 0) でなければ, 上がる
+        if i != 0 {
+            board.move_to((2 * i - 1, storage_j));
         }
     }
 
     // 上 -> 下
-    for i in 0..N {
-        if board.hnn[i][storage_j] > 0 {
-            board.work(Operation::Pop(board.hnn[i][storage_j] as usize));
-        } else if board.hnn[i][storage_j] < 0 && board.load > 0 {
-            board.work(Operation::Push(
-                board.hnn[i][storage_j].unsigned_abs().min(board.load),
-            ));
-        }
-
-        if i != N - 1 {
-            board.work(Operation::Down)
-        }
+    let mut routes = vec![];
+    for i in 1..N {
+        routes.push((i, storage_j));
     }
+    for &(r_nxt, c_nxt) in routes.iter() {
+        board.flatten();
+        board.move_to((r_nxt, c_nxt));
+    }
+    board.flatten();
 
     // 下 -> 上
-    for i in (0..N).rev() {
-        if board.hnn[i][storage_j] < 0 {
-            board.work(Operation::Push(board.hnn[i][storage_j].unsigned_abs()));
+    let mut routes = vec![];
+    for i in (0..N - 1).rev() {
+        routes.push((i, storage_j));
+    }
+    for &(r_nxt, c_nxt) in routes.iter() {
+        board.flatten();
+        if board.cleared == N * N {
+            break;
         }
 
-        if board.cleared < N * N {
-            board.work(Operation::Up);
-        }
+        board.move_to((r_nxt, c_nxt));
+    }
+    if board.cleared != N * N {
+        board.flatten();
     }
 
     for a in board.operations {
