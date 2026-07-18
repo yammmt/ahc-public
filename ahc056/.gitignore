@@ -2,6 +2,10 @@
 
 tools/*
 
+# AtCoder page
+
+.codex/skills/problem/site/*
+
 # pahcer
 
 ahc056
