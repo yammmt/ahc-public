@@ -1,0 +1,9 @@
+tools/*
+
+.codex/skills/problem/**
+!.codex/skills/problem/SKILL.md
+
+pahcer/*
+
+ahc035
+tester
