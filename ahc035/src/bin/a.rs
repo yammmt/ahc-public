@@ -39,21 +39,56 @@ fn total_value(seed: &[usize]) -> usize {
     seed.iter().sum()
 }
 
-fn protected_seeds(seeds: &[Vec<usize>]) -> Vec<usize> {
-    let mut protected = Vec::new();
-    for l in 0..seeds[0].len() {
-        let mut best = 0;
-        for candidate in 1..seeds.len() {
-            let candidate_key = (seeds[candidate][l], total_value(&seeds[candidate]));
-            let best_key = (seeds[best][l], total_value(&seeds[best]));
-            if candidate_key > best_key {
-                best = candidate;
-            }
+fn best_seed_for_component(
+    seeds: &[Vec<usize>],
+    component: usize,
+    excluded: Option<usize>,
+) -> usize {
+    let mut best: Option<usize> = None;
+    for candidate in 0..seeds.len() {
+        if Some(candidate) == excluded {
+            continue;
         }
-        if !protected.contains(&best) {
-            protected.push(best);
+        if best.is_none()
+            || (seeds[candidate][component], total_value(&seeds[candidate]))
+                > (
+                    seeds[best.unwrap()][component],
+                    total_value(&seeds[best.unwrap()]),
+                )
+        {
+            best = Some(candidate);
         }
     }
+    best.unwrap()
+}
+
+fn protected_seeds(seeds: &[Vec<usize>], capacity: usize) -> Vec<usize> {
+    let mut protected = Vec::new();
+    let mut backups = Vec::new();
+
+    for component in 0..seeds[0].len() {
+        let first = best_seed_for_component(seeds, component, None);
+        if !protected.contains(&first) {
+            protected.push(first);
+        }
+
+        let second = best_seed_for_component(seeds, component, Some(first));
+        let risk = seeds[first][component] - seeds[second][component];
+        backups.push((risk, component, second));
+    }
+
+    // Higher-risk criteria receive their second-best seed first.  The
+    // component number makes equally risky choices deterministic.
+    backups.sort_unstable_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(&right.1)));
+    for (_, _, seed) in backups {
+        if protected.len() == capacity {
+            break;
+        }
+        if !protected.contains(&seed) {
+            protected.push(seed);
+        }
+    }
+
     protected
 }
 
@@ -107,19 +142,18 @@ fn make_layout(seeds: &[Vec<usize>], n: usize) -> Vec<Vec<usize>> {
     let mut layout = vec![vec![usize::MAX; n]; n];
     let mut used_seed = vec![false; seeds.len()];
     let directions = [(-1_isize, 0_isize), (1, 0), (0, -1), (0, 1)];
-    let protected = protected_seeds(seeds);
-    let mut is_protected = vec![false; seeds.len()];
-    for &seed in &protected {
-        is_protected[seed] = true;
-    }
-
-    // Protect the best value of every criterion by placing their distinct
-    // holders in the inner 4x4 cells first.
+    // Protect the best value of every criterion, then add second-best seeds
+    // for the criteria where losing the maximum would hurt the most.
     let inner_order: Vec<(usize, usize)> = order
         .iter()
         .copied()
         .filter(|&(r, c)| r > 0 && r + 1 < n && c > 0 && c + 1 < n)
         .collect();
+    let protected = protected_seeds(seeds, inner_order.len());
+    let mut is_protected = vec![false; seeds.len()];
+    for &seed in &protected {
+        is_protected[seed] = true;
+    }
     debug_assert!(protected.len() <= inner_order.len());
 
     // The first protected seed follows the base strategy's initial rule.
