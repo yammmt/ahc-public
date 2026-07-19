@@ -19,7 +19,7 @@ out_dir = "./pahcer"
 # Compile the user's program
 [[test.compile_steps]]
 program = "cargo"
-args = ["build", "--release"]
+args = ["build", "--release", "--target-dir", "./target"]
 
 # Remove the old binary
 [[test.compile_steps]]
@@ -29,7 +29,7 @@ args = ["-rf", "./ahc035"]
 # Move the compiled binary to the current directory
 [[test.compile_steps]]
 program = "cp"
-args = ["../target/release/a", "./ahc035"]
+args = ["./target/release/a", "./ahc035"]
 
 # On macOS, there’s a possibility of SIGKILL or other issues occurring,
 # so it’s better to build the tester in advance
@@ -38,7 +38,7 @@ args = ["../target/release/a", "./ahc035"]
 # Compile the tester
 [[test.compile_steps]]
 program = "cargo"
-args = ["build", "--release", "--bin", "tester"]
+args = ["build", "--release", "--bin", "tester", "--target-dir", "./target"]
 current_dir = "./tools"
 
 # Remove the old tester
@@ -49,7 +49,7 @@ args = ["-f", "./tester"]
 # Move the tester to the current directory
 [[test.compile_steps]]
 program = "cp"
-args = ["../target/release/tester", "./tester"]
+args = ["./tools/target/release/tester", "./tester"]
 
 # ==============================
 #           TEST STEPS
