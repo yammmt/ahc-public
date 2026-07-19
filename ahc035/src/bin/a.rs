@@ -35,66 +35,126 @@ fn complement_score(a: &[usize], b: &[usize]) -> usize {
     a.iter().zip(b).map(|(&av, &bv)| av.max(bv)).sum()
 }
 
+fn total_value(seed: &[usize]) -> usize {
+    seed.iter().sum()
+}
+
+fn protected_seeds(seeds: &[Vec<usize>]) -> Vec<usize> {
+    let mut protected = Vec::new();
+    for l in 0..seeds[0].len() {
+        let mut best = 0;
+        for candidate in 1..seeds.len() {
+            let candidate_key = (seeds[candidate][l], total_value(&seeds[candidate]));
+            let best_key = (seeds[best][l], total_value(&seeds[best]));
+            if candidate_key > best_key {
+                best = candidate;
+            }
+        }
+        if !protected.contains(&best) {
+            protected.push(best);
+        }
+    }
+    protected
+}
+
+fn placed_neighbours(
+    layout: &[Vec<usize>],
+    n: usize,
+    r: usize,
+    c: usize,
+    directions: &[(isize, isize); 4],
+) -> Vec<usize> {
+    directions
+        .iter()
+        .filter_map(|&(dr, dc)| {
+            let nr = r as isize + dr;
+            let nc = c as isize + dc;
+            if nr < 0 || nr >= n as isize || nc < 0 || nc >= n as isize {
+                return None;
+            }
+            let seed = layout[nr as usize][nc as usize];
+            (seed != usize::MAX).then_some(seed)
+        })
+        .collect()
+}
+
+fn best_complementary_seed(
+    seeds: &[Vec<usize>],
+    used_seed: &[bool],
+    neighbours: &[usize],
+    allowed: &[bool],
+) -> usize {
+    let mut best_seed = None;
+    let mut best_score = 0;
+    for candidate in 0..seeds.len() {
+        if used_seed[candidate] || !allowed[candidate] {
+            continue;
+        }
+        let score: usize = neighbours
+            .iter()
+            .map(|&adjacent| complement_score(&seeds[adjacent], &seeds[candidate]))
+            .sum();
+        if best_seed.is_none() || score > best_score {
+            best_seed = Some(candidate);
+            best_score = score;
+        }
+    }
+    best_seed.unwrap()
+}
+
 fn make_layout(seeds: &[Vec<usize>], n: usize) -> Vec<Vec<usize>> {
-    let m = seeds[0].len();
     let order = bfs_order(n, (n / 2, n / 2));
     let mut layout = vec![vec![usize::MAX; n]; n];
     let mut used_seed = vec![false; seeds.len()];
     let directions = [(-1_isize, 0_isize), (1, 0), (0, -1), (0, 1)];
-
-    // The first seed maximizes its largest component.  Ties are broken by
-    // total value, then by the seed number (the iteration order below).
-    let mut first = 0;
-    let mut first_key = (0, 0);
-    for (k, seed) in seeds.iter().enumerate() {
-        let key = (
-            seed.iter().copied().max().unwrap(),
-            seed.iter().sum::<usize>(),
-        );
-        if key > first_key {
-            first = k;
-            first_key = key;
-        }
+    let protected = protected_seeds(seeds);
+    let mut is_protected = vec![false; seeds.len()];
+    for &seed in &protected {
+        is_protected[seed] = true;
     }
 
-    for (step, &(r, c)) in order.iter().enumerate() {
+    // Protect the best value of every criterion by placing their distinct
+    // holders in the inner 4x4 cells first.
+    let inner_order: Vec<(usize, usize)> = order
+        .iter()
+        .copied()
+        .filter(|&(r, c)| r > 0 && r + 1 < n && c > 0 && c + 1 < n)
+        .collect();
+    debug_assert!(protected.len() <= inner_order.len());
+
+    // The first protected seed follows the base strategy's initial rule.
+    let first = protected
+        .iter()
+        .copied()
+        .max_by_key(|&k| {
+            (
+                seeds[k].iter().copied().max().unwrap(),
+                total_value(&seeds[k]),
+                usize::MAX - k,
+            )
+        })
+        .unwrap();
+
+    for (step, &(r, c)) in inner_order.iter().take(protected.len()).enumerate() {
         let chosen = if step == 0 {
             first
         } else {
-            let neighbours: Vec<usize> = directions
-                .iter()
-                .filter_map(|&(dr, dc)| {
-                    let nr = r as isize + dr;
-                    let nc = c as isize + dc;
-                    if nr < 0 || nr >= n as isize || nc < 0 || nc >= n as isize {
-                        return None;
-                    }
-                    let seed = layout[nr as usize][nc as usize];
-                    (seed != usize::MAX).then_some(seed)
-                })
-                .collect();
-
-            // `max_by_key` keeps the later item on a tie, so use an explicit
-            // comparison to retain the smallest seed number as required.
-            let mut best_seed = None;
-            let mut best_score = 0;
-            for candidate in 0..seeds.len() {
-                if used_seed[candidate] {
-                    continue;
-                }
-                let score: usize = neighbours
-                    .iter()
-                    .map(|&adjacent| complement_score(&seeds[adjacent], &seeds[candidate]))
-                    .sum();
-                if best_seed.is_none() || score > best_score {
-                    best_seed = Some(candidate);
-                    best_score = score;
-                }
-            }
-            best_seed.unwrap()
+            let neighbours = placed_neighbours(&layout, n, r, c, &directions);
+            best_complementary_seed(seeds, &used_seed, &neighbours, &is_protected)
         };
+        layout[r][c] = chosen;
+        used_seed[chosen] = true;
+    }
 
-        debug_assert_eq!(seeds[chosen].len(), m);
+    // Fill every remaining cell in the original BFS order using all unused
+    // seeds, as in the base strategy.
+    let all_seeds = vec![true; seeds.len()];
+    for &(r, c) in &order {
+        if layout[r][c] != usize::MAX {
+            continue;
+        }
+        let neighbours = placed_neighbours(&layout, n, r, c, &directions);
+        let chosen = best_complementary_seed(seeds, &used_seed, &neighbours, &all_seeds);
         layout[r][c] = chosen;
         used_seed[chosen] = true;
     }
