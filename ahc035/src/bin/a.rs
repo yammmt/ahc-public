@@ -1,6 +1,11 @@
 use proconio::input;
 use std::collections::VecDeque;
 use std::io::{self, Write};
+use std::time::Instant;
+
+const HC_TURNS: usize = 2;
+const HC_LIMIT_MS: u128 = 1800;
+type Cell = (usize, usize);
 
 /// Return the cells in the order specified by the document: BFS from (3, 3),
 /// visiting neighbours in up, down, left, right order.
@@ -137,7 +142,223 @@ fn best_complementary_seed(
     best_seed.unwrap()
 }
 
-fn make_layout(seeds: &[Vec<usize>], n: usize) -> Vec<Vec<usize>> {
+fn grid_edges(n: usize) -> Vec<(Cell, Cell)> {
+    let mut edges = Vec::with_capacity(2 * n * (n - 1));
+    for r in 0..n {
+        for c in 0..n {
+            if r + 1 < n {
+                edges.push(((r, c), (r + 1, c)));
+            }
+            if c + 1 < n {
+                edges.push(((r, c), (r, c + 1)));
+            }
+        }
+    }
+    edges
+}
+
+fn child_cdf(a: &[usize], b: &[usize], max_value: usize) -> Vec<f64> {
+    let mut probability = vec![0.0; max_value + 1];
+    probability[0] = 1.0;
+    let mut current_max = 0;
+
+    for (&av, &bv) in a.iter().zip(b) {
+        let mut next = vec![0.0; max_value + 1];
+        if av == bv {
+            for sum in 0..=current_max {
+                next[sum + av] += probability[sum];
+            }
+        } else {
+            for sum in 0..=current_max {
+                next[sum + av] += probability[sum] * 0.5;
+                next[sum + bv] += probability[sum] * 0.5;
+            }
+        }
+        current_max += av.max(bv);
+        probability = next;
+    }
+
+    let mut cumulative = 0.0;
+    for value in &mut probability {
+        cumulative += *value;
+        *value = cumulative;
+    }
+    probability
+}
+
+fn edge_cdfs(
+    layout: &[Vec<usize>],
+    seeds: &[Vec<usize>],
+    edges: &[(Cell, Cell)],
+    max_value: usize,
+) -> Vec<Vec<f64>> {
+    edges
+        .iter()
+        .map(|&((r1, c1), (r2, c2))| {
+            child_cdf(&seeds[layout[r1][c1]], &seeds[layout[r2][c2]], max_value)
+        })
+        .collect()
+}
+
+fn cdf_product_metadata(cdfs: &[Vec<f64>], max_value: usize) -> (Vec<usize>, Vec<f64>) {
+    let mut zero_count = vec![0; max_value + 1];
+    let mut nonzero_product = vec![1.0; max_value + 1];
+    for cdf in cdfs {
+        for value in 0..=max_value {
+            if cdf[value] == 0.0 {
+                zero_count[value] += 1;
+            } else {
+                nonzero_product[value] *= cdf[value];
+            }
+        }
+    }
+    (zero_count, nonzero_product)
+}
+
+fn expected_maximum(zero_count: &[usize], nonzero_product: &[f64], max_value: usize) -> f64 {
+    (0..max_value)
+        .map(|value| {
+            if zero_count[value] == 0 {
+                1.0 - nonzero_product[value]
+            } else {
+                1.0
+            }
+        })
+        .sum()
+}
+
+fn seed_after_swap(layout: &[Vec<usize>], cell: Cell, first: Cell, second: Cell) -> usize {
+    if cell == first {
+        layout[second.0][second.1]
+    } else if cell == second {
+        layout[first.0][first.1]
+    } else {
+        layout[cell.0][cell.1]
+    }
+}
+
+fn affected_edges(edges: &[(Cell, Cell)], first: Cell, second: Cell) -> Vec<usize> {
+    edges
+        .iter()
+        .enumerate()
+        .filter_map(|(index, &(a, b))| {
+            (a == first || b == first || a == second || b == second).then_some(index)
+        })
+        .collect()
+}
+
+fn swapped_expected_maximum(
+    layout: &[Vec<usize>],
+    seeds: &[Vec<usize>],
+    edges: &[(Cell, Cell)],
+    cdfs: &[Vec<f64>],
+    zero_count: &[usize],
+    nonzero_product: &[f64],
+    max_value: usize,
+    first: Cell,
+    second: Cell,
+) -> f64 {
+    let affected = affected_edges(edges, first, second);
+    let new_cdfs: Vec<Vec<f64>> = affected
+        .iter()
+        .map(|&edge_index| {
+            let (a, b) = edges[edge_index];
+            let first_seed = seed_after_swap(layout, a, first, second);
+            let second_seed = seed_after_swap(layout, b, first, second);
+            child_cdf(&seeds[first_seed], &seeds[second_seed], max_value)
+        })
+        .collect();
+
+    let mut expectation = 0.0;
+    for value in 0..max_value {
+        let mut zeros = zero_count[value];
+        let mut product = nonzero_product[value];
+        for (position, &edge_index) in affected.iter().enumerate() {
+            let old = cdfs[edge_index][value];
+            if old == 0.0 {
+                zeros -= 1;
+            } else {
+                product /= old;
+            }
+
+            let new = new_cdfs[position][value];
+            if new == 0.0 {
+                zeros += 1;
+            } else {
+                product *= new;
+            }
+        }
+        expectation += if zeros == 0 { 1.0 - product } else { 1.0 };
+    }
+    expectation
+}
+
+fn hill_climb(layout: &mut [Vec<usize>], seeds: &[Vec<usize>], n: usize, start: &Instant) {
+    let edges = grid_edges(n);
+    let max_value: usize = (0..seeds[0].len())
+        .map(|component| seeds.iter().map(|seed| seed[component]).max().unwrap())
+        .sum();
+    let inner: Vec<Cell> = (0..n)
+        .flat_map(|r| (0..n).map(move |c| (r, c)))
+        .filter(|&(r, c)| r > 0 && r + 1 < n && c > 0 && c + 1 < n)
+        .collect();
+    let outer: Vec<Cell> = (0..n)
+        .flat_map(|r| (0..n).map(move |c| (r, c)))
+        .filter(|cell| !inner.contains(cell))
+        .collect();
+
+    let mut cdfs = edge_cdfs(layout, seeds, &edges, max_value);
+    let (mut zero_count, mut nonzero_product) = cdf_product_metadata(&cdfs, max_value);
+    let mut current = expected_maximum(&zero_count, &nonzero_product, max_value);
+
+    loop {
+        let mut best = None;
+        for cells in [&inner, &outer] {
+            for i in 0..cells.len() {
+                for j in i + 1..cells.len() {
+                    if start.elapsed().as_millis() >= HC_LIMIT_MS {
+                        return;
+                    }
+                    let score = swapped_expected_maximum(
+                        layout,
+                        seeds,
+                        &edges,
+                        &cdfs,
+                        &zero_count,
+                        &nonzero_product,
+                        max_value,
+                        cells[i],
+                        cells[j],
+                    );
+                    if score > current + 1e-9
+                        && best
+                            .as_ref()
+                            .is_none_or(|&(best_score, _, _)| score > best_score)
+                    {
+                        best = Some((score, cells[i], cells[j]));
+                    }
+                }
+            }
+        }
+
+        let Some((score, first, second)) = best else {
+            return;
+        };
+        let temporary = layout[first.0][first.1];
+        layout[first.0][first.1] = layout[second.0][second.1];
+        layout[second.0][second.1] = temporary;
+        cdfs = edge_cdfs(layout, seeds, &edges, max_value);
+        (zero_count, nonzero_product) = cdf_product_metadata(&cdfs, max_value);
+        current = score;
+    }
+}
+
+fn make_layout(
+    seeds: &[Vec<usize>],
+    n: usize,
+    apply_hill_climb: bool,
+    start: &Instant,
+) -> Vec<Vec<usize>> {
     let order = bfs_order(n, (n / 2, n / 2));
     let mut layout = vec![vec![usize::MAX; n]; n];
     let mut used_seed = vec![false; seeds.len()];
@@ -193,10 +414,14 @@ fn make_layout(seeds: &[Vec<usize>], n: usize) -> Vec<Vec<usize>> {
         used_seed[chosen] = true;
     }
 
+    if apply_hill_climb && start.elapsed().as_millis() < HC_LIMIT_MS {
+        hill_climb(&mut layout, seeds, n, start);
+    }
     layout
 }
 
 fn main() {
+    let start = Instant::now();
     input! {
         n: usize,
         m: usize,
@@ -208,7 +433,7 @@ fn main() {
     }
 
     for turn in 0..t {
-        let layout = make_layout(&seeds, n);
+        let layout = make_layout(&seeds, n, turn + HC_TURNS >= t, &start);
         for row in &layout {
             println!(
                 "{}",
