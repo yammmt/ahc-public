@@ -120,7 +120,7 @@ fn main() {
     let mut departure_times = vec![0_i64; M];
     let mut active = vec![false; M];
     let stdout = io::stdout();
-    let mut out = stdout.lock();
+    let mut out = io::BufWriter::new(stdout.lock());
 
     for i in 0..M {
         input! {
