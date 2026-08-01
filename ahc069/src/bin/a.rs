@@ -9,20 +9,20 @@ use std::time::{Duration, Instant};
 const N: usize = 50;
 // グループ数
 const M: usize = 1000;
-// 各グループに対する探索の打ち切り時間
-const SEARCH_TIME_LIMIT: Duration = Duration::from_micros(1_300);
-// 各グループに対する配置・移動処理の絶対時間制限
-const HARD_TIME_LIMIT: Duration = Duration::from_micros(1_500);
+// 各グループに対する探索の打ち切り時間 (microseconds)
+const SEARCH_TIME_LIMIT_US: u64 = 1_300;
+// 各グループに対する配置・移動処理の絶対時間制限 (microseconds)
+const HARD_TIME_LIMIT_US: u64 = 1_500;
 // 残された空き正方形領域を評価する重み λ
 const REMAINING_AREA_WEIGHT: f64 = 0.02;
 // 人数の最大値 150 を収められる正方形の最小の一辺
 const MAX_SQUARE_SIDE: usize = 13;
-// グループの生成に用いられる時刻の上限
-const TIME_HORIZON: i64 = 100_000;
+// グループの生成に用いられる問題内時刻の上限
+const TIME_HORIZON_TICKS: i64 = 100_000;
 // P の生成分布から求めた平均人数
 const AVERAGE_GROUP_SIZE: f64 = 59.5;
 // 滞在時間の平均を推定する際の事前分布
-const DURATION_PRIOR_MEAN: f64 = 5_000.0;
+const DURATION_PRIOR_MEAN_TICKS: f64 = 5_000.0;
 const DURATION_PRIOR_WEIGHT: f64 = 20.0;
 // 序盤に明確に効率が悪いとみなす利用料 / セル時間の上限
 const EARLY_EFFICIENCY_THRESHOLD: f64 = 0.50;
@@ -313,7 +313,7 @@ fn move_cost(value: i64, move_cost_rate_milli: i64) -> i64 {
 fn should_reject_by_efficiency(
     value: i64,
     group_size: usize,
-    duration: i64,
+    duration_ticks: i64,
     boundary: usize,
     estimated_load: f64,
     efficiency_threshold: f64,
@@ -322,7 +322,7 @@ fn should_reject_by_efficiency(
         return false;
     }
     let efficiency =
-        usage_fee(value, group_size, boundary) as f64 / (group_size as f64 * duration as f64);
+        usage_fee(value, group_size, boundary) as f64 / (group_size as f64 * duration_ticks as f64);
     efficiency < efficiency_threshold
 }
 
@@ -340,13 +340,13 @@ fn main() {
     let grass_area = grass.iter().flatten().filter(|&&cell| cell).count();
     let mut occupied = vec![vec![false; N]; N];
     let mut regions: Vec<Vec<(usize, usize)>> = vec![Vec::new(); M];
-    let mut departure_times = vec![0_i64; M];
+    let mut departure_time_ticks = vec![0_i64; M];
     let mut group_ids = vec![0_usize; M];
     let mut group_sizes = vec![0_usize; M];
     let mut values = vec![0_i64; M];
     let mut maximum_boundaries = vec![0_usize; M];
     let mut active = vec![false; M];
-    let mut observed_duration_sum = 0_i64;
+    let mut observed_duration_sum_ticks = 0_i64;
     let (integer_part, fractional_part) = r.split_once('.').unwrap();
     let move_cost_rate_milli =
         integer_part.parse::<i64>().unwrap() * 1000 + fractional_part.parse::<i64>().unwrap();
@@ -356,14 +356,14 @@ fn main() {
     for i in 0..M {
         input! {
             group_id: usize,
-            s: i64,
-            t: i64,
+            arrival_time_ticks: i64,
+            departure_time_ticks_for_group: i64,
             p: usize,
             v: i64,
         }
 
         for j in 0..i {
-            if active[j] && departure_times[j] < s {
+            if active[j] && departure_time_ticks[j] < arrival_time_ticks {
                 for &(x, y) in &regions[j] {
                     occupied[x][y] = false;
                 }
@@ -374,24 +374,24 @@ fn main() {
         group_ids[i] = group_id;
         group_sizes[i] = p;
         values[i] = v;
-        departure_times[i] = t;
+        departure_time_ticks[i] = departure_time_ticks_for_group;
 
-        let duration = t - s;
-        observed_duration_sum += duration;
-        let estimated_mean_duration = (DURATION_PRIOR_WEIGHT * DURATION_PRIOR_MEAN
-            + observed_duration_sum as f64)
+        let duration_ticks = departure_time_ticks_for_group - arrival_time_ticks;
+        observed_duration_sum_ticks += duration_ticks;
+        let estimated_mean_duration_ticks = (DURATION_PRIOR_WEIGHT * DURATION_PRIOR_MEAN_TICKS
+            + observed_duration_sum_ticks as f64)
             / (DURATION_PRIOR_WEIGHT + i as f64 + 1.0);
         let remaining_group_count = M - i - 1;
-        let remaining_time = TIME_HORIZON - s;
+        let remaining_time_ticks = TIME_HORIZON_TICKS - arrival_time_ticks;
         let estimated_load =
-            remaining_group_count as f64 * AVERAGE_GROUP_SIZE * estimated_mean_duration
-                / (remaining_time as f64 * grass_area as f64);
+            remaining_group_count as f64 * AVERAGE_GROUP_SIZE * estimated_mean_duration_ticks
+                / (remaining_time_ticks as f64 * grass_area as f64);
         let remaining_turn_ratio = remaining_group_count as f64 / (M - 1) as f64;
         let efficiency_threshold = EARLY_EFFICIENCY_THRESHOLD * remaining_turn_ratio;
 
         let started_at = Instant::now();
-        let search_deadline = started_at + SEARCH_TIME_LIMIT;
-        let hard_deadline = started_at + HARD_TIME_LIMIT;
+        let search_deadline = started_at + Duration::from_micros(SEARCH_TIME_LIMIT_US);
+        let hard_deadline = started_at + Duration::from_micros(HARD_TIME_LIMIT_US);
         let available_components =
             calculate_available_component_sizes(&grass, &occupied, search_deadline);
         let normal_region = available_components.as_ref().and_then(|components| {
@@ -402,7 +402,7 @@ fn main() {
             should_reject_by_efficiency(
                 v,
                 p,
-                duration,
+                duration_ticks,
                 boundary,
                 estimated_load,
                 efficiency_threshold,
@@ -468,7 +468,7 @@ fn main() {
                         let reject_arriving_region = should_reject_by_efficiency(
                             v,
                             p,
-                            duration,
+                            duration_ticks,
                             arriving_boundary,
                             estimated_load,
                             efficiency_threshold,
