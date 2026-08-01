@@ -13,6 +13,10 @@ const M: usize = 1000;
 const SEARCH_TIME_LIMIT: Duration = Duration::from_micros(1_300);
 // 各グループに対する配置・移動処理の絶対時間制限
 const HARD_TIME_LIMIT: Duration = Duration::from_micros(1_500);
+// 残された空き正方形領域を評価する重み λ
+const REMAINING_AREA_WEIGHT: f64 = 0.02;
+// 人数の最大値 150 を収められる正方形の最小の一辺
+const MAX_SQUARE_SIDE: usize = 13;
 type Cell = (usize, usize);
 
 struct AvailableComponents {
@@ -182,8 +186,42 @@ fn boundary_len(cells: &[(usize, usize)], n: usize) -> usize {
     boundary
 }
 
-fn evaluate_region(cells: &[Cell], n: usize) -> f64 {
-    4.0 * (cells.len() as f64).sqrt() / boundary_len(cells, n) as f64
+fn remaining_square_score(cells: &[Cell], grass: &[Vec<bool>], occupied: &[Vec<bool>]) -> f64 {
+    let n = grass.len();
+    let mut in_region = vec![vec![false; n]; n];
+    for &(x, y) in cells {
+        in_region[x][y] = true;
+    }
+
+    // largest_square[x][y] は (x, y) を左上とする空き正方形の最大の一辺。
+    let mut largest_square = vec![vec![0_usize; n + 1]; n + 1];
+    let mut side_histogram = [0_usize; MAX_SQUARE_SIDE + 1];
+    for x in (0..n).rev() {
+        for y in (0..n).rev() {
+            if grass[x][y] && !occupied[x][y] && !in_region[x][y] {
+                let side = 1 + largest_square[x + 1][y]
+                    .min(largest_square[x][y + 1])
+                    .min(largest_square[x + 1][y + 1]);
+                largest_square[x][y] = side;
+                side_histogram[side.min(MAX_SQUARE_SIDE)] += 1;
+            }
+        }
+    }
+
+    // Q_k を空いている k x k 正方形の配置位置数として、
+    // F(B-R) = sum_{k=2}^{13} log(1 + Q_k) を計算する。
+    let mut square_count = 0_usize;
+    let mut score = 0.0;
+    for side in (2..=MAX_SQUARE_SIDE).rev() {
+        square_count += side_histogram[side];
+        score += (square_count as f64).ln_1p();
+    }
+    score
+}
+
+fn evaluate_region(cells: &[Cell], grass: &[Vec<bool>], occupied: &[Vec<bool>]) -> f64 {
+    let compactness = 4.0 * (cells.len() as f64).sqrt() / boundary_len(cells, grass.len()) as f64;
+    compactness + REMAINING_AREA_WEIGHT * remaining_square_score(cells, grass, occupied)
 }
 
 fn find_best_region(
@@ -225,7 +263,7 @@ fn find_best_region(
         for &(x, y) in &cells {
             included_in_candidates[x][y] = true;
         }
-        let evaluation = evaluate_region(&cells, n);
+        let evaluation = evaluate_region(&cells, grass, occupied);
         if best_candidate
             .as_ref()
             .is_none_or(|(best_evaluation, _)| evaluation > *best_evaluation)
