@@ -1,6 +1,7 @@
 use proconio::input;
 use proconio::marker::Chars;
-use std::collections::VecDeque;
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
 use std::io::{self, Write};
 
 // 盤面サイズ 50x50
@@ -23,17 +24,19 @@ fn find_region(
             }
 
             let mut visited = vec![vec![false; n]; n];
-            let mut queue = VecDeque::from([(x, y)]);
+            // 探索始点からのチェビシェフ距離が小さい候補を優先する。
+            // Reverse により、距離・座標の昇順で取り出す min-heap として使う。
+            let mut queue = BinaryHeap::from([Reverse((0_usize, x, y))]);
             let mut cells = Vec::with_capacity(required_size);
             visited[x][y] = true;
 
-            while let Some((cx, cy)) = queue.pop_front() {
+            while let Some(Reverse((_, cx, cy))) = queue.pop() {
                 cells.push((cx, cy));
                 if cells.len() == required_size {
                     return Some(cells);
                 }
 
-                // 左、右、上、下の順に探索する。
+                // 追加済みマスに隣接する空きマスを追加候補とする。
                 for (dx, dy) in [(0_i32, -1_i32), (0, 1), (-1, 0), (1, 0)] {
                     let nx = cx as i32 + dx;
                     let ny = cy as i32 + dy;
@@ -43,7 +46,8 @@ fn find_region(
                     let (nx, ny) = (nx as usize, ny as usize);
                     if grass[nx][ny] && !occupied[nx][ny] && !visited[nx][ny] {
                         visited[nx][ny] = true;
-                        queue.push_back((nx, ny));
+                        let distance = nx.abs_diff(x).max(ny.abs_diff(y));
+                        queue.push(Reverse((distance, nx, ny)));
                     }
                 }
             }
