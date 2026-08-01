@@ -182,46 +182,59 @@ fn boundary_len(cells: &[(usize, usize)], n: usize) -> usize {
     boundary
 }
 
+fn evaluate_region(cells: &[Cell], n: usize) -> f64 {
+    4.0 * (cells.len() as f64).sqrt() / boundary_len(cells, n) as f64
+}
+
 fn find_best_region(
     grass: &[Vec<bool>],
-    component_sizes: &[Vec<usize>],
-    component_starts: &[(usize, usize)],
+    components: &AvailableComponents,
     occupied: &[Vec<bool>],
     required_size: usize,
     deadline: Instant,
 ) -> Option<Vec<(usize, usize)>> {
-    if Instant::now() >= deadline {
-        return None;
-    }
-    let mut starts = component_starts
-        .iter()
-        .copied()
-        .filter(|&(x, y)| component_sizes[x][y] >= required_size);
-    let first_start = starts.next()?;
-    let mut best_cells =
-        find_region_from_start(grass, occupied, first_start, required_size, deadline)?;
-    if Instant::now() >= deadline {
-        return Some(best_cells);
-    }
-    let mut best_boundary = boundary_len(&best_cells, grass.len());
+    let n = grass.len();
+    let mut included_in_candidates = vec![vec![false; n]; n];
+    let mut next_start_index = 0;
+    let mut best_candidate: Option<(f64, Vec<Cell>)> = None;
 
-    for start in starts {
+    loop {
         if Instant::now() >= deadline {
             break;
         }
 
-        if let Some(cells) = find_region_from_start(grass, occupied, start, required_size, deadline)
-            && Instant::now() < deadline
-        {
-            let boundary = boundary_len(&cells, grass.len());
-            if boundary < best_boundary {
-                best_cells = cells;
-                best_boundary = boundary;
+        let mut start = None;
+        while next_start_index < n * n {
+            let x = next_start_index / n;
+            let y = next_start_index % n;
+            next_start_index += 1;
+            if components.sizes[x][y] >= required_size && !included_in_candidates[x][y] {
+                start = Some((x, y));
+                break;
             }
+        }
+        let Some(start) = start else {
+            break;
+        };
+
+        let Some(cells) = find_region_from_start(grass, occupied, start, required_size, deadline)
+        else {
+            break;
+        };
+
+        for &(x, y) in &cells {
+            included_in_candidates[x][y] = true;
+        }
+        let evaluation = evaluate_region(&cells, n);
+        if best_candidate
+            .as_ref()
+            .is_none_or(|(best_evaluation, _)| evaluation > *best_evaluation)
+        {
+            best_candidate = Some((evaluation, cells));
         }
     }
 
-    Some(best_cells)
+    best_candidate.map(|(_, cells)| cells)
 }
 
 fn usage_fee(value: i64, group_size: usize, maximum_boundary: usize) -> i64 {
@@ -304,14 +317,7 @@ fn main() {
         let available_components =
             calculate_available_component_sizes(&grass, &occupied, search_deadline);
         let normal_region = available_components.as_ref().and_then(|components| {
-            find_best_region(
-                &grass,
-                &components.sizes,
-                &components.starts,
-                &occupied,
-                p,
-                search_deadline,
-            )
+            find_best_region(&grass, components, &occupied, p, search_deadline)
         });
 
         if let Some(cells) = normal_region
@@ -359,14 +365,7 @@ fn main() {
                     let arriving_region =
                         calculate_available_component_sizes(&grass, &occupied, search_deadline)
                             .and_then(|components| {
-                                find_best_region(
-                                    &grass,
-                                    &components.sizes,
-                                    &components.starts,
-                                    &occupied,
-                                    p,
-                                    search_deadline,
-                                )
+                                find_best_region(&grass, &components, &occupied, p, search_deadline)
                             });
 
                     let mut candidate = None;
@@ -382,8 +381,7 @@ fn main() {
                                 .and_then(|components| {
                                     find_best_region(
                                         &grass,
-                                        &components.sizes,
-                                        &components.starts,
+                                        &components,
                                         &occupied,
                                         group_sizes[j],
                                         search_deadline,
