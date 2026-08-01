@@ -9,6 +9,10 @@ use std::time::{Duration, Instant};
 const N: usize = 50;
 // グループ数
 const M: usize = 1000;
+// 各グループに対する探索の打ち切り時間
+const SEARCH_TIME_LIMIT: Duration = Duration::from_micros(1_300);
+// 各グループに対する配置・移動処理の絶対時間制限
+const HARD_TIME_LIMIT: Duration = Duration::from_micros(1_500);
 type Cell = (usize, usize);
 
 struct AvailableComponents {
@@ -295,8 +299,8 @@ fn main() {
         departure_times[i] = t;
 
         let started_at = Instant::now();
-        let search_deadline = started_at + Duration::from_micros(1_300);
-        let hard_deadline = started_at + Duration::from_micros(1_500);
+        let search_deadline = started_at + SEARCH_TIME_LIMIT;
+        let hard_deadline = started_at + HARD_TIME_LIMIT;
         let available_components =
             calculate_available_component_sizes(&grass, &occupied, search_deadline);
         let normal_region = available_components.as_ref().and_then(|components| {
