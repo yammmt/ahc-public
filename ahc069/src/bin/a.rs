@@ -17,6 +17,15 @@ const HARD_TIME_LIMIT: Duration = Duration::from_micros(1_500);
 const REMAINING_AREA_WEIGHT: f64 = 0.02;
 // 人数の最大値 150 を収められる正方形の最小の一辺
 const MAX_SQUARE_SIDE: usize = 13;
+// グループの生成に用いられる時刻の上限
+const TIME_HORIZON: i64 = 100_000;
+// P の生成分布から求めた平均人数
+const AVERAGE_GROUP_SIZE: f64 = 59.5;
+// 滞在時間の平均を推定する際の事前分布
+const DURATION_PRIOR_MEAN: f64 = 5_000.0;
+const DURATION_PRIOR_WEIGHT: f64 = 20.0;
+// 序盤に明確に効率が悪いとみなす利用料 / セル時間の上限
+const EARLY_EFFICIENCY_THRESHOLD: f64 = 0.50;
 type Cell = (usize, usize);
 
 struct AvailableComponents {
@@ -301,6 +310,22 @@ fn move_cost(value: i64, move_cost_rate_milli: i64) -> i64 {
     ((2 * value as i128 * move_cost_rate_milli as i128 + 1000) / 2000).max(1) as i64
 }
 
+fn should_reject_by_efficiency(
+    value: i64,
+    group_size: usize,
+    duration: i64,
+    boundary: usize,
+    estimated_load: f64,
+    efficiency_threshold: f64,
+) -> bool {
+    if estimated_load <= 1.0 {
+        return false;
+    }
+    let efficiency =
+        usage_fee(value, group_size, boundary) as f64 / (group_size as f64 * duration as f64);
+    efficiency < efficiency_threshold
+}
+
 fn main() {
     input! {
         _n: usize,
@@ -312,6 +337,7 @@ fn main() {
         .into_iter()
         .map(|row| row.into_iter().map(|cell| cell == '.').collect())
         .collect();
+    let grass_area = grass.iter().flatten().filter(|&&cell| cell).count();
     let mut occupied = vec![vec![false; N]; N];
     let mut regions: Vec<Vec<(usize, usize)>> = vec![Vec::new(); M];
     let mut departure_times = vec![0_i64; M];
@@ -320,6 +346,7 @@ fn main() {
     let mut values = vec![0_i64; M];
     let mut maximum_boundaries = vec![0_usize; M];
     let mut active = vec![false; M];
+    let mut observed_duration_sum = 0_i64;
     let (integer_part, fractional_part) = r.split_once('.').unwrap();
     let move_cost_rate_milli =
         integer_part.parse::<i64>().unwrap() * 1000 + fractional_part.parse::<i64>().unwrap();
@@ -349,6 +376,19 @@ fn main() {
         values[i] = v;
         departure_times[i] = t;
 
+        let duration = t - s;
+        observed_duration_sum += duration;
+        let estimated_mean_duration = (DURATION_PRIOR_WEIGHT * DURATION_PRIOR_MEAN
+            + observed_duration_sum as f64)
+            / (DURATION_PRIOR_WEIGHT + i as f64 + 1.0);
+        let remaining_group_count = M - i - 1;
+        let remaining_time = TIME_HORIZON - s;
+        let estimated_load =
+            remaining_group_count as f64 * AVERAGE_GROUP_SIZE * estimated_mean_duration
+                / (remaining_time as f64 * grass_area as f64);
+        let remaining_turn_ratio = remaining_group_count as f64 / (M - 1) as f64;
+        let efficiency_threshold = EARLY_EFFICIENCY_THRESHOLD * remaining_turn_ratio;
+
         let started_at = Instant::now();
         let search_deadline = started_at + SEARCH_TIME_LIMIT;
         let hard_deadline = started_at + HARD_TIME_LIMIT;
@@ -357,8 +397,22 @@ fn main() {
         let normal_region = available_components.as_ref().and_then(|components| {
             find_best_region(&grass, components, &occupied, p, search_deadline)
         });
+        let normal_boundary = normal_region.as_ref().map(|cells| boundary_len(cells, N));
+        let reject_normal_region = normal_boundary.is_some_and(|boundary| {
+            should_reject_by_efficiency(
+                v,
+                p,
+                duration,
+                boundary,
+                estimated_load,
+                efficiency_threshold,
+            )
+        });
 
-        if let Some(cells) = normal_region
+        if reject_normal_region {
+            writeln!(out, "0").unwrap();
+            writeln!(out, "No").unwrap();
+        } else if let Some(cells) = normal_region
             && Instant::now() < hard_deadline
         {
             writeln!(out, "0").unwrap();
@@ -368,7 +422,7 @@ fn main() {
                 occupied[x][y] = true;
             }
             regions[i] = cells;
-            maximum_boundaries[i] = boundary_len(&regions[i], N);
+            maximum_boundaries[i] = normal_boundary.unwrap();
             active[i] = true;
         } else {
             let mut move_candidates = Vec::new();
@@ -410,43 +464,58 @@ fn main() {
                     if let Some(arriving_cells) = arriving_region
                         && Instant::now() < hard_deadline
                     {
-                        for &(x, y) in &arriving_cells {
-                            occupied[x][y] = true;
-                        }
+                        let arriving_boundary = boundary_len(&arriving_cells, N);
+                        let reject_arriving_region = should_reject_by_efficiency(
+                            v,
+                            p,
+                            duration,
+                            arriving_boundary,
+                            estimated_load,
+                            efficiency_threshold,
+                        );
 
-                        let moved_region =
-                            calculate_available_component_sizes(&grass, &occupied, search_deadline)
-                                .and_then(|components| {
-                                    find_best_region(
-                                        &grass,
-                                        &components,
-                                        &occupied,
-                                        group_sizes[j],
-                                        search_deadline,
-                                    )
-                                });
-
-                        let mut moved_candidate = None;
-                        if let Some(moved_cells) = moved_region
-                            && Instant::now() < hard_deadline
-                        {
-                            let arriving_boundary = boundary_len(&arriving_cells, N);
-                            let moved_maximum_boundary =
-                                maximum_boundaries[j].max(boundary_len(&moved_cells, N));
-                            let score_difference = usage_fee(v, p, arriving_boundary)
-                                - move_cost(values[j], move_cost_rate_milli)
-                                + usage_fee(values[j], group_sizes[j], moved_maximum_boundary)
-                                - usage_fee(values[j], group_sizes[j], maximum_boundaries[j]);
-                            if score_difference > 0 && Instant::now() < hard_deadline {
-                                moved_candidate = Some((moved_cells, moved_maximum_boundary));
+                        if !reject_arriving_region {
+                            for &(x, y) in &arriving_cells {
+                                occupied[x][y] = true;
                             }
-                        }
 
-                        for &(x, y) in &arriving_cells {
-                            occupied[x][y] = false;
-                        }
-                        if let Some((moved_cells, moved_maximum_boundary)) = moved_candidate {
-                            candidate = Some((arriving_cells, moved_cells, moved_maximum_boundary));
+                            let moved_region = calculate_available_component_sizes(
+                                &grass,
+                                &occupied,
+                                search_deadline,
+                            )
+                            .and_then(|components| {
+                                find_best_region(
+                                    &grass,
+                                    &components,
+                                    &occupied,
+                                    group_sizes[j],
+                                    search_deadline,
+                                )
+                            });
+
+                            let mut moved_candidate = None;
+                            if let Some(moved_cells) = moved_region
+                                && Instant::now() < hard_deadline
+                            {
+                                let moved_maximum_boundary =
+                                    maximum_boundaries[j].max(boundary_len(&moved_cells, N));
+                                let score_difference = usage_fee(v, p, arriving_boundary)
+                                    - move_cost(values[j], move_cost_rate_milli)
+                                    + usage_fee(values[j], group_sizes[j], moved_maximum_boundary)
+                                    - usage_fee(values[j], group_sizes[j], maximum_boundaries[j]);
+                                if score_difference > 0 && Instant::now() < hard_deadline {
+                                    moved_candidate = Some((moved_cells, moved_maximum_boundary));
+                                }
+                            }
+
+                            for &(x, y) in &arriving_cells {
+                                occupied[x][y] = false;
+                            }
+                            if let Some((moved_cells, moved_maximum_boundary)) = moved_candidate {
+                                candidate =
+                                    Some((arriving_cells, moved_cells, moved_maximum_boundary));
+                            }
                         }
                     }
 
