@@ -15,6 +15,8 @@ const SEARCH_TIME_LIMIT_US: u64 = 1_300;
 const HARD_TIME_LIMIT_US: u64 = 1_500;
 // 残された空き正方形領域の 1 tick あたりの評価重み λ
 const PLACEMENT_SPACE_WEIGHT_PER_TICK: f64 = 0.5;
+// 退去時刻が近いグループと接する共有辺 1 本あたりの評価重み μ
+const DEPARTURE_AFFINITY_WEIGHT: f64 = 60.0;
 // 人数の最大値 150 を収められる正方形の最小の一辺
 const MAX_SQUARE_SIDE: usize = 13;
 // グループの生成に用いられる問題内時刻の上限
@@ -27,6 +29,13 @@ const DURATION_PRIOR_WEIGHT: f64 = 20.0;
 // 序盤に明確に効率が悪いとみなす利用料 / セル時間の上限
 const EARLY_EFFICIENCY_THRESHOLD: f64 = 0.50;
 type Cell = (usize, usize);
+
+struct PlacementEvaluationContext {
+    value: i64,
+    duration_ticks: i64,
+    departure_time_ticks: i64,
+    estimated_arrival_rate_per_tick: f64,
+}
 
 struct AvailableComponents {
     sizes: Vec<Vec<usize>>,
@@ -228,28 +237,67 @@ fn remaining_square_score(cells: &[Cell], grass: &[Vec<bool>], occupied: &[Vec<b
     score
 }
 
+fn departure_affinity_score(
+    cells: &[Cell],
+    occupied_until_ticks: &[Vec<i64>],
+    departure_time_ticks: i64,
+    estimated_arrival_rate_per_tick: f64,
+) -> f64 {
+    if estimated_arrival_rate_per_tick == 0.0 {
+        return 0.0;
+    }
+
+    let n = occupied_until_ticks.len();
+    let mut score = 0.0;
+    for &(x, y) in cells {
+        for (dx, dy) in [(0_i32, -1_i32), (0, 1), (-1, 0), (1, 0)] {
+            let nx = x as i32 + dx;
+            let ny = y as i32 + dy;
+            if nx < 0 || nx >= n as i32 || ny < 0 || ny >= n as i32 {
+                continue;
+            }
+            let adjacent_departure_time_ticks = occupied_until_ticks[nx as usize][ny as usize];
+            if adjacent_departure_time_ticks == 0 {
+                continue;
+            }
+            let difference_ticks =
+                departure_time_ticks.abs_diff(adjacent_departure_time_ticks) as f64;
+            let expected_arrival_count = difference_ticks * estimated_arrival_rate_per_tick;
+            score += (-expected_arrival_count).exp();
+        }
+    }
+    score
+}
+
 fn evaluate_region(
     cells: &[Cell],
     grass: &[Vec<bool>],
     occupied: &[Vec<bool>],
-    value: i64,
-    duration_ticks: i64,
+    occupied_until_ticks: &[Vec<i64>],
+    context: &PlacementEvaluationContext,
 ) -> f64 {
     let boundary = boundary_len(cells, grass.len());
-    let expected_fee = usage_fee(value, cells.len(), boundary) as f64;
+    let expected_fee = usage_fee(context.value, cells.len(), boundary) as f64;
     expected_fee
         + PLACEMENT_SPACE_WEIGHT_PER_TICK
-            * duration_ticks as f64
+            * context.duration_ticks as f64
             * remaining_square_score(cells, grass, occupied)
+        + DEPARTURE_AFFINITY_WEIGHT
+            * departure_affinity_score(
+                cells,
+                occupied_until_ticks,
+                context.departure_time_ticks,
+                context.estimated_arrival_rate_per_tick,
+            )
 }
 
 fn find_best_region(
     grass: &[Vec<bool>],
     components: &AvailableComponents,
     occupied: &[Vec<bool>],
+    occupied_until_ticks: &[Vec<i64>],
     required_size: usize,
-    value: i64,
-    duration_ticks: i64,
+    context: &PlacementEvaluationContext,
     deadline: Instant,
 ) -> Option<Vec<(usize, usize)>> {
     let n = grass.len();
@@ -284,7 +332,13 @@ fn find_best_region(
         for &(x, y) in &cells {
             included_in_candidates[x][y] = true;
         }
-        let evaluation = evaluate_region(cells.as_slice(), grass, occupied, value, duration_ticks);
+        let evaluation = evaluate_region(
+            cells.as_slice(),
+            grass,
+            occupied,
+            occupied_until_ticks,
+            context,
+        );
         if best_candidate
             .as_ref()
             .is_none_or(|(best_evaluation, _)| evaluation > *best_evaluation)
@@ -351,6 +405,7 @@ fn main() {
         .collect();
     let grass_area = grass.iter().flatten().filter(|&&cell| cell).count();
     let mut occupied = vec![vec![false; N]; N];
+    let mut occupied_until_ticks = vec![vec![0_i64; N]; N];
     let mut regions: Vec<Vec<(usize, usize)>> = vec![Vec::new(); M];
     let mut departure_time_ticks = vec![0_i64; M];
     let mut group_ids = vec![0_usize; M];
@@ -378,6 +433,7 @@ fn main() {
             if active[j] && departure_time_ticks[j] < arrival_time_ticks {
                 for &(x, y) in &regions[j] {
                     occupied[x][y] = false;
+                    occupied_until_ticks[x][y] = 0;
                 }
                 active[j] = false;
             }
@@ -395,11 +451,19 @@ fn main() {
             / (DURATION_PRIOR_WEIGHT + i as f64 + 1.0);
         let remaining_group_count = M - i - 1;
         let remaining_time_ticks = TIME_HORIZON_TICKS - arrival_time_ticks;
+        let estimated_arrival_rate_per_tick =
+            remaining_group_count as f64 / remaining_time_ticks as f64;
         let estimated_load =
             remaining_group_count as f64 * AVERAGE_GROUP_SIZE * estimated_mean_duration_ticks
                 / (remaining_time_ticks as f64 * grass_area as f64);
         let remaining_turn_ratio = remaining_group_count as f64 / (M - 1) as f64;
         let efficiency_threshold = EARLY_EFFICIENCY_THRESHOLD * remaining_turn_ratio;
+        let placement_context = PlacementEvaluationContext {
+            value: v,
+            duration_ticks,
+            departure_time_ticks: departure_time_ticks_for_group,
+            estimated_arrival_rate_per_tick,
+        };
 
         let started_at = Instant::now();
         let search_deadline = started_at + Duration::from_micros(SEARCH_TIME_LIMIT_US);
@@ -411,9 +475,9 @@ fn main() {
                 &grass,
                 components,
                 &occupied,
+                &occupied_until_ticks,
                 p,
-                v,
-                duration_ticks,
+                &placement_context,
                 search_deadline,
             )
         });
@@ -440,6 +504,7 @@ fn main() {
             for &(x, y) in &cells {
                 writeln!(out, "{x} {y}").unwrap();
                 occupied[x][y] = true;
+                occupied_until_ticks[x][y] = departure_time_ticks_for_group;
             }
             regions[i] = cells;
             maximum_boundaries[i] = normal_boundary.unwrap();
@@ -472,6 +537,7 @@ fn main() {
 
                     for &(x, y) in &regions[j] {
                         occupied[x][y] = false;
+                        occupied_until_ticks[x][y] = 0;
                     }
 
                     let arriving_region =
@@ -481,9 +547,9 @@ fn main() {
                                     &grass,
                                     &components,
                                     &occupied,
+                                    &occupied_until_ticks,
                                     p,
-                                    v,
-                                    duration_ticks,
+                                    &placement_context,
                                     search_deadline,
                                 )
                             });
@@ -505,8 +571,15 @@ fn main() {
                         if !reject_arriving_region {
                             for &(x, y) in &arriving_cells {
                                 occupied[x][y] = true;
+                                occupied_until_ticks[x][y] = departure_time_ticks_for_group;
                             }
 
+                            let moved_placement_context = PlacementEvaluationContext {
+                                value: values[j],
+                                duration_ticks: departure_time_ticks[j] - arrival_time_ticks,
+                                departure_time_ticks: departure_time_ticks[j],
+                                estimated_arrival_rate_per_tick,
+                            };
                             let moved_region = calculate_available_component_sizes(
                                 &grass,
                                 &occupied,
@@ -517,9 +590,9 @@ fn main() {
                                     &grass,
                                     &components,
                                     &occupied,
+                                    &occupied_until_ticks,
                                     group_sizes[j],
-                                    values[j],
-                                    departure_time_ticks[j] - arrival_time_ticks,
+                                    &moved_placement_context,
                                     search_deadline,
                                 )
                             });
@@ -541,6 +614,7 @@ fn main() {
 
                             for &(x, y) in &arriving_cells {
                                 occupied[x][y] = false;
+                                occupied_until_ticks[x][y] = 0;
                             }
                             if let Some((moved_cells, moved_maximum_boundary)) = moved_candidate {
                                 candidate =
@@ -556,9 +630,11 @@ fn main() {
                     if let Some((arriving_cells, moved_cells, moved_maximum_boundary)) = candidate {
                         for &(x, y) in &arriving_cells {
                             occupied[x][y] = true;
+                            occupied_until_ticks[x][y] = departure_time_ticks_for_group;
                         }
                         for &(x, y) in &moved_cells {
                             occupied[x][y] = true;
+                            occupied_until_ticks[x][y] = departure_time_ticks[j];
                         }
                         accepted_move =
                             Some((j, arriving_cells, moved_cells, moved_maximum_boundary));
@@ -567,6 +643,7 @@ fn main() {
 
                     for &(x, y) in &regions[j] {
                         occupied[x][y] = true;
+                        occupied_until_ticks[x][y] = departure_time_ticks[j];
                     }
                 }
             }
