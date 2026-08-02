@@ -1,5 +1,8 @@
 use proconio::input;
 use proconio::marker::Chars;
+use rand::SeedableRng;
+use rand::rngs::SmallRng;
+use rand::seq::SliceRandom;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::io::{self, Write};
@@ -302,8 +305,10 @@ fn find_best_region(
 ) -> Option<Vec<(usize, usize)>> {
     let n = grass.len();
     let mut included_in_candidates = vec![vec![false; n]; n];
+    let mut used_as_start = vec![vec![false; n]; n];
     let mut next_start_index = 0;
     let mut best_candidate: Option<(f64, Vec<Cell>)> = None;
+    let mut exhausted_ordered_starts = false;
 
     loop {
         if Instant::now() >= deadline {
@@ -321,8 +326,10 @@ fn find_best_region(
             }
         }
         let Some(start) = start else {
+            exhausted_ordered_starts = true;
             break;
         };
+        used_as_start[start.0][start.1] = true;
 
         let Some(cells) = find_region_from_start(grass, occupied, start, required_size, deadline)
         else {
@@ -344,6 +351,47 @@ fn find_best_region(
             .is_none_or(|(best_evaluation, _)| evaluation > *best_evaluation)
         {
             best_candidate = Some((evaluation, cells));
+        }
+    }
+
+    if exhausted_ordered_starts && Instant::now() < deadline {
+        let mut unused_starts = Vec::new();
+        for (x, used_row) in used_as_start.iter().enumerate() {
+            if Instant::now() >= deadline {
+                return best_candidate.map(|(_, cells)| cells);
+            }
+            for (y, &used) in used_row.iter().enumerate() {
+                if components.sizes[x][y] >= required_size && !used {
+                    unused_starts.push((x, y));
+                }
+            }
+        }
+        let mut rng = SmallRng::seed_from_u64(0);
+        unused_starts.shuffle(&mut rng);
+
+        for start in unused_starts {
+            if Instant::now() >= deadline {
+                break;
+            }
+
+            let Some(cells) =
+                find_region_from_start(grass, occupied, start, required_size, deadline)
+            else {
+                break;
+            };
+            let evaluation = evaluate_region(
+                cells.as_slice(),
+                grass,
+                occupied,
+                occupied_until_ticks,
+                context,
+            );
+            if best_candidate
+                .as_ref()
+                .is_none_or(|(best_evaluation, _)| evaluation > *best_evaluation)
+            {
+                best_candidate = Some((evaluation, cells));
+            }
         }
     }
 
