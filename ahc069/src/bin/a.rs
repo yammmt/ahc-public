@@ -13,8 +13,8 @@ const M: usize = 1000;
 const SEARCH_TIME_LIMIT_US: u64 = 1_300;
 // 各グループに対する配置・移動処理の絶対時間制限 (microseconds)
 const HARD_TIME_LIMIT_US: u64 = 1_500;
-// 残された空き正方形領域を評価する重み λ
-const REMAINING_AREA_WEIGHT: f64 = 0.02;
+// 残された空き正方形領域の 1 tick あたりの評価重み λ
+const PLACEMENT_SPACE_WEIGHT_PER_TICK: f64 = 0.5;
 // 人数の最大値 150 を収められる正方形の最小の一辺
 const MAX_SQUARE_SIDE: usize = 13;
 // グループの生成に用いられる問題内時刻の上限
@@ -228,9 +228,19 @@ fn remaining_square_score(cells: &[Cell], grass: &[Vec<bool>], occupied: &[Vec<b
     score
 }
 
-fn evaluate_region(cells: &[Cell], grass: &[Vec<bool>], occupied: &[Vec<bool>]) -> f64 {
-    let compactness = 4.0 * (cells.len() as f64).sqrt() / boundary_len(cells, grass.len()) as f64;
-    compactness + REMAINING_AREA_WEIGHT * remaining_square_score(cells, grass, occupied)
+fn evaluate_region(
+    cells: &[Cell],
+    grass: &[Vec<bool>],
+    occupied: &[Vec<bool>],
+    value: i64,
+    duration_ticks: i64,
+) -> f64 {
+    let boundary = boundary_len(cells, grass.len());
+    let expected_fee = usage_fee(value, cells.len(), boundary) as f64;
+    expected_fee
+        + PLACEMENT_SPACE_WEIGHT_PER_TICK
+            * duration_ticks as f64
+            * remaining_square_score(cells, grass, occupied)
 }
 
 fn find_best_region(
@@ -238,6 +248,8 @@ fn find_best_region(
     components: &AvailableComponents,
     occupied: &[Vec<bool>],
     required_size: usize,
+    value: i64,
+    duration_ticks: i64,
     deadline: Instant,
 ) -> Option<Vec<(usize, usize)>> {
     let n = grass.len();
@@ -272,7 +284,7 @@ fn find_best_region(
         for &(x, y) in &cells {
             included_in_candidates[x][y] = true;
         }
-        let evaluation = evaluate_region(&cells, grass, occupied);
+        let evaluation = evaluate_region(cells.as_slice(), grass, occupied, value, duration_ticks);
         if best_candidate
             .as_ref()
             .is_none_or(|(best_evaluation, _)| evaluation > *best_evaluation)
@@ -395,7 +407,15 @@ fn main() {
         let available_components =
             calculate_available_component_sizes(&grass, &occupied, search_deadline);
         let normal_region = available_components.as_ref().and_then(|components| {
-            find_best_region(&grass, components, &occupied, p, search_deadline)
+            find_best_region(
+                &grass,
+                components,
+                &occupied,
+                p,
+                v,
+                duration_ticks,
+                search_deadline,
+            )
         });
         let normal_boundary = normal_region.as_ref().map(|cells| boundary_len(cells, N));
         let reject_normal_region = normal_boundary.is_some_and(|boundary| {
@@ -457,7 +477,15 @@ fn main() {
                     let arriving_region =
                         calculate_available_component_sizes(&grass, &occupied, search_deadline)
                             .and_then(|components| {
-                                find_best_region(&grass, &components, &occupied, p, search_deadline)
+                                find_best_region(
+                                    &grass,
+                                    &components,
+                                    &occupied,
+                                    p,
+                                    v,
+                                    duration_ticks,
+                                    search_deadline,
+                                )
                             });
 
                     let mut candidate = None;
@@ -490,6 +518,8 @@ fn main() {
                                     &components,
                                     &occupied,
                                     group_sizes[j],
+                                    values[j],
+                                    departure_time_ticks[j] - arrival_time_ticks,
                                     search_deadline,
                                 )
                             });
