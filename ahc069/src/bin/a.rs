@@ -29,8 +29,10 @@ const AVERAGE_GROUP_SIZE: f64 = 59.5;
 // 滞在時間の平均を推定する際の事前分布
 const DURATION_PRIOR_MEAN_TICKS: f64 = 5_000.0;
 const DURATION_PRIOR_WEIGHT: f64 = 20.0;
-// 序盤に明確に効率が悪いとみなす利用料 / セル時間の上限
-const EARLY_EFFICIENCY_THRESHOLD: f64 = 0.50;
+// 池がまとまっている盤面で、序盤に明確に効率が悪いとみなす利用料 / セル時間の上限
+const EARLY_EFFICIENCY_THRESHOLD_BASE: f64 = 0.60;
+// 池が最も散在している盤面における、残りターン比率を掛ける前の開始時点の効率閾値
+const EARLY_EFFICIENCY_THRESHOLD_MIN: f64 = 0.20;
 type Cell = (usize, usize);
 
 struct PlacementEvaluationContext {
@@ -205,6 +207,35 @@ fn boundary_len(cells: &[(usize, usize)], n: usize) -> usize {
     }
 
     boundary
+}
+
+fn calculate_early_efficiency_threshold(grass: &[Vec<bool>]) -> f64 {
+    let grass_count = grass.iter().flatten().filter(|&&cell| cell).count();
+    let pond_count = grass.len() * grass.len() - grass_count;
+    if grass_count == 0 || pond_count == 0 {
+        return EARLY_EFFICIENCY_THRESHOLD_BASE;
+    }
+
+    // 芝生と池が接する辺を数える。各辺は右と下だけを見て 1 回ずつ数える。
+    let n = grass.len();
+    let mut grass_pond_boundary = 0_usize;
+    for x in 0..n {
+        for y in 0..n {
+            if x + 1 < n && grass[x][y] != grass[x + 1][y] {
+                grass_pond_boundary += 1;
+            }
+            if y + 1 < n && grass[x][y] != grass[x][y + 1] {
+                grass_pond_boundary += 1;
+            }
+        }
+    }
+
+    // 少ない方のセルがすべて反対種のセルに囲まれた場合を散在度 1 とする。
+    let maximum_boundary = 4 * grass_count.min(pond_count);
+    let fragmentation = grass_pond_boundary as f64 / maximum_boundary as f64;
+
+    EARLY_EFFICIENCY_THRESHOLD_BASE
+        - (EARLY_EFFICIENCY_THRESHOLD_BASE - EARLY_EFFICIENCY_THRESHOLD_MIN) * fragmentation
 }
 
 fn remaining_square_score(cells: &[Cell], grass: &[Vec<bool>], occupied: &[Vec<bool>]) -> f64 {
@@ -452,6 +483,7 @@ fn main() {
         .map(|row| row.into_iter().map(|cell| cell == '.').collect())
         .collect();
     let grass_area = grass.iter().flatten().filter(|&&cell| cell).count();
+    let early_efficiency_threshold = calculate_early_efficiency_threshold(&grass);
     let mut occupied = vec![vec![false; N]; N];
     let mut occupied_until_ticks = vec![vec![0_i64; N]; N];
     let mut regions: Vec<Vec<(usize, usize)>> = vec![Vec::new(); M];
@@ -505,7 +537,7 @@ fn main() {
             remaining_group_count as f64 * AVERAGE_GROUP_SIZE * estimated_mean_duration_ticks
                 / (remaining_time_ticks as f64 * grass_area as f64);
         let remaining_turn_ratio = remaining_group_count as f64 / (M - 1) as f64;
-        let efficiency_threshold = EARLY_EFFICIENCY_THRESHOLD * remaining_turn_ratio;
+        let efficiency_threshold = early_efficiency_threshold * remaining_turn_ratio;
         let placement_context = PlacementEvaluationContext {
             value: v,
             duration_ticks,
