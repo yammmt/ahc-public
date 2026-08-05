@@ -38,6 +38,43 @@ const GROUP_SIZE_EFFICIENCY_THRESHOLD_MULTIPLIERS: [(usize, f64); 4] =
     [(30, 1.00), (70, 0.95), (110, 0.90), (150, 0.85)];
 type Cell = (usize, usize);
 
+const BOARD_MASK: u64 = (1_u64 << N) - 1;
+
+#[derive(Clone)]
+struct BitBoard {
+    rows: [u64; N],
+}
+
+impl BitBoard {
+    fn empty() -> Self {
+        Self { rows: [0; N] }
+    }
+
+    fn contains(&self, x: usize, y: usize) -> bool {
+        self.rows[x] & (1_u64 << y) != 0
+    }
+
+    fn insert(&mut self, x: usize, y: usize) {
+        self.rows[x] |= 1_u64 << y;
+    }
+
+    fn remove(&mut self, x: usize, y: usize) {
+        self.rows[x] &= !(1_u64 << y);
+    }
+
+    fn count(&self) -> usize {
+        self.rows.iter().map(|row| row.count_ones() as usize).sum()
+    }
+
+    fn from_cells(cells: &[Cell]) -> Self {
+        let mut board = Self::empty();
+        for &(x, y) in cells {
+            board.insert(x, y);
+        }
+        board
+    }
+}
+
 struct PlacementEvaluationContext {
     value: i64,
     duration_ticks: i64,
@@ -46,81 +83,85 @@ struct PlacementEvaluationContext {
 }
 
 struct AvailableComponents {
-    sizes: Vec<Vec<usize>>,
-    ids: Vec<Vec<usize>>,
-    starts: Vec<Cell>,
+    ids: [usize; N * N],
+    sizes: Vec<usize>,
 }
 
 fn calculate_available_component_sizes(
-    grass: &[Vec<bool>],
-    occupied: &[Vec<bool>],
+    grass: &BitBoard,
+    occupied: &BitBoard,
     deadline: Instant,
 ) -> Option<AvailableComponents> {
-    let n = grass.len();
-    let mut component_sizes = vec![vec![0; n]; n];
-    let mut component_ids = vec![vec![usize::MAX; n]; n];
-    let mut component_starts = Vec::new();
+    let mut unvisited = [0_u64; N];
+    for (x, row) in unvisited.iter_mut().enumerate() {
+        *row = grass.rows[x] & !occupied.rows[x] & BOARD_MASK;
+    }
+    let mut component_ids = [usize::MAX; N * N];
+    let mut component_sizes = Vec::new();
+    let mut queue = [0_usize; N * N];
 
-    for start_x in 0..n {
-        for start_y in 0..n {
+    for start_x in 0..N {
+        while unvisited[start_x] != 0 {
             if Instant::now() >= deadline {
                 return None;
             }
-            if !grass[start_x][start_y]
-                || occupied[start_x][start_y]
-                || component_sizes[start_x][start_y] != 0
-            {
-                continue;
-            }
+            let start_y = unvisited[start_x].trailing_zeros() as usize;
+            let start_index = start_x * N + start_y;
+            let component_id = component_sizes.len();
+            let mut head = 0;
+            let mut tail = 1;
+            queue[0] = start_index;
+            unvisited[start_x] &= !(1_u64 << start_y);
+            component_ids[start_index] = component_id;
 
-            let mut cells = vec![(start_x, start_y)];
-            let mut cursor = 0;
-            let component_id = component_starts.len();
-            component_sizes[start_x][start_y] = usize::MAX;
-            component_ids[start_x][start_y] = component_id;
-            component_starts.push((start_x, start_y));
-
-            while cursor < cells.len() {
+            while head < tail {
                 if Instant::now() >= deadline {
                     return None;
                 }
-                let (x, y) = cells[cursor];
-                cursor += 1;
+                let index = queue[head];
+                head += 1;
+                let x = index / N;
+                let y = index % N;
 
-                for (dx, dy) in [(0_i32, -1_i32), (0, 1), (-1, 0), (1, 0)] {
-                    let nx = x as i32 + dx;
-                    let ny = y as i32 + dy;
-                    if nx < 0 || nx >= n as i32 || ny < 0 || ny >= n as i32 {
-                        continue;
+                let mut push = |nx: usize, ny: usize| {
+                    let bit = 1_u64 << ny;
+                    if unvisited[nx] & bit != 0 {
+                        unvisited[nx] &= !bit;
+                        let next_index = nx * N + ny;
+                        component_ids[next_index] = component_id;
+                        queue[tail] = next_index;
+                        tail += 1;
                     }
-                    let (nx, ny) = (nx as usize, ny as usize);
-                    if grass[nx][ny] && !occupied[nx][ny] && component_sizes[nx][ny] == 0 {
-                        component_sizes[nx][ny] = usize::MAX;
-                        component_ids[nx][ny] = component_id;
-                        cells.push((nx, ny));
-                    }
+                };
+                if y > 0 {
+                    push(x, y - 1);
+                }
+                if y + 1 < N {
+                    push(x, y + 1);
+                }
+                if x > 0 {
+                    push(x - 1, y);
+                }
+                if x + 1 < N {
+                    push(x + 1, y);
                 }
             }
-
-            for (x, y) in cells {
-                component_sizes[x][y] = cursor;
-            }
+            component_sizes.push(tail);
         }
     }
 
     Some(AvailableComponents {
-        sizes: component_sizes,
         ids: component_ids,
-        starts: component_starts,
+        sizes: component_sizes,
     })
 }
 
 fn available_size_after_release(
     region: &[Cell],
-    occupied: &[Vec<bool>],
+    occupied: &BitBoard,
     components: &AvailableComponents,
 ) -> usize {
-    let mut seen_components = vec![false; components.starts.len()];
+    let mut seen_components = vec![false; components.sizes.len()];
     let mut available_size = region.len();
 
     for &(x, y) in region {
@@ -131,10 +172,13 @@ fn available_size_after_release(
                 continue;
             }
             let (nx, ny) = (nx as usize, ny as usize);
-            let component_id = components.ids[nx][ny];
-            if !occupied[nx][ny] && component_id != usize::MAX && !seen_components[component_id] {
+            let component_id = components.ids[nx * N + ny];
+            if !occupied.contains(nx, ny)
+                && component_id != usize::MAX
+                && !seen_components[component_id]
+            {
                 seen_components[component_id] = true;
-                available_size += components.sizes[nx][ny];
+                available_size += components.sizes[component_id];
             }
         }
     }
@@ -143,20 +187,19 @@ fn available_size_after_release(
 }
 
 fn find_region_from_start(
-    grass: &[Vec<bool>],
-    occupied: &[Vec<bool>],
+    grass: &BitBoard,
+    occupied: &BitBoard,
     start: (usize, usize),
     required_size: usize,
     deadline: Instant,
 ) -> Option<Vec<(usize, usize)>> {
-    let n = grass.len();
     let (x, y) = start;
-    let mut visited = vec![vec![false; n]; n];
+    let mut visited = BitBoard::empty();
     // 探索始点からのチェビシェフ距離が小さい候補を優先する。
     // Reverse により、距離・座標の昇順で取り出す min-heap として使う。
     let mut queue = BinaryHeap::from([Reverse((0_usize, x, y))]);
     let mut cells = Vec::with_capacity(required_size);
-    visited[x][y] = true;
+    visited.insert(x, y);
 
     while let Some(Reverse((_, cx, cy))) = queue.pop() {
         if Instant::now() >= deadline {
@@ -172,12 +215,12 @@ fn find_region_from_start(
         for (dx, dy) in [(0_i32, -1_i32), (0, 1), (-1, 0), (1, 0)] {
             let nx = cx as i32 + dx;
             let ny = cy as i32 + dy;
-            if nx < 0 || nx >= n as i32 || ny < 0 || ny >= n as i32 {
+            if nx < 0 || nx >= N as i32 || ny < 0 || ny >= N as i32 {
                 continue;
             }
             let (nx, ny) = (nx as usize, ny as usize);
-            if grass[nx][ny] && !occupied[nx][ny] && !visited[nx][ny] {
-                visited[nx][ny] = true;
+            if grass.contains(nx, ny) && !occupied.contains(nx, ny) && !visited.contains(nx, ny) {
+                visited.insert(nx, ny);
                 let distance = nx.abs_diff(x).max(ny.abs_diff(y));
                 queue.push(Reverse((distance, nx, ny)));
             }
@@ -187,49 +230,34 @@ fn find_region_from_start(
     None
 }
 
-fn boundary_len(cells: &[(usize, usize)], n: usize) -> usize {
-    let mut in_region = vec![vec![false; n]; n];
-    for &(x, y) in cells {
-        in_region[x][y] = true;
-    }
-
+fn boundary_len(cells: &[Cell]) -> usize {
+    let region = BitBoard::from_cells(cells);
     let mut boundary = 0;
-    for &(x, y) in cells {
-        for (dx, dy) in [(0_i32, -1_i32), (0, 1), (-1, 0), (1, 0)] {
-            let nx = x as i32 + dx;
-            let ny = y as i32 + dy;
-            if nx < 0
-                || nx >= n as i32
-                || ny < 0
-                || ny >= n as i32
-                || !in_region[nx as usize][ny as usize]
-            {
-                boundary += 1;
-            }
-        }
+    for x in 0..N {
+        let row = region.rows[x];
+        boundary += (row & !(row << 1)).count_ones() as usize;
+        boundary += (row & !(row >> 1)).count_ones() as usize;
+        boundary +=
+            (row & !region.rows.get(x.wrapping_sub(1)).copied().unwrap_or(0)).count_ones() as usize;
+        boundary += (row & !region.rows.get(x + 1).copied().unwrap_or(0)).count_ones() as usize;
     }
-
     boundary
 }
 
-fn calculate_early_efficiency_threshold(grass: &[Vec<bool>]) -> f64 {
-    let grass_count = grass.iter().flatten().filter(|&&cell| cell).count();
-    let pond_count = grass.len() * grass.len() - grass_count;
+fn calculate_early_efficiency_threshold(grass: &BitBoard) -> f64 {
+    let grass_count = grass.count();
+    let pond_count = N * N - grass_count;
     if grass_count == 0 || pond_count == 0 {
         return EARLY_EFFICIENCY_THRESHOLD_BASE;
     }
 
     // 芝生と池が接する辺を数える。各辺は右と下だけを見て 1 回ずつ数える。
-    let n = grass.len();
     let mut grass_pond_boundary = 0_usize;
-    for x in 0..n {
-        for y in 0..n {
-            if x + 1 < n && grass[x][y] != grass[x + 1][y] {
-                grass_pond_boundary += 1;
-            }
-            if y + 1 < n && grass[x][y] != grass[x][y + 1] {
-                grass_pond_boundary += 1;
-            }
+    for x in 0..N {
+        grass_pond_boundary += ((grass.rows[x] ^ (grass.rows[x] >> 1)) & ((1_u64 << (N - 1)) - 1))
+            .count_ones() as usize;
+        if x + 1 < N {
+            grass_pond_boundary += (grass.rows[x] ^ grass.rows[x + 1]).count_ones() as usize;
         }
     }
 
@@ -253,24 +281,22 @@ fn group_size_efficiency_threshold_multiplier(group_size: usize) -> f64 {
         .1
 }
 
-fn remaining_square_score(cells: &[Cell], grass: &[Vec<bool>], occupied: &[Vec<bool>]) -> f64 {
-    let n = grass.len();
-    let mut in_region = vec![vec![false; n]; n];
-    for &(x, y) in cells {
-        in_region[x][y] = true;
-    }
+fn remaining_square_score(cells: &[Cell], grass: &BitBoard, occupied: &BitBoard) -> f64 {
+    let in_region = BitBoard::from_cells(cells);
 
     // largest_square[x][y] は (x, y) を左上とする空き正方形の最大の一辺。
-    let mut largest_square = vec![vec![0_usize; n + 1]; n + 1];
+    let mut largest_square = [0_u8; (N + 1) * (N + 1)];
     let mut side_histogram = [0_usize; MAX_SQUARE_SIDE + 1];
-    for x in (0..n).rev() {
-        for y in (0..n).rev() {
-            if grass[x][y] && !occupied[x][y] && !in_region[x][y] {
-                let side = 1 + largest_square[x + 1][y]
-                    .min(largest_square[x][y + 1])
-                    .min(largest_square[x + 1][y + 1]);
-                largest_square[x][y] = side;
-                side_histogram[side.min(MAX_SQUARE_SIDE)] += 1;
+    for x in (0..N).rev() {
+        let available = grass.rows[x] & !occupied.rows[x] & !in_region.rows[x];
+        for y in (0..N).rev() {
+            if available & (1_u64 << y) != 0 {
+                let index = x * (N + 1) + y;
+                let side = 1 + largest_square[index + N + 1]
+                    .min(largest_square[index + 1])
+                    .min(largest_square[index + N + 2]);
+                largest_square[index] = side;
+                side_histogram[(side as usize).min(MAX_SQUARE_SIDE)] += 1;
             }
         }
     }
@@ -320,12 +346,12 @@ fn departure_affinity_score(
 
 fn evaluate_region(
     cells: &[Cell],
-    grass: &[Vec<bool>],
-    occupied: &[Vec<bool>],
+    grass: &BitBoard,
+    occupied: &BitBoard,
     occupied_until_ticks: &[Vec<i64>],
     context: &PlacementEvaluationContext,
 ) -> f64 {
-    let boundary = boundary_len(cells, grass.len());
+    let boundary = boundary_len(cells);
     let expected_fee = usage_fee(context.value, cells.len(), boundary) as f64;
     expected_fee
         + PLACEMENT_SPACE_WEIGHT_PER_TICK
@@ -341,17 +367,16 @@ fn evaluate_region(
 }
 
 fn find_best_region(
-    grass: &[Vec<bool>],
+    grass: &BitBoard,
     components: &AvailableComponents,
-    occupied: &[Vec<bool>],
+    occupied: &BitBoard,
     occupied_until_ticks: &[Vec<i64>],
     required_size: usize,
     context: &PlacementEvaluationContext,
     deadline: Instant,
 ) -> Option<Vec<(usize, usize)>> {
-    let n = grass.len();
-    let mut included_in_candidates = vec![vec![false; n]; n];
-    let mut used_as_start = vec![vec![false; n]; n];
+    let mut included_in_candidates = BitBoard::empty();
+    let mut used_as_start = BitBoard::empty();
     let mut next_start_index = 0;
     let mut best_candidate: Option<(f64, Vec<Cell>)> = None;
     let mut exhausted_ordered_starts = false;
@@ -362,11 +387,15 @@ fn find_best_region(
         }
 
         let mut start = None;
-        while next_start_index < n * n {
-            let x = next_start_index / n;
-            let y = next_start_index % n;
+        while next_start_index < N * N {
+            let x = next_start_index / N;
+            let y = next_start_index % N;
             next_start_index += 1;
-            if components.sizes[x][y] >= required_size && !included_in_candidates[x][y] {
+            let component_id = components.ids[x * N + y];
+            if component_id != usize::MAX
+                && components.sizes[component_id] >= required_size
+                && !included_in_candidates.contains(x, y)
+            {
                 start = Some((x, y));
                 break;
             }
@@ -375,7 +404,7 @@ fn find_best_region(
             exhausted_ordered_starts = true;
             break;
         };
-        used_as_start[start.0][start.1] = true;
+        used_as_start.insert(start.0, start.1);
 
         let Some(cells) = find_region_from_start(grass, occupied, start, required_size, deadline)
         else {
@@ -383,7 +412,7 @@ fn find_best_region(
         };
 
         for &(x, y) in &cells {
-            included_in_candidates[x][y] = true;
+            included_in_candidates.insert(x, y);
         }
         let evaluation = evaluate_region(
             cells.as_slice(),
@@ -402,12 +431,16 @@ fn find_best_region(
 
     if exhausted_ordered_starts && Instant::now() < deadline {
         let mut unused_starts = Vec::new();
-        for (x, used_row) in used_as_start.iter().enumerate() {
+        for x in 0..N {
             if Instant::now() >= deadline {
                 return best_candidate.map(|(_, cells)| cells);
             }
-            for (y, &used) in used_row.iter().enumerate() {
-                if components.sizes[x][y] >= required_size && !used {
+            for y in 0..N {
+                let component_id = components.ids[x * N + y];
+                if component_id != usize::MAX
+                    && components.sizes[component_id] >= required_size
+                    && !used_as_start.contains(x, y)
+                {
                     unused_starts.push((x, y));
                 }
             }
@@ -493,13 +526,17 @@ fn main() {
         r: String,
         rows: [Chars; N],
     }
-    let grass: Vec<Vec<bool>> = rows
-        .into_iter()
-        .map(|row| row.into_iter().map(|cell| cell == '.').collect())
-        .collect();
-    let grass_area = grass.iter().flatten().filter(|&&cell| cell).count();
+    let mut grass = BitBoard::empty();
+    for (x, row) in rows.into_iter().enumerate() {
+        for (y, cell) in row.into_iter().enumerate() {
+            if cell == '.' {
+                grass.insert(x, y);
+            }
+        }
+    }
+    let grass_area = grass.count();
     let early_efficiency_threshold = calculate_early_efficiency_threshold(&grass);
-    let mut occupied = vec![vec![false; N]; N];
+    let mut occupied = BitBoard::empty();
     let mut occupied_until_ticks = vec![vec![0_i64; N]; N];
     let mut regions: Vec<Vec<(usize, usize)>> = vec![Vec::new(); M];
     let mut departure_time_ticks = vec![0_i64; M];
@@ -527,7 +564,7 @@ fn main() {
         for j in 0..i {
             if active[j] && departure_time_ticks[j] < arrival_time_ticks {
                 for &(x, y) in &regions[j] {
-                    occupied[x][y] = false;
+                    occupied.remove(x, y);
                     occupied_until_ticks[x][y] = 0;
                 }
                 active[j] = false;
@@ -578,7 +615,7 @@ fn main() {
                 search_deadline,
             )
         });
-        let normal_boundary = normal_region.as_ref().map(|cells| boundary_len(cells, N));
+        let normal_boundary = normal_region.as_ref().map(|cells| boundary_len(cells));
         let reject_normal_region = normal_boundary.is_some_and(|boundary| {
             should_reject_by_efficiency(
                 v,
@@ -600,7 +637,7 @@ fn main() {
             writeln!(out, "Yes").unwrap();
             for &(x, y) in &cells {
                 writeln!(out, "{x} {y}").unwrap();
-                occupied[x][y] = true;
+                occupied.insert(x, y);
                 occupied_until_ticks[x][y] = departure_time_ticks_for_group;
             }
             regions[i] = cells;
@@ -633,7 +670,7 @@ fn main() {
                     }
 
                     for &(x, y) in &regions[j] {
-                        occupied[x][y] = false;
+                        occupied.remove(x, y);
                         occupied_until_ticks[x][y] = 0;
                     }
 
@@ -655,7 +692,7 @@ fn main() {
                     if let Some(arriving_cells) = arriving_region
                         && Instant::now() < hard_deadline
                     {
-                        let arriving_boundary = boundary_len(&arriving_cells, N);
+                        let arriving_boundary = boundary_len(&arriving_cells);
                         let reject_arriving_region = should_reject_by_efficiency(
                             v,
                             p,
@@ -667,7 +704,7 @@ fn main() {
 
                         if !reject_arriving_region {
                             for &(x, y) in &arriving_cells {
-                                occupied[x][y] = true;
+                                occupied.insert(x, y);
                                 occupied_until_ticks[x][y] = departure_time_ticks_for_group;
                             }
 
@@ -699,7 +736,7 @@ fn main() {
                                 && Instant::now() < hard_deadline
                             {
                                 let moved_maximum_boundary =
-                                    maximum_boundaries[j].max(boundary_len(&moved_cells, N));
+                                    maximum_boundaries[j].max(boundary_len(&moved_cells));
                                 let score_difference = usage_fee(v, p, arriving_boundary)
                                     - move_cost(values[j], move_cost_rate_milli)
                                     + usage_fee(values[j], group_sizes[j], moved_maximum_boundary)
@@ -710,7 +747,7 @@ fn main() {
                             }
 
                             for &(x, y) in &arriving_cells {
-                                occupied[x][y] = false;
+                                occupied.remove(x, y);
                                 occupied_until_ticks[x][y] = 0;
                             }
                             if let Some((moved_cells, moved_maximum_boundary)) = moved_candidate {
@@ -726,11 +763,11 @@ fn main() {
 
                     if let Some((arriving_cells, moved_cells, moved_maximum_boundary)) = candidate {
                         for &(x, y) in &arriving_cells {
-                            occupied[x][y] = true;
+                            occupied.insert(x, y);
                             occupied_until_ticks[x][y] = departure_time_ticks_for_group;
                         }
                         for &(x, y) in &moved_cells {
-                            occupied[x][y] = true;
+                            occupied.insert(x, y);
                             occupied_until_ticks[x][y] = departure_time_ticks[j];
                         }
                         accepted_move =
@@ -739,7 +776,7 @@ fn main() {
                     }
 
                     for &(x, y) in &regions[j] {
-                        occupied[x][y] = true;
+                        occupied.insert(x, y);
                         occupied_until_ticks[x][y] = departure_time_ticks[j];
                     }
                 }
@@ -759,7 +796,7 @@ fn main() {
                 regions[j] = moved_cells;
                 maximum_boundaries[j] = moved_maximum_boundary;
                 regions[i] = arriving_cells;
-                maximum_boundaries[i] = boundary_len(&regions[i], N);
+                maximum_boundaries[i] = boundary_len(&regions[i]);
                 active[i] = true;
             } else {
                 writeln!(out, "0").unwrap();
