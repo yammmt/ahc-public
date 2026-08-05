@@ -196,12 +196,13 @@ fn find_region_from_start(
     let (x, y) = start;
     let mut visited = BitBoard::empty();
     // 探索始点からのチェビシェフ距離が小さい候補を優先する。
-    // Reverse により、距離・座標の昇順で取り出す min-heap として使う。
-    let mut queue = BinaryHeap::from([Reverse((0_usize, x, y))]);
+    // 同じ距離では正方形の外周を左上から時計回りにたどり、端数を連続させる。
+    // Reverse により、距離・外周上の順番・座標の昇順で取り出す min-heap として使う。
+    let mut queue = BinaryHeap::from([Reverse((0_usize, 0_usize, x, y))]);
     let mut cells = Vec::with_capacity(required_size);
     visited.insert(x, y);
 
-    while let Some(Reverse((_, cx, cy))) = queue.pop() {
+    while let Some(Reverse((_, _, cx, cy))) = queue.pop() {
         if Instant::now() >= deadline {
             return None;
         }
@@ -222,12 +223,39 @@ fn find_region_from_start(
             if grass.contains(nx, ny) && !occupied.contains(nx, ny) && !visited.contains(nx, ny) {
                 visited.insert(nx, ny);
                 let distance = nx.abs_diff(x).max(ny.abs_diff(y));
-                queue.push(Reverse((distance, nx, ny)));
+                let ring_order = chebyshev_ring_order(
+                    nx as isize - x as isize,
+                    ny as isize - y as isize,
+                    distance,
+                );
+                queue.push(Reverse((distance, ring_order, nx, ny)));
             }
         }
     }
 
     None
+}
+
+fn chebyshev_ring_order(dx: isize, dy: isize, distance: usize) -> usize {
+    if distance == 0 {
+        return 0;
+    }
+
+    let d = distance as isize;
+    if dx == -d {
+        // 上辺を左から右へ進む。
+        (dy + d) as usize
+    } else if dy == d {
+        // 右辺を上から下へ進む。右上は上辺に含める。
+        (2 * d + dx + d) as usize
+    } else if dx == d {
+        // 下辺を右から左へ進む。右下は右辺に含める。
+        (4 * d + d - dy) as usize
+    } else {
+        // 左辺を下から上へ進む。両端の角は上下辺に含める。
+        debug_assert_eq!(dy, -d);
+        (6 * d + d - dx) as usize
+    }
 }
 
 fn boundary_len(cells: &[Cell]) -> usize {
