@@ -20,6 +20,10 @@ const HARD_TIME_LIMIT_US: u64 = 1_500;
 const PLACEMENT_SPACE_WEIGHT_PER_TICK: f64 = 0.5;
 // 退去時刻が近いグループと接する共有辺 1 本あたりの評価重み μ
 const DEPARTURE_AFFINITY_WEIGHT: f64 = 60.0;
+// 安価な一次評価から、盤面全体を走査する二次評価へ進める候補数。
+const MAX_FULL_EVALUATION_CANDIDATES: usize = 16;
+// 探索時間のうち、一次評価候補の収集に使う割合。残りを二次評価用に予約する。
+const CANDIDATE_GENERATION_TIME_RATIO: f64 = 0.7;
 // 人数の最大値 150 を収められる正方形の最小の一辺
 const MAX_SQUARE_SIDE: usize = 13;
 // グループの生成に用いられる問題内時刻の上限
@@ -372,19 +376,14 @@ fn departure_affinity_score(
     score
 }
 
-fn evaluate_region(
+fn evaluate_region_cheap(
     cells: &[Cell],
-    grass: &BitBoard,
-    occupied: &BitBoard,
     occupied_until_ticks: &[Vec<i64>],
     context: &PlacementEvaluationContext,
 ) -> f64 {
     let boundary = boundary_len(cells);
     let expected_fee = usage_fee(context.value, cells.len(), boundary) as f64;
     expected_fee
-        + PLACEMENT_SPACE_WEIGHT_PER_TICK
-            * context.duration_ticks as f64
-            * remaining_square_score(cells, grass, occupied)
         + DEPARTURE_AFFINITY_WEIGHT
             * departure_affinity_score(
                 cells,
@@ -392,6 +391,40 @@ fn evaluate_region(
                 context.departure_time_ticks,
                 context.estimated_arrival_rate_per_tick,
             )
+}
+
+fn evaluate_region_fully(
+    cheap_evaluation: f64,
+    cells: &[Cell],
+    grass: &BitBoard,
+    occupied: &BitBoard,
+    context: &PlacementEvaluationContext,
+) -> f64 {
+    cheap_evaluation
+        + PLACEMENT_SPACE_WEIGHT_PER_TICK
+            * context.duration_ticks as f64
+            * remaining_square_score(cells, grass, occupied)
+}
+
+fn retain_cheap_candidate(
+    candidates: &mut Vec<(f64, Vec<Cell>)>,
+    evaluation: f64,
+    cells: Vec<Cell>,
+) {
+    if candidates.len() < MAX_FULL_EVALUATION_CANDIDATES {
+        candidates.push((evaluation, cells));
+        return;
+    }
+
+    let (worst_index, worst_evaluation) = candidates
+        .iter()
+        .enumerate()
+        .min_by(|(_, left), (_, right)| left.0.total_cmp(&right.0))
+        .map(|(index, candidate)| (index, candidate.0))
+        .unwrap();
+    if evaluation > worst_evaluation {
+        candidates[worst_index] = (evaluation, cells);
+    }
 }
 
 fn find_best_region(
@@ -403,14 +436,18 @@ fn find_best_region(
     context: &PlacementEvaluationContext,
     deadline: Instant,
 ) -> Option<Vec<(usize, usize)>> {
+    let candidate_generation_started_at = Instant::now();
+    let remaining_search_time = deadline.saturating_duration_since(candidate_generation_started_at);
+    let candidate_generation_deadline = candidate_generation_started_at
+        + remaining_search_time.mul_f64(CANDIDATE_GENERATION_TIME_RATIO);
     let mut included_in_candidates = BitBoard::empty();
     let mut used_as_start = BitBoard::empty();
     let mut next_start_index = 0;
-    let mut best_candidate: Option<(f64, Vec<Cell>)> = None;
+    let mut cheap_candidates = Vec::with_capacity(MAX_FULL_EVALUATION_CANDIDATES);
     let mut exhausted_ordered_starts = false;
 
     loop {
-        if Instant::now() >= deadline {
+        if Instant::now() >= candidate_generation_deadline {
             break;
         }
 
@@ -434,34 +471,28 @@ fn find_best_region(
         };
         used_as_start.insert(start.0, start.1);
 
-        let Some(cells) = find_region_from_start(grass, occupied, start, required_size, deadline)
-        else {
+        let Some(cells) = find_region_from_start(
+            grass,
+            occupied,
+            start,
+            required_size,
+            candidate_generation_deadline,
+        ) else {
             break;
         };
 
         for &(x, y) in &cells {
             included_in_candidates.insert(x, y);
         }
-        let evaluation = evaluate_region(
-            cells.as_slice(),
-            grass,
-            occupied,
-            occupied_until_ticks,
-            context,
-        );
-        if best_candidate
-            .as_ref()
-            .is_none_or(|(best_evaluation, _)| evaluation > *best_evaluation)
-        {
-            best_candidate = Some((evaluation, cells));
-        }
+        let evaluation = evaluate_region_cheap(&cells, occupied_until_ticks, context);
+        retain_cheap_candidate(&mut cheap_candidates, evaluation, cells);
     }
 
-    if exhausted_ordered_starts && Instant::now() < deadline {
+    if exhausted_ordered_starts && Instant::now() < candidate_generation_deadline {
         let mut unused_starts = Vec::new();
         for x in 0..N {
-            if Instant::now() >= deadline {
-                return best_candidate.map(|(_, cells)| cells);
+            if Instant::now() >= candidate_generation_deadline {
+                break;
             }
             for y in 0..N {
                 let component_id = components.ids[x * N + y];
@@ -477,28 +508,37 @@ fn find_best_region(
         unused_starts.shuffle(&mut rng);
 
         for start in unused_starts {
-            if Instant::now() >= deadline {
+            if Instant::now() >= candidate_generation_deadline {
                 break;
             }
 
-            let Some(cells) =
-                find_region_from_start(grass, occupied, start, required_size, deadline)
-            else {
-                break;
-            };
-            let evaluation = evaluate_region(
-                cells.as_slice(),
+            let Some(cells) = find_region_from_start(
                 grass,
                 occupied,
-                occupied_until_ticks,
-                context,
-            );
-            if best_candidate
-                .as_ref()
-                .is_none_or(|(best_evaluation, _)| evaluation > *best_evaluation)
-            {
-                best_candidate = Some((evaluation, cells));
-            }
+                start,
+                required_size,
+                candidate_generation_deadline,
+            ) else {
+                break;
+            };
+            let evaluation = evaluate_region_cheap(&cells, occupied_until_ticks, context);
+            retain_cheap_candidate(&mut cheap_candidates, evaluation, cells);
+        }
+    }
+
+    cheap_candidates.sort_unstable_by(|left, right| right.0.total_cmp(&left.0));
+    let mut best_candidate: Option<(f64, Vec<Cell>)> = None;
+    for (cheap_evaluation, cells) in cheap_candidates {
+        if best_candidate.is_some() && Instant::now() >= deadline {
+            break;
+        }
+        let evaluation =
+            evaluate_region_fully(cheap_evaluation, cells.as_slice(), grass, occupied, context);
+        if best_candidate
+            .as_ref()
+            .is_none_or(|(best_evaluation, _)| evaluation > *best_evaluation)
+        {
+            best_candidate = Some((evaluation, cells));
         }
     }
 
