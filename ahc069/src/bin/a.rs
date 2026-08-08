@@ -37,7 +37,9 @@ const DURATION_PRIOR_WEIGHT: f64 = 20.0;
 const EARLY_EFFICIENCY_THRESHOLD_BASE: f64 = 0.60;
 // 池が最も散在している盤面における、残りターン比率を掛ける前の開始時点の効率閾値
 const EARLY_EFFICIENCY_THRESHOLD_MIN: f64 = 0.20;
-// 候補受け入れ後の占有率がこの範囲にあるとき、効率閾値を 0 から 1 へ線形に強める。
+// 盤面が空いていても、通常の効率閾値に掛ける倍率をこの値より小さくしない。
+const FILL_GATE_MIN_MULTIPLIER: f64 = 0.70;
+// 候補受け入れ後の占有率がこの範囲にあるとき、効率閾値の倍率を下限から 1 へ線形に強める。
 const FILL_GATE_START_RATIO: f64 = 0.40;
 const FILL_GATE_END_RATIO: f64 = 0.80;
 // (グループ人数の上限, 効率閾値に掛ける倍率)
@@ -318,8 +320,10 @@ fn group_size_efficiency_threshold_multiplier(group_size: usize) -> f64 {
 
 fn calculate_fill_gate(occupied_area: usize, group_size: usize, grass_area: usize) -> f64 {
     let fill_ratio = (occupied_area + group_size) as f64 / grass_area as f64;
-    ((fill_ratio - FILL_GATE_START_RATIO) / (FILL_GATE_END_RATIO - FILL_GATE_START_RATIO))
-        .clamp(0.0, 1.0)
+    let progress = ((fill_ratio - FILL_GATE_START_RATIO)
+        / (FILL_GATE_END_RATIO - FILL_GATE_START_RATIO))
+        .clamp(0.0, 1.0);
+    FILL_GATE_MIN_MULTIPLIER + (1.0 - FILL_GATE_MIN_MULTIPLIER) * progress
 }
 
 fn remaining_square_score(cells: &[Cell], grass: &BitBoard, occupied: &BitBoard) -> f64 {
