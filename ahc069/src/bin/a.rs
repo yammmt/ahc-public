@@ -21,7 +21,7 @@ const PLACEMENT_SPACE_WEIGHT_PER_TICK: f64 = 0.5;
 // 退去時刻が近いグループと接する共有辺 1 本あたりの評価重み μ
 const DEPARTURE_AFFINITY_WEIGHT: f64 = 60.0;
 // 安価な一次評価から、盤面全体を走査する二次評価へ進める候補数。
-const MAX_FULL_EVALUATION_CANDIDATES: usize = 16;
+const MAX_FULL_EVALUATION_CANDIDATES: usize = 64;
 // 探索時間のうち、一次評価候補の収集に使う割合。残りを二次評価用に予約する。
 const CANDIDATE_GENERATION_TIME_RATIO: f64 = 0.7;
 // 人数の最大値 150 を収められる正方形の最小の一辺
