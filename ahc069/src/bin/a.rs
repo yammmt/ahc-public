@@ -37,6 +37,9 @@ const DURATION_PRIOR_WEIGHT: f64 = 20.0;
 const EARLY_EFFICIENCY_THRESHOLD_BASE: f64 = 0.60;
 // 池が最も散在している盤面における、残りターン比率を掛ける前の開始時点の効率閾値
 const EARLY_EFFICIENCY_THRESHOLD_MIN: f64 = 0.20;
+// 候補受け入れ後の占有率がこの範囲にあるとき、効率閾値を 0 から 1 へ線形に強める。
+const FILL_GATE_START_RATIO: f64 = 0.40;
+const FILL_GATE_END_RATIO: f64 = 0.80;
 // (グループ人数の上限, 効率閾値に掛ける倍率)
 const GROUP_SIZE_EFFICIENCY_THRESHOLD_MULTIPLIERS: [(usize, f64); 4] =
     [(30, 1.00), (70, 0.95), (110, 0.90), (150, 0.85)];
@@ -311,6 +314,12 @@ fn group_size_efficiency_threshold_multiplier(group_size: usize) -> f64 {
         .last()
         .unwrap()
         .1
+}
+
+fn calculate_fill_gate(occupied_area: usize, group_size: usize, grass_area: usize) -> f64 {
+    let fill_ratio = (occupied_area + group_size) as f64 / grass_area as f64;
+    ((fill_ratio - FILL_GATE_START_RATIO) / (FILL_GATE_END_RATIO - FILL_GATE_START_RATIO))
+        .clamp(0.0, 1.0)
 }
 
 fn remaining_square_score(cells: &[Cell], grass: &BitBoard, occupied: &BitBoard) -> f64 {
@@ -658,8 +667,9 @@ fn main() {
                 / (remaining_time_ticks as f64 * grass_area as f64);
         let remaining_turn_ratio = remaining_group_count as f64 / (M - 1) as f64;
         let group_size_multiplier = group_size_efficiency_threshold_multiplier(p);
+        let fill_gate = calculate_fill_gate(occupied.count(), p, grass_area);
         let efficiency_threshold =
-            early_efficiency_threshold * group_size_multiplier * remaining_turn_ratio;
+            early_efficiency_threshold * group_size_multiplier * remaining_turn_ratio * fill_gate;
         let placement_context = PlacementEvaluationContext {
             value: v,
             duration_ticks,
