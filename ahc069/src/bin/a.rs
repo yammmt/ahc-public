@@ -98,6 +98,12 @@ struct PlacementEvaluationContext {
     future_value_weight: f64,
 }
 
+struct RegionSearchResult {
+    evaluation: f64,
+    cells: Vec<Cell>,
+    secondary_evaluation_timed_out: bool,
+}
+
 struct AvailableComponents {
     ids: [usize; N * N],
     sizes: Vec<usize>,
@@ -469,7 +475,7 @@ fn find_best_region(
     required_size: usize,
     context: &PlacementEvaluationContext,
     deadline: Instant,
-) -> Option<Vec<(usize, usize)>> {
+) -> Option<RegionSearchResult> {
     let candidate_generation_started_at = Instant::now();
     let remaining_search_time = deadline.saturating_duration_since(candidate_generation_started_at);
     let candidate_generation_deadline = candidate_generation_started_at
@@ -576,7 +582,12 @@ fn find_best_region(
         }
     }
 
-    best_candidate.map(|(_, cells)| cells)
+    let secondary_evaluation_timed_out = best_candidate.is_some() && Instant::now() >= deadline;
+    best_candidate.map(|(evaluation, cells)| RegionSearchResult {
+        evaluation,
+        cells,
+        secondary_evaluation_timed_out,
+    })
 }
 
 fn usage_fee(value: i64, group_size: usize, maximum_boundary: usize) -> i64 {
@@ -720,7 +731,9 @@ fn main() {
                 search_deadline,
             )
         });
-        let normal_boundary = normal_region.as_ref().map(|cells| boundary_len(cells));
+        let normal_boundary = normal_region
+            .as_ref()
+            .map(|result| boundary_len(&result.cells));
         let reject_normal_region = normal_boundary.is_some_and(|boundary| {
             should_reject_by_efficiency(
                 v,
@@ -735,9 +748,11 @@ fn main() {
         if reject_normal_region {
             writeln!(out, "0").unwrap();
             writeln!(out, "No").unwrap();
-        } else if let Some(cells) = normal_region
-            && Instant::now() < hard_deadline
+        } else if let Some(result) = normal_region
+            && (Instant::now() < hard_deadline
+                || (result.secondary_evaluation_timed_out && result.evaluation > 0.0))
         {
+            let cells = result.cells;
             writeln!(out, "0").unwrap();
             writeln!(out, "Yes").unwrap();
             for &(x, y) in &cells {
@@ -791,7 +806,8 @@ fn main() {
                                     &placement_context,
                                     search_deadline,
                                 )
-                            });
+                            })
+                            .map(|result| result.cells);
 
                     let mut candidate = None;
                     if let Some(arriving_cells) = arriving_region
@@ -835,7 +851,8 @@ fn main() {
                                     &moved_placement_context,
                                     search_deadline,
                                 )
-                            });
+                            })
+                            .map(|result| result.cells);
 
                             let mut moved_candidate = None;
                             if let Some(moved_cells) = moved_region
