@@ -20,6 +20,10 @@ const HARD_TIME_LIMIT_US: u64 = 1_500;
 const PLACEMENT_SPACE_WEIGHT_PER_TICK: f64 = 0.5;
 // 退去時刻が近いグループと接する共有辺 1 本あたりの評価重み μ
 const DEPARTURE_AFFINITY_WEIGHT: f64 = 60.0;
+// 将来の盤面価値を弱め始める、残りグループ数。この手前までは倍率 1.0。
+const ENDGAME_FUTURE_VALUE_START_REMAINING_GROUPS: usize = 40;
+// 最終グループ到着時における、将来の盤面価値の倍率。
+const ENDGAME_FUTURE_VALUE_FINAL_MULTIPLIER: f64 = 0.0;
 // 安価な一次評価から、盤面全体を走査する二次評価へ進める候補数。
 const MAX_FULL_EVALUATION_CANDIDATES: usize = 64;
 // 探索時間のうち、一次評価候補の収集に使う割合。残りを二次評価用に予約する。
@@ -89,6 +93,9 @@ struct PlacementEvaluationContext {
     duration_ticks: i64,
     departure_time_ticks: i64,
     estimated_arrival_rate_per_tick: f64,
+    // 残りグループが少ない終盤では、将来の配置のための評価を弱める。
+    // 今回の利用料はこの係数に依存させない。
+    future_value_weight: f64,
 }
 
 struct AvailableComponents {
@@ -326,6 +333,18 @@ fn calculate_fill_gate(occupied_area: usize, group_size: usize, grass_area: usiz
     FILL_GATE_MIN_MULTIPLIER + (1.0 - FILL_GATE_MIN_MULTIPLIER) * progress
 }
 
+fn calculate_future_value_weight(remaining_group_count: usize) -> f64 {
+    if ENDGAME_FUTURE_VALUE_START_REMAINING_GROUPS == 0
+        || remaining_group_count >= ENDGAME_FUTURE_VALUE_START_REMAINING_GROUPS
+    {
+        return 1.0;
+    }
+
+    let progress =
+        remaining_group_count as f64 / ENDGAME_FUTURE_VALUE_START_REMAINING_GROUPS as f64;
+    ENDGAME_FUTURE_VALUE_FINAL_MULTIPLIER + (1.0 - ENDGAME_FUTURE_VALUE_FINAL_MULTIPLIER) * progress
+}
+
 fn remaining_square_score(cells: &[Cell], grass: &BitBoard, occupied: &BitBoard) -> f64 {
     let in_region = BitBoard::from_cells(cells);
 
@@ -397,7 +416,8 @@ fn evaluate_region_cheap(
     let boundary = boundary_len(cells);
     let expected_fee = usage_fee(context.value, cells.len(), boundary) as f64;
     expected_fee
-        + DEPARTURE_AFFINITY_WEIGHT
+        + context.future_value_weight
+            * DEPARTURE_AFFINITY_WEIGHT
             * departure_affinity_score(
                 cells,
                 occupied_until_ticks,
@@ -414,7 +434,8 @@ fn evaluate_region_fully(
     context: &PlacementEvaluationContext,
 ) -> f64 {
     cheap_evaluation
-        + PLACEMENT_SPACE_WEIGHT_PER_TICK
+        + context.future_value_weight
+            * PLACEMENT_SPACE_WEIGHT_PER_TICK
             * context.duration_ticks as f64
             * remaining_square_score(cells, grass, occupied)
 }
@@ -670,6 +691,7 @@ fn main() {
             remaining_group_count as f64 * AVERAGE_GROUP_SIZE * estimated_mean_duration_ticks
                 / (remaining_time_ticks as f64 * grass_area as f64);
         let remaining_turn_ratio = remaining_group_count as f64 / (M - 1) as f64;
+        let future_value_weight = calculate_future_value_weight(remaining_group_count);
         let group_size_multiplier = group_size_efficiency_threshold_multiplier(p);
         let fill_gate = calculate_fill_gate(occupied.count(), p, grass_area);
         let efficiency_threshold =
@@ -679,6 +701,7 @@ fn main() {
             duration_ticks,
             departure_time_ticks: departure_time_ticks_for_group,
             estimated_arrival_rate_per_tick,
+            future_value_weight,
         };
 
         let started_at = Instant::now();
@@ -795,6 +818,7 @@ fn main() {
                                 duration_ticks: departure_time_ticks[j] - arrival_time_ticks,
                                 departure_time_ticks: departure_time_ticks[j],
                                 estimated_arrival_rate_per_tick,
+                                future_value_weight,
                             };
                             let moved_region = calculate_available_component_sizes(
                                 &grass,
