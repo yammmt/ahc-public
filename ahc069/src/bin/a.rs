@@ -17,7 +17,7 @@ const SEARCH_TIME_LIMIT_US: u64 = 1_300;
 // 各グループに対する配置・移動処理の絶対時間制限 (microseconds)
 const HARD_TIME_LIMIT_US: u64 = 1_500;
 // 残された空き正方形領域の 1 tick あたりの評価重み λ
-const PLACEMENT_SPACE_WEIGHT_PER_TICK: f64 = 0.5;
+const PLACEMENT_SPACE_WEIGHT_PER_TICK: f64 = 0.7;
 // 退去時刻が近いグループと接する共有辺 1 本あたりの評価重み μ
 const DEPARTURE_AFFINITY_WEIGHT: f64 = 60.0;
 // 将来の盤面価値を弱め始める、残りグループ数。この手前までは倍率 1.0。
