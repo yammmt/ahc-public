@@ -9,3 +9,5 @@ ahc069
 tester
 
 diagnostics/
+.codex/turn-metrics/*
+!.codex/turn-metrics/.keep

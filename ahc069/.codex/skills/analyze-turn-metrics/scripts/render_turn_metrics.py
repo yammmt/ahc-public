@@ -1,16 +1,21 @@
 #!/usr/bin/env python3
-"""Render four Codex visualization HTML fragments from collected metrics."""
+"""Render four Codex visualization HTML fragments and PNG charts from metrics."""
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
+import shutil
+import subprocess
 
 
 METRICS = (
     {
         "filename": "arrival-fee-by-turn-bin.html",
+        "png_filename": "arrival-fee-by-turn-bin.png",
+        "png_title": "Arrival order x Departure earnings",
         "root": "arrival-fee-by-turn-bin",
         "title": "入場順 × 退出時獲得額",
         "axis": "平均獲得額（円／グループ）",
@@ -21,6 +26,8 @@ METRICS = (
     },
     {
         "filename": "arrival-compactness-by-turn-bin.html",
+        "png_filename": "arrival-compactness-by-turn-bin.png",
+        "png_title": "Arrival order x Entry compactness",
         "root": "arrival-compactness-by-turn-bin",
         "title": "入場順 × 入場時コンパクト度",
         "axis": "平均コンパクト度",
@@ -31,6 +38,8 @@ METRICS = (
     },
     {
         "filename": "arrival-rejection-rate-by-turn-bin.html",
+        "png_filename": "arrival-rejection-rate-by-turn-bin.png",
+        "png_title": "Arrival order x Rejection rate",
         "root": "arrival-rejection-rate-by-turn-bin",
         "title": "入場順 × 拒否率",
         "axis": "拒否率",
@@ -41,6 +50,8 @@ METRICS = (
     },
     {
         "filename": "arrival-vacancy-rate-by-turn-bin.html",
+        "png_filename": "arrival-vacancy-rate-by-turn-bin.png",
+        "png_title": "Arrival order x Pre-arrival vacancy rate",
         "root": "arrival-vacancy-rate-by-turn-bin",
         "title": "入場順 × 入場直前の空きマス率",
         "axis": "平均空きマス率",
@@ -50,6 +61,8 @@ METRICS = (
         "zero": True,
     },
 )
+
+PNG_FONT = "Arial"
 
 
 def parse_args() -> argparse.Namespace:
@@ -138,16 +151,118 @@ def render_fragment(metrics: dict, config: dict) -> str:
 '''
 
 
+def png_tick(value: float, value_format: str) -> str:
+    if value_format == "percent":
+        return f"{value * 100:.0f}%"
+    if value_format == "fee":
+        return f"{value / 1000:.0f}k"
+    return f"{value:.3f}"
+
+
+def render_png_svg(metrics: dict, config: dict) -> str:
+    """Create a self-contained SVG suitable for ImageMagick PNG conversion."""
+    width, height = 1200, 640
+    left, right, top, bottom = 112, 40, 72, 132
+    plot_width, plot_height = width - left - right, height - top - bottom
+    values = [row[config["key"]] for row in metrics["bins"]]
+    if not values or any(value is None for value in values):
+        raise ValueError(f"{config['key']} is undefined for a bin")
+    minimum, maximum = min(values), max(values)
+    span = max(maximum - minimum, abs(maximum) * 0.05, 1e-9)
+    y_min, y_max = (0.0, maximum + span * 0.12) if config["zero"] else (
+        minimum - span * 0.14,
+        maximum + span * 0.14,
+    )
+    if y_max <= y_min:
+        y_max = y_min + 1.0
+
+    def y(value: float) -> float:
+        return top + (y_max - value) / (y_max - y_min) * plot_height
+
+    parts = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">',
+        '<rect width="100%" height="100%" fill="white"/>',
+        f'<text x="{width / 2}" y="38" text-anchor="middle" font-family="{PNG_FONT}" font-size="24" font-weight="600">{config["png_title"]} (bins of {metrics["bin_size"]} groups)</text>',
+        f'<rect x="{left}" y="{top}" width="{plot_width}" height="{plot_height}" fill="none" stroke="#777"/>',
+    ]
+    for index in range(6):
+        value = y_min + (y_max - y_min) * index / 5
+        py = y(value)
+        parts.extend((
+            f'<line x1="{left}" y1="{py:.2f}" x2="{width - right}" y2="{py:.2f}" stroke="#ddd"/>',
+            f'<text x="{left - 12}" y="{py + 5:.2f}" text-anchor="end" font-family="{PNG_FONT}" font-size="16">{png_tick(value, config["format"])}</text>',
+        ))
+    bar_step = plot_width / len(values)
+    bar_width = bar_step * 0.78
+    baseline = y(y_min)
+    for index, (row, value) in enumerate(zip(metrics["bins"], values)):
+        x = left + index * bar_step + (bar_step - bar_width) / 2
+        py = y(value)
+        parts.append(
+            f'<rect x="{x:.2f}" y="{py:.2f}" width="{bar_width:.2f}" height="{baseline - py:.2f}" fill="#4e79a7"/>'
+        )
+    tick_indices = list(range(len(values))) if len(values) <= 8 else [
+        round(index * (len(values) - 1) / 3) for index in range(4)
+    ]
+    for index in dict.fromkeys(tick_indices):
+        row = metrics["bins"][index]
+        x = left + (index + 0.5) * bar_step
+        parts.append(
+            f'<text x="{x:.2f}" y="{height - bottom + 30}" text-anchor="end" transform="rotate(-35 {x:.2f} {height - bottom + 30})" font-family="{PNG_FONT}" font-size="15">{row["start"]}-{row["end"]}</text>'
+        )
+    parts.extend((
+        f'<text x="{left + plot_width / 2}" y="{height - 24}" text-anchor="middle" font-family="{PNG_FONT}" font-size="18">Arrival order</text>',
+        '</svg>',
+    ))
+    return "\n".join(parts)
+
+
+def write_png(metrics: dict, config: dict, destination: Path) -> None:
+    convert = shutil.which("convert") or shutil.which("magick")
+    if convert is None:
+        raise RuntimeError("PNG export requires ImageMagick ('convert' or 'magick') on PATH")
+    command = [
+        convert,
+        "-background",
+        "white",
+        "-density",
+        "144",
+        "-encoding",
+        "UTF-8",
+        "svg:-",
+        "png:-",
+    ]
+    environment = os.environ.copy()
+    environment.setdefault("MAGICK_TMPDIR", str(destination.parent))
+    result = subprocess.run(
+        command,
+        input=render_png_svg(metrics, config).encode("utf-8"),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=environment,
+        check=False,
+    )
+    if result.returncode:
+        message = result.stderr.decode("utf-8", errors="replace").strip()
+        raise RuntimeError(f"PNG export failed for {config['png_filename']}: {message}")
+    destination.write_bytes(result.stdout)
+
+
 def main() -> None:
     args = parse_args()
     metrics = json.loads(args.metrics.read_text())
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    paths = []
+    html_paths = []
+    png_paths = []
     for config in METRICS:
         destination = args.output_dir / config["filename"]
         destination.write_text(render_fragment(metrics, config))
-        paths.append(str(destination.resolve()))
-    print(json.dumps({"paths": paths}, ensure_ascii=False))
+        html_paths.append(str(destination.resolve()))
+        png_destination = args.output_dir / config["png_filename"]
+        write_png(metrics, config, png_destination)
+        png_paths.append(str(png_destination.resolve()))
+    print(json.dumps({"paths": html_paths, "png_paths": png_paths}, ensure_ascii=False))
 
 
 if __name__ == "__main__":

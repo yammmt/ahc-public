@@ -17,14 +17,14 @@ Analyze existing output logs only. Do not execute or modify the solution unless 
      --json-out /private/tmp/ahc069-turn-metrics.json
    ```
 
-2. For conversational charts, use a durable writable visualization directory outside the repository. If the `visualize` skill is available, read and follow it before rendering or returning the charts.
+2. For conversational charts, use a durable writable visualization directory outside the repository. If the `visualize` skill is available, read and follow it before rendering or returning the charts. The renderer saves both the four HTML fragments and matching PNG files in this directory.
 
    ```console
    python3 .codex/skills/analyze-turn-metrics/scripts/render_turn_metrics.py \
      /private/tmp/ahc069-turn-metrics.json --output-dir <visualization-directory>
    ```
 
-3. Verify all four emitted HTML fragments with the visualization renderer, then return all four visualization references in this order:
+3. Verify all four emitted HTML fragments with the visualization renderer. The matching PNG files are named `arrival-*-by-turn-bin.png`; include their paths when the user requests image files. Then return all four visualization references in this order:
 
    1. Departure earnings
    2. Entry compactness
