@@ -36,11 +36,6 @@ const CURRENT_FULL_EVALUATION_TIME_RATIO: f64 = 0.5;
 const MAX_SQUARE_SIDE: usize = 13;
 // グループの生成に用いられる問題内時刻の上限
 const TIME_HORIZON_TICKS: i64 = 100_000;
-// P の生成分布から求めた平均人数
-const AVERAGE_GROUP_SIZE: f64 = 59.5;
-// 滞在時間の平均を推定する際の事前分布
-const DURATION_PRIOR_MEAN_TICKS: f64 = 5_000.0;
-const DURATION_PRIOR_WEIGHT: f64 = 20.0;
 // 池がまとまっている盤面で、序盤に明確に効率が悪いとみなす利用料 / セル時間の上限
 const EARLY_EFFICIENCY_THRESHOLD_BASE: f64 = 0.60;
 // 池が最も散在している盤面における、残りターン比率を掛ける前の開始時点の効率閾値
@@ -690,12 +685,8 @@ fn should_reject_by_efficiency(
     group_size: usize,
     duration_ticks: i64,
     boundary: usize,
-    estimated_load: f64,
     efficiency_threshold: f64,
 ) -> bool {
-    if estimated_load <= 1.0 {
-        return false;
-    }
     let efficiency =
         usage_fee(value, group_size, boundary) as f64 / (group_size as f64 * duration_ticks as f64);
     efficiency < efficiency_threshold
@@ -727,7 +718,6 @@ fn main() {
     let mut values = vec![0_i64; M];
     let mut maximum_boundaries = vec![0_usize; M];
     let mut active = vec![false; M];
-    let mut observed_duration_sum_ticks = 0_i64;
     let (integer_part, fractional_part) = r.split_once('.').unwrap();
     let move_cost_rate_milli =
         integer_part.parse::<i64>().unwrap() * 1000 + fractional_part.parse::<i64>().unwrap();
@@ -759,17 +749,10 @@ fn main() {
         departure_time_ticks[i] = departure_time_ticks_for_group;
 
         let duration_ticks = departure_time_ticks_for_group - arrival_time_ticks;
-        observed_duration_sum_ticks += duration_ticks;
-        let estimated_mean_duration_ticks = (DURATION_PRIOR_WEIGHT * DURATION_PRIOR_MEAN_TICKS
-            + observed_duration_sum_ticks as f64)
-            / (DURATION_PRIOR_WEIGHT + i as f64 + 1.0);
         let remaining_group_count = M - i - 1;
         let remaining_time_ticks = TIME_HORIZON_TICKS - arrival_time_ticks;
         let estimated_arrival_rate_per_tick =
             remaining_group_count as f64 / remaining_time_ticks as f64;
-        let estimated_load =
-            remaining_group_count as f64 * AVERAGE_GROUP_SIZE * estimated_mean_duration_ticks
-                / (remaining_time_ticks as f64 * grass_area as f64);
         let future_value_weight = calculate_future_value_weight(remaining_group_count);
         let group_size_multiplier = group_size_efficiency_threshold_multiplier(p);
         let fill_gate = calculate_fill_gate(occupied.count(), p, grass_area);
@@ -807,14 +790,7 @@ fn main() {
             .as_ref()
             .map(|result| boundary_len(&result.cells));
         let reject_normal_region = normal_boundary.is_some_and(|boundary| {
-            should_reject_by_efficiency(
-                v,
-                p,
-                duration_ticks,
-                boundary,
-                estimated_load,
-                efficiency_threshold,
-            )
+            should_reject_by_efficiency(v, p, duration_ticks, boundary, efficiency_threshold)
         });
 
         if reject_normal_region {
@@ -891,7 +867,6 @@ fn main() {
                             p,
                             duration_ticks,
                             arriving_boundary,
-                            estimated_load,
                             efficiency_threshold,
                         );
 
