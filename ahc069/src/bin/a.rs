@@ -26,8 +26,12 @@ const ENDGAME_FUTURE_VALUE_START_REMAINING_GROUPS: usize = 40;
 const ENDGAME_FUTURE_VALUE_FINAL_MULTIPLIER: f64 = 0.0;
 // 安価な一次評価から、盤面全体を走査する二次評価へ進める候補数。
 const MAX_FULL_EVALUATION_CANDIDATES: usize = 64;
+// 現在盤面での二次評価後、予測盤面で再評価する候補数。
+const MAX_PROJECTED_EVALUATION_CANDIDATES: usize = 8;
 // 探索時間のうち、一次評価候補の収集に使う割合。残りを二次評価用に予約する。
 const CANDIDATE_GENERATION_TIME_RATIO: f64 = 0.7;
+// 二次評価時間のうち、現在盤面での候補絞り込みに使う割合。
+const CURRENT_FULL_EVALUATION_TIME_RATIO: f64 = 0.5;
 // 人数の最大値 150 を収められる正方形の最小の一辺
 const MAX_SQUARE_SIDE: usize = 13;
 // グループの生成に用いられる問題内時刻の上限
@@ -396,6 +400,18 @@ fn remaining_square_score(cells: &[Cell], grass: &BitBoard, occupied: &BitBoard)
     score
 }
 
+fn projected_occupied_board(occupied_until_ticks: &[Vec<i64>], time_ticks: i64) -> BitBoard {
+    let mut occupied = BitBoard::empty();
+    for (x, row) in occupied_until_ticks.iter().enumerate() {
+        for (y, &departure_time_ticks) in row.iter().enumerate() {
+            if departure_time_ticks > time_ticks {
+                occupied.insert(x, y);
+            }
+        }
+    }
+    occupied
+}
+
 fn departure_affinity_score(
     cells: &[Cell],
     occupied_until_ticks: &[Vec<i64>],
@@ -446,18 +462,16 @@ fn evaluate_region_cheap(
             )
 }
 
-fn evaluate_region_fully(
+fn evaluate_region_with_square_score(
     cheap_evaluation: f64,
-    cells: &[Cell],
-    grass: &BitBoard,
-    occupied: &BitBoard,
+    square_score: f64,
     context: &PlacementEvaluationContext,
 ) -> f64 {
     cheap_evaluation
         + context.future_value_weight
             * PLACEMENT_SPACE_WEIGHT_PER_TICK
             * context.duration_ticks as f64
-            * remaining_square_score(cells, grass, occupied)
+            * square_score
 }
 
 fn retain_cheap_candidate(
@@ -581,18 +595,59 @@ fn find_best_region(
     }
 
     cheap_candidates.sort_unstable_by(|left, right| right.0.total_cmp(&left.0));
-    let mut best_candidate: Option<(f64, Vec<Cell>)> = None;
+    let current_full_evaluation_started_at = Instant::now();
+    let current_full_evaluation_deadline = current_full_evaluation_started_at
+        + deadline
+            .saturating_duration_since(current_full_evaluation_started_at)
+            .mul_f64(CURRENT_FULL_EVALUATION_TIME_RATIO);
+    let mut current_full_candidates = Vec::new();
     for (cheap_evaluation, cells) in cheap_candidates {
-        if best_candidate.is_some() && Instant::now() >= deadline {
+        if !current_full_candidates.is_empty() && Instant::now() >= current_full_evaluation_deadline
+        {
             break;
         }
-        let evaluation =
-            evaluate_region_fully(cheap_evaluation, cells.as_slice(), grass, occupied, context);
-        if best_candidate
-            .as_ref()
-            .is_none_or(|(best_evaluation, _)| evaluation > *best_evaluation)
-        {
-            best_candidate = Some((evaluation, cells));
+        let square_score = remaining_square_score(cells.as_slice(), grass, occupied);
+        let evaluation = evaluate_region_with_square_score(cheap_evaluation, square_score, context);
+        current_full_candidates.push((evaluation, cheap_evaluation, square_score, cells));
+    }
+
+    current_full_candidates.sort_unstable_by(|left, right| right.0.total_cmp(&left.0));
+    current_full_candidates.truncate(MAX_PROJECTED_EVALUATION_CANDIDATES);
+
+    let mut best_candidate = current_full_candidates
+        .first()
+        .map(|candidate| (candidate.0, candidate.3.clone()));
+    if context.future_value_weight > 0.0 && Instant::now() < deadline {
+        let arrival_time_ticks = context.departure_time_ticks - context.duration_ticks;
+        let one_third_time_ticks = arrival_time_ticks + context.duration_ticks / 3;
+        let two_thirds_time_ticks = arrival_time_ticks + context.duration_ticks * 2 / 3;
+        let one_third_occupied =
+            projected_occupied_board(occupied_until_ticks, one_third_time_ticks);
+        let two_thirds_occupied =
+            projected_occupied_board(occupied_until_ticks, two_thirds_time_ticks);
+
+        let mut projected_best_candidate = None;
+        for (_, cheap_evaluation, current_square_score, cells) in current_full_candidates {
+            if projected_best_candidate.is_some() && Instant::now() >= deadline {
+                break;
+            }
+            let one_third_square_score =
+                remaining_square_score(cells.as_slice(), grass, &one_third_occupied);
+            let two_thirds_square_score =
+                remaining_square_score(cells.as_slice(), grass, &two_thirds_occupied);
+            let average_square_score =
+                (current_square_score + one_third_square_score + two_thirds_square_score) / 3.0;
+            let evaluation =
+                evaluate_region_with_square_score(cheap_evaluation, average_square_score, context);
+            if projected_best_candidate
+                .as_ref()
+                .is_none_or(|(best_evaluation, _)| evaluation > *best_evaluation)
+            {
+                projected_best_candidate = Some((evaluation, cells));
+            }
+        }
+        if projected_best_candidate.is_some() {
+            best_candidate = projected_best_candidate;
         }
     }
 
