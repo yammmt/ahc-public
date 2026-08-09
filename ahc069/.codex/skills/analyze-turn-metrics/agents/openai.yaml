@@ -1,0 +1,4 @@
+interface:
+  display_name: "AHC069 Turn Metrics"
+  short_description: "Regenerate four AHC069 turn-binned analysis charts"
+  default_prompt: "Use $analyze-turn-metrics to regenerate the four AHC069 turn-binned analysis charts."
