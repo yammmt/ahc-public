@@ -42,9 +42,9 @@ const EARLY_EFFICIENCY_THRESHOLD_BASE: f64 = 0.60;
 // 池が最も散在している盤面における、残りターン比率を掛ける前の開始時点の効率閾値
 const EARLY_EFFICIENCY_THRESHOLD_MIN: f64 = 0.20;
 // 盤面が空いていても、通常の効率閾値に掛ける倍率をこの値より小さくしない。
-const FILL_GATE_MIN_MULTIPLIER: f64 = 0.70;
+const FILL_GATE_MIN_MULTIPLIER: f64 = 0.30;
 // 盤面が混雑しているとき、効率閾値に掛ける倍率の上限。
-const FILL_GATE_MAX_MULTIPLIER: f64 = 1.20;
+const FILL_GATE_MAX_MULTIPLIER: f64 = 1.10;
 // 候補受け入れ後の占有率がこの範囲にあるとき、効率閾値の倍率を下限から上限へ線形に強める。
 const FILL_GATE_START_RATIO: f64 = 0.40;
 const FILL_GATE_END_RATIO: f64 = 0.80;
