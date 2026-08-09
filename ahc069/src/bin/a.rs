@@ -34,6 +34,10 @@ const CANDIDATE_GENERATION_TIME_RATIO: f64 = 0.7;
 const CURRENT_FULL_EVALUATION_TIME_RATIO: f64 = 0.5;
 // 人数の最大値 150 を収められる正方形の最小の一辺
 const MAX_SQUARE_SIDE: usize = 13;
+// 空き長方形として数える k x 2k の短辺の最大値。最大面積は 8 x 16 = 128。
+const MAX_RECTANGLE_SHORT_SIDE: usize = 8;
+// 空き正方形評価に加える、2:1 の空き長方形評価の相対重み。
+const RECTANGLE_SPACE_RELATIVE_WEIGHT: f64 = 1.5;
 // グループの生成に用いられる問題内時刻の上限
 const TIME_HORIZON_TICKS: i64 = 100_000;
 // 池がまとまっている盤面で、序盤に明確に効率が悪いとみなす利用料 / セル時間の上限
@@ -366,14 +370,46 @@ fn calculate_future_value_weight(remaining_group_count: usize) -> f64 {
     ENDGAME_FUTURE_VALUE_FINAL_MULTIPLIER + (1.0 - ENDGAME_FUTURE_VALUE_FINAL_MULTIPLIER) * progress
 }
 
-fn remaining_square_score(cells: &[Cell], grass: &BitBoard, occupied: &BitBoard) -> f64 {
+fn rectangle_placement_count(available_rows: &[u64; N], height: usize, width: usize) -> usize {
+    let mut count = 0;
+    for top_x in 0..=N - height {
+        let mut common_columns = BOARD_MASK;
+        for row in &available_rows[top_x..top_x + height] {
+            common_columns &= row;
+        }
+
+        let mut start_columns = common_columns;
+        for offset in 1..width {
+            start_columns &= common_columns >> offset;
+        }
+        count += start_columns.count_ones() as usize;
+    }
+    count
+}
+
+fn remaining_rectangle_score(available_rows: &[u64; N]) -> f64 {
+    let mut score = 0.0;
+    for short_side in 2..=MAX_RECTANGLE_SHORT_SIDE {
+        let long_side = 2 * short_side;
+        let horizontal_count = rectangle_placement_count(available_rows, short_side, long_side);
+        let vertical_count = rectangle_placement_count(available_rows, long_side, short_side);
+        score += (horizontal_count as f64).ln_1p() + (vertical_count as f64).ln_1p();
+    }
+    score
+}
+
+fn remaining_space_score(cells: &[Cell], grass: &BitBoard, occupied: &BitBoard) -> f64 {
     let in_region = BitBoard::from_cells(cells);
+    let mut available_rows = [0_u64; N];
+    for (x, available) in available_rows.iter_mut().enumerate() {
+        *available = grass.rows[x] & !occupied.rows[x] & !in_region.rows[x] & BOARD_MASK;
+    }
 
     // largest_square[x][y] は (x, y) を左上とする空き正方形の最大の一辺。
     let mut largest_square = [0_u8; (N + 1) * (N + 1)];
     let mut side_histogram = [0_usize; MAX_SQUARE_SIDE + 1];
     for x in (0..N).rev() {
-        let available = grass.rows[x] & !occupied.rows[x] & !in_region.rows[x];
+        let available = available_rows[x];
         for y in (0..N).rev() {
             if available & (1_u64 << y) != 0 {
                 let index = x * (N + 1) + y;
@@ -394,7 +430,7 @@ fn remaining_square_score(cells: &[Cell], grass: &BitBoard, occupied: &BitBoard)
         square_count += side_histogram[side];
         score += (square_count as f64).ln_1p();
     }
-    score
+    score + RECTANGLE_SPACE_RELATIVE_WEIGHT * remaining_rectangle_score(&available_rows)
 }
 
 fn projected_occupied_board(occupied_until_ticks: &[Vec<i64>], time_ticks: i64) -> BitBoard {
@@ -460,16 +496,16 @@ fn evaluate_region_cheap(
     (evaluation, boundary, fee)
 }
 
-fn evaluate_region_with_square_score(
+fn evaluate_region_with_space_score(
     cheap_evaluation: f64,
-    square_score: f64,
+    space_score: f64,
     context: &PlacementEvaluationContext,
 ) -> f64 {
     cheap_evaluation
         + context.future_value_weight
             * PLACEMENT_SPACE_WEIGHT_PER_TICK
             * context.duration_ticks as f64
-            * square_score
+            * space_score
 }
 
 fn retain_cheap_candidate(
@@ -620,12 +656,12 @@ fn find_best_region(
         {
             break;
         }
-        let square_score = remaining_square_score(cells.as_slice(), grass, occupied);
-        let evaluation = evaluate_region_with_square_score(cheap_evaluation, square_score, context);
+        let space_score = remaining_space_score(cells.as_slice(), grass, occupied);
+        let evaluation = evaluate_region_with_space_score(cheap_evaluation, space_score, context);
         current_full_candidates.push((
             evaluation,
             cheap_evaluation,
-            square_score,
+            space_score,
             boundary,
             usage_fee,
             cells,
@@ -648,20 +684,20 @@ fn find_best_region(
             projected_occupied_board(occupied_until_ticks, two_thirds_time_ticks);
 
         let mut projected_best_candidate = None;
-        for (_, cheap_evaluation, current_square_score, boundary, usage_fee, cells) in
+        for (_, cheap_evaluation, current_space_score, boundary, usage_fee, cells) in
             current_full_candidates
         {
             if projected_best_candidate.is_some() && Instant::now() >= deadline {
                 break;
             }
-            let one_third_square_score =
-                remaining_square_score(cells.as_slice(), grass, &one_third_occupied);
-            let two_thirds_square_score =
-                remaining_square_score(cells.as_slice(), grass, &two_thirds_occupied);
-            let average_square_score =
-                (current_square_score + one_third_square_score + two_thirds_square_score) / 3.0;
+            let one_third_space_score =
+                remaining_space_score(cells.as_slice(), grass, &one_third_occupied);
+            let two_thirds_space_score =
+                remaining_space_score(cells.as_slice(), grass, &two_thirds_occupied);
+            let average_space_score =
+                (current_space_score + one_third_space_score + two_thirds_space_score) / 3.0;
             let evaluation =
-                evaluate_region_with_square_score(cheap_evaluation, average_square_score, context);
+                evaluate_region_with_space_score(cheap_evaluation, average_space_score, context);
             if projected_best_candidate
                 .as_ref()
                 .is_none_or(|(best_evaluation, _, _, _)| evaluation > *best_evaluation)
