@@ -104,6 +104,8 @@ struct PlacementEvaluationContext {
 struct RegionSearchResult {
     evaluation: f64,
     cells: Vec<Cell>,
+    boundary: usize,
+    usage_fee: i64,
     secondary_evaluation_timed_out: bool,
 }
 
@@ -443,10 +445,10 @@ fn evaluate_region_cheap(
     cells: &[Cell],
     occupied_until_ticks: &[Vec<i64>],
     context: &PlacementEvaluationContext,
-) -> f64 {
+) -> (f64, usize, i64) {
     let boundary = boundary_len(cells);
-    let expected_fee = usage_fee(context.value, cells.len(), boundary) as f64;
-    expected_fee
+    let fee = usage_fee(context.value, cells.len(), boundary);
+    let evaluation = fee as f64
         + context.future_value_weight
             * DEPARTURE_AFFINITY_WEIGHT
             * departure_affinity_score(
@@ -454,7 +456,8 @@ fn evaluate_region_cheap(
                 occupied_until_ticks,
                 context.departure_time_ticks,
                 context.estimated_arrival_rate_per_tick,
-            )
+            );
+    (evaluation, boundary, fee)
 }
 
 fn evaluate_region_with_square_score(
@@ -470,12 +473,14 @@ fn evaluate_region_with_square_score(
 }
 
 fn retain_cheap_candidate(
-    candidates: &mut Vec<(f64, Vec<Cell>)>,
+    candidates: &mut Vec<(f64, usize, i64, Vec<Cell>)>,
     evaluation: f64,
+    boundary: usize,
+    usage_fee: i64,
     cells: Vec<Cell>,
 ) {
     if candidates.len() < MAX_FULL_EVALUATION_CANDIDATES {
-        candidates.push((evaluation, cells));
+        candidates.push((evaluation, boundary, usage_fee, cells));
         return;
     }
 
@@ -486,7 +491,7 @@ fn retain_cheap_candidate(
         .map(|(index, candidate)| (index, candidate.0))
         .unwrap();
     if evaluation > worst_evaluation {
-        candidates[worst_index] = (evaluation, cells);
+        candidates[worst_index] = (evaluation, boundary, usage_fee, cells);
     }
 }
 
@@ -547,8 +552,15 @@ fn find_best_region(
         for &(x, y) in &cells {
             included_in_candidates.insert(x, y);
         }
-        let evaluation = evaluate_region_cheap(&cells, occupied_until_ticks, context);
-        retain_cheap_candidate(&mut cheap_candidates, evaluation, cells);
+        let (evaluation, boundary, usage_fee) =
+            evaluate_region_cheap(&cells, occupied_until_ticks, context);
+        retain_cheap_candidate(
+            &mut cheap_candidates,
+            evaluation,
+            boundary,
+            usage_fee,
+            cells,
+        );
     }
 
     if exhausted_ordered_starts && Instant::now() < candidate_generation_deadline {
@@ -584,8 +596,15 @@ fn find_best_region(
             ) else {
                 break;
             };
-            let evaluation = evaluate_region_cheap(&cells, occupied_until_ticks, context);
-            retain_cheap_candidate(&mut cheap_candidates, evaluation, cells);
+            let (evaluation, boundary, usage_fee) =
+                evaluate_region_cheap(&cells, occupied_until_ticks, context);
+            retain_cheap_candidate(
+                &mut cheap_candidates,
+                evaluation,
+                boundary,
+                usage_fee,
+                cells,
+            );
         }
     }
 
@@ -596,14 +615,21 @@ fn find_best_region(
             .saturating_duration_since(current_full_evaluation_started_at)
             .mul_f64(CURRENT_FULL_EVALUATION_TIME_RATIO);
     let mut current_full_candidates = Vec::new();
-    for (cheap_evaluation, cells) in cheap_candidates {
+    for (cheap_evaluation, boundary, usage_fee, cells) in cheap_candidates {
         if !current_full_candidates.is_empty() && Instant::now() >= current_full_evaluation_deadline
         {
             break;
         }
         let square_score = remaining_square_score(cells.as_slice(), grass, occupied);
         let evaluation = evaluate_region_with_square_score(cheap_evaluation, square_score, context);
-        current_full_candidates.push((evaluation, cheap_evaluation, square_score, cells));
+        current_full_candidates.push((
+            evaluation,
+            cheap_evaluation,
+            square_score,
+            boundary,
+            usage_fee,
+            cells,
+        ));
     }
 
     current_full_candidates.sort_unstable_by(|left, right| right.0.total_cmp(&left.0));
@@ -611,7 +637,7 @@ fn find_best_region(
 
     let mut best_candidate = current_full_candidates
         .first()
-        .map(|candidate| (candidate.0, candidate.3.clone()));
+        .map(|candidate| (candidate.0, candidate.3, candidate.4, candidate.5.clone()));
     if context.future_value_weight > 0.0 && Instant::now() < deadline {
         let arrival_time_ticks = context.departure_time_ticks - context.duration_ticks;
         let one_third_time_ticks = arrival_time_ticks + context.duration_ticks / 3;
@@ -622,7 +648,9 @@ fn find_best_region(
             projected_occupied_board(occupied_until_ticks, two_thirds_time_ticks);
 
         let mut projected_best_candidate = None;
-        for (_, cheap_evaluation, current_square_score, cells) in current_full_candidates {
+        for (_, cheap_evaluation, current_square_score, boundary, usage_fee, cells) in
+            current_full_candidates
+        {
             if projected_best_candidate.is_some() && Instant::now() >= deadline {
                 break;
             }
@@ -636,9 +664,9 @@ fn find_best_region(
                 evaluate_region_with_square_score(cheap_evaluation, average_square_score, context);
             if projected_best_candidate
                 .as_ref()
-                .is_none_or(|(best_evaluation, _)| evaluation > *best_evaluation)
+                .is_none_or(|(best_evaluation, _, _, _)| evaluation > *best_evaluation)
             {
-                projected_best_candidate = Some((evaluation, cells));
+                projected_best_candidate = Some((evaluation, boundary, usage_fee, cells));
             }
         }
         if projected_best_candidate.is_some() {
@@ -647,11 +675,15 @@ fn find_best_region(
     }
 
     let secondary_evaluation_timed_out = best_candidate.is_some() && Instant::now() >= deadline;
-    best_candidate.map(|(evaluation, cells)| RegionSearchResult {
-        evaluation,
-        cells,
-        secondary_evaluation_timed_out,
-    })
+    best_candidate.map(
+        |(evaluation, boundary, usage_fee, cells)| RegionSearchResult {
+            evaluation,
+            cells,
+            boundary,
+            usage_fee,
+            secondary_evaluation_timed_out,
+        },
+    )
 }
 
 fn usage_fee(value: i64, group_size: usize, maximum_boundary: usize) -> i64 {
@@ -681,14 +713,12 @@ fn move_cost(value: i64, move_cost_rate_milli: i64) -> i64 {
 }
 
 fn should_reject_by_efficiency(
-    value: i64,
+    usage_fee: i64,
     group_size: usize,
     duration_ticks: i64,
-    boundary: usize,
     efficiency_threshold: f64,
 ) -> bool {
-    let efficiency =
-        usage_fee(value, group_size, boundary) as f64 / (group_size as f64 * duration_ticks as f64);
+    let efficiency = usage_fee as f64 / (group_size as f64 * duration_ticks as f64);
     efficiency < efficiency_threshold
 }
 
@@ -786,11 +816,8 @@ fn main() {
                 search_deadline,
             )
         });
-        let normal_boundary = normal_region
-            .as_ref()
-            .map(|result| boundary_len(&result.cells));
-        let reject_normal_region = normal_boundary.is_some_and(|boundary| {
-            should_reject_by_efficiency(v, p, duration_ticks, boundary, efficiency_threshold)
+        let reject_normal_region = normal_region.as_ref().is_some_and(|result| {
+            should_reject_by_efficiency(result.usage_fee, p, duration_ticks, efficiency_threshold)
         });
 
         if reject_normal_region {
@@ -809,7 +836,7 @@ fn main() {
                 occupied_until_ticks[x][y] = departure_time_ticks_for_group;
             }
             regions[i] = cells;
-            maximum_boundaries[i] = normal_boundary.unwrap();
+            maximum_boundaries[i] = result.boundary;
             active[i] = true;
         } else {
             let mut move_candidates = Vec::new();
@@ -855,18 +882,17 @@ fn main() {
                                     search_deadline,
                                 )
                             })
-                            .map(|result| result.cells);
+                            .map(|result| (result.cells, result.boundary, result.usage_fee));
 
                     let mut candidate = None;
-                    if let Some(arriving_cells) = arriving_region
+                    if let Some((arriving_cells, arriving_boundary, arriving_usage_fee)) =
+                        arriving_region
                         && Instant::now() < hard_deadline
                     {
-                        let arriving_boundary = boundary_len(&arriving_cells);
                         let reject_arriving_region = should_reject_by_efficiency(
-                            v,
+                            arriving_usage_fee,
                             p,
                             duration_ticks,
-                            arriving_boundary,
                             efficiency_threshold,
                         );
 
@@ -899,17 +925,24 @@ fn main() {
                                     search_deadline,
                                 )
                             })
-                            .map(|result| result.cells);
+                            .map(|result| (result.cells, result.boundary, result.usage_fee));
 
                             let mut moved_candidate = None;
-                            if let Some(moved_cells) = moved_region
+                            if let Some((moved_cells, moved_boundary, moved_usage_fee)) =
+                                moved_region
                                 && Instant::now() < hard_deadline
                             {
                                 let moved_maximum_boundary =
-                                    maximum_boundaries[j].max(boundary_len(&moved_cells));
-                                let score_difference = usage_fee(v, p, arriving_boundary)
+                                    maximum_boundaries[j].max(moved_boundary);
+                                let moved_maximum_usage_fee =
+                                    if moved_maximum_boundary == moved_boundary {
+                                        moved_usage_fee
+                                    } else {
+                                        usage_fee(values[j], group_sizes[j], moved_maximum_boundary)
+                                    };
+                                let score_difference = arriving_usage_fee
                                     - move_cost(values[j], move_cost_rate_milli)
-                                    + usage_fee(values[j], group_sizes[j], moved_maximum_boundary)
+                                    + moved_maximum_usage_fee
                                     - usage_fee(values[j], group_sizes[j], maximum_boundaries[j]);
                                 if score_difference > 0 && Instant::now() < hard_deadline {
                                     moved_candidate = Some((moved_cells, moved_maximum_boundary));
@@ -921,8 +954,12 @@ fn main() {
                                 occupied_until_ticks[x][y] = 0;
                             }
                             if let Some((moved_cells, moved_maximum_boundary)) = moved_candidate {
-                                candidate =
-                                    Some((arriving_cells, moved_cells, moved_maximum_boundary));
+                                candidate = Some((
+                                    arriving_cells,
+                                    arriving_boundary,
+                                    moved_cells,
+                                    moved_maximum_boundary,
+                                ));
                             }
                         }
                     }
@@ -931,7 +968,13 @@ fn main() {
                         candidate = None;
                     }
 
-                    if let Some((arriving_cells, moved_cells, moved_maximum_boundary)) = candidate {
+                    if let Some((
+                        arriving_cells,
+                        arriving_boundary,
+                        moved_cells,
+                        moved_maximum_boundary,
+                    )) = candidate
+                    {
                         for &(x, y) in &arriving_cells {
                             occupied.insert(x, y);
                             occupied_until_ticks[x][y] = departure_time_ticks_for_group;
@@ -940,8 +983,13 @@ fn main() {
                             occupied.insert(x, y);
                             occupied_until_ticks[x][y] = departure_time_ticks[j];
                         }
-                        accepted_move =
-                            Some((j, arriving_cells, moved_cells, moved_maximum_boundary));
+                        accepted_move = Some((
+                            j,
+                            arriving_cells,
+                            arriving_boundary,
+                            moved_cells,
+                            moved_maximum_boundary,
+                        ));
                         break;
                     }
 
@@ -952,7 +1000,14 @@ fn main() {
                 }
             }
 
-            if let Some((j, arriving_cells, moved_cells, moved_maximum_boundary)) = accepted_move {
+            if let Some((
+                j,
+                arriving_cells,
+                arriving_boundary,
+                moved_cells,
+                moved_maximum_boundary,
+            )) = accepted_move
+            {
                 writeln!(out, "1").unwrap();
                 writeln!(out, "{}", group_ids[j]).unwrap();
                 for &(x, y) in &moved_cells {
@@ -966,7 +1021,7 @@ fn main() {
                 regions[j] = moved_cells;
                 maximum_boundaries[j] = moved_maximum_boundary;
                 regions[i] = arriving_cells;
-                maximum_boundaries[i] = boundary_len(&regions[i]);
+                maximum_boundaries[i] = arriving_boundary;
                 active[i] = true;
             } else {
                 writeln!(out, "0").unwrap();
