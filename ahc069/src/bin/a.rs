@@ -43,9 +43,13 @@ const EARLY_EFFICIENCY_THRESHOLD_BASE: f64 = 0.60;
 const EARLY_EFFICIENCY_THRESHOLD_MIN: f64 = 0.20;
 // 盤面が空いていても、通常の効率閾値に掛ける倍率をこの値より小さくしない。
 const FILL_GATE_MIN_MULTIPLIER: f64 = 0.70;
-// 候補受け入れ後の占有率がこの範囲にあるとき、効率閾値の倍率を下限から 1 へ線形に強める。
+// 盤面が混雑しているとき、効率閾値に掛ける倍率の上限。
+const FILL_GATE_MAX_MULTIPLIER: f64 = 1.20;
+// 候補受け入れ後の占有率がこの範囲にあるとき、効率閾値の倍率を下限から上限へ線形に強める。
 const FILL_GATE_START_RATIO: f64 = 0.40;
 const FILL_GATE_END_RATIO: f64 = 0.80;
+// 効率閾値を残りグループ数に応じて緩め始める終盤の長さ。
+const ENDGAME_EFFICIENCY_THRESHOLD_START_REMAINING_GROUPS: usize = 60;
 // (グループ人数の上限, 効率閾値に掛ける倍率)
 const GROUP_SIZE_EFFICIENCY_THRESHOLD_MULTIPLIERS: [(usize, f64); 4] =
     [(30, 1.00), (70, 1.0), (110, 1.00), (150, 0.95)];
@@ -336,7 +340,17 @@ fn calculate_fill_gate(occupied_area: usize, group_size: usize, grass_area: usiz
     let progress = ((fill_ratio - FILL_GATE_START_RATIO)
         / (FILL_GATE_END_RATIO - FILL_GATE_START_RATIO))
         .clamp(0.0, 1.0);
-    FILL_GATE_MIN_MULTIPLIER + (1.0 - FILL_GATE_MIN_MULTIPLIER) * progress
+    FILL_GATE_MIN_MULTIPLIER + (FILL_GATE_MAX_MULTIPLIER - FILL_GATE_MIN_MULTIPLIER) * progress
+}
+
+fn calculate_efficiency_threshold_endgame_multiplier(remaining_group_count: usize) -> f64 {
+    if ENDGAME_EFFICIENCY_THRESHOLD_START_REMAINING_GROUPS == 0
+        || remaining_group_count >= ENDGAME_EFFICIENCY_THRESHOLD_START_REMAINING_GROUPS
+    {
+        return 1.0;
+    }
+
+    remaining_group_count as f64 / ENDGAME_EFFICIENCY_THRESHOLD_START_REMAINING_GROUPS as f64
 }
 
 fn calculate_future_value_weight(remaining_group_count: usize) -> f64 {
@@ -701,12 +715,15 @@ fn main() {
         let estimated_load =
             remaining_group_count as f64 * AVERAGE_GROUP_SIZE * estimated_mean_duration_ticks
                 / (remaining_time_ticks as f64 * grass_area as f64);
-        let remaining_turn_ratio = remaining_group_count as f64 / (M - 1) as f64;
         let future_value_weight = calculate_future_value_weight(remaining_group_count);
         let group_size_multiplier = group_size_efficiency_threshold_multiplier(p);
         let fill_gate = calculate_fill_gate(occupied.count(), p, grass_area);
-        let efficiency_threshold =
-            early_efficiency_threshold * group_size_multiplier * remaining_turn_ratio * fill_gate;
+        let efficiency_threshold_endgame_multiplier =
+            calculate_efficiency_threshold_endgame_multiplier(remaining_group_count);
+        let efficiency_threshold = early_efficiency_threshold
+            * group_size_multiplier
+            * fill_gate
+            * efficiency_threshold_endgame_multiplier;
         let placement_context = PlacementEvaluationContext {
             value: v,
             duration_ticks,
