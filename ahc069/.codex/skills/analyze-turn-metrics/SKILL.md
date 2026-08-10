@@ -1,6 +1,6 @@
 ---
 name: analyze-turn-metrics
-description: Recompute and visualize AHC069 solution behavior by arrival-order bins from existing tools/in and tools/out files. Use when Codex needs the four recurring 50-turn charts or their underlying data: departure earnings, entry compactness, rejection rate, and pre-arrival vacancy rate; also use when comparing these metrics after an implementation change.
+description: "Recompute and visualize AHC069 solution behavior by arrival-order bins from existing tools/in and tools/out files. Use when Codex needs the four recurring 50-turn charts or their underlying data: departure earnings, entry compactness, rejection rate, and pre-arrival vacancy rate; also use when comparing these metrics after an implementation change."
 ---
 
 # Analyze AHC069 Turn Metrics
@@ -17,14 +17,14 @@ Analyze existing output logs only. Do not execute or modify the solution unless 
      --json-out /private/tmp/ahc069-turn-metrics.json
    ```
 
-2. For conversational charts, use a durable writable visualization directory outside the repository. If the `visualize` skill is available, read and follow it before rendering or returning the charts. The renderer saves both the four HTML fragments and matching PNG files in this directory.
+2. Save the canonical chart artifacts in the repository-local `.codex/turn-metrics` directory. The renderer saves both the four HTML fragments and matching PNG files there. Do not use a directory under the user's home-level `.codex` as the canonical output location.
 
    ```console
    python3 .codex/skills/analyze-turn-metrics/scripts/render_turn_metrics.py \
-     /private/tmp/ahc069-turn-metrics.json --output-dir <visualization-directory>
+     /private/tmp/ahc069-turn-metrics.json --output-dir .codex/turn-metrics
    ```
 
-3. Verify all four emitted HTML fragments with the visualization renderer. The matching PNG files are named `arrival-*-by-turn-bin.png`; include their paths when the user requests image files. Then return all four visualization references in this order:
+3. Verify all four emitted HTML fragments with the visualization renderer. If the `visualize` skill is available and the charts should be shown inline, read and follow it; when its inline-display contract requires an external visualization directory, copy only the required HTML fragments there for display while retaining the canonical HTML and PNG files in `.codex/turn-metrics`. The matching PNG files are named `.codex/turn-metrics/arrival-*-by-turn-bin.png`; include these repository-local paths when the user requests image files. Then return all four visualization references in this order:
 
    1. Departure earnings
    2. Entry compactness
