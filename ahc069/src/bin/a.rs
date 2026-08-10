@@ -166,7 +166,8 @@ fn calculate_available_component_sizes(
             component_ids[start_index] = component_id;
 
             while head < tail {
-                if Instant::now() >= deadline {
+                // 時刻取得の負荷を抑えるため、16 マスごとに期限を確認する。
+                if head & 15 == 0 && Instant::now() >= deadline {
                     return None;
                 }
                 let index = queue[head];
@@ -254,7 +255,8 @@ fn find_region_from_start(
     visited.insert(x, y);
 
     while let Some(Reverse((_, _, cx, cy))) = queue.pop() {
-        if Instant::now() >= deadline {
+        // 時刻取得の負荷を抑えるため、8 マスごとに期限を確認する。
+        if cells.len() & 7 == 0 && Instant::now() >= deadline {
             return None;
         }
 
