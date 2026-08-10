@@ -13,9 +13,9 @@ const N: usize = 50;
 // グループ数
 const M: usize = 1000;
 // 各グループに対する探索の打ち切り時間 (microseconds)
-const SEARCH_TIME_LIMIT_US: u64 = 1_300;
+const SEARCH_TIME_LIMIT_US: u64 = 1_600;
 // 各グループに対する配置・移動処理の絶対時間制限 (microseconds)
-const HARD_TIME_LIMIT_US: u64 = 1_500;
+const HARD_TIME_LIMIT_US: u64 = 1_850;
 // 残された空き正方形領域の 1 tick あたりの評価重み λ
 const PLACEMENT_SPACE_WEIGHT_PER_TICK: f64 = 0.7;
 // 退去時刻が近いグループと接する共有辺 1 本あたりの評価重み μ
