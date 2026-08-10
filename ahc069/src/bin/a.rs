@@ -29,16 +29,18 @@ const DEPARTURE_AFFINITY_WEIGHT: f64 = 60.0;
 const ENDGAME_FUTURE_VALUE_START_REMAINING_GROUPS: usize = 40;
 // 最終グループ到着時における、将来の盤面価値の倍率。
 const ENDGAME_FUTURE_VALUE_FINAL_MULTIPLIER: f64 = 0.0;
-// 安価な一次評価から、盤面全体を走査する二次評価へ進める候補数。
-const MAX_FULL_EVALUATION_CANDIDATES: usize = 64;
-// 現在盤面での二次評価後、予測盤面で再評価する候補数。
-const MAX_PROJECTED_EVALUATION_CANDIDATES: usize = 8;
+// 一次評価で保持する候補数。後段はこの中から deadline まで評価する。
+const MAX_CHEAP_EVALUATION_CANDIDATES: usize = 128;
 // 三次評価を開始するターン。0..=50 ターンでは予測盤面の評価を行わない。
 const PROJECTED_EVALUATION_START_TURN: usize = 51;
-// 探索時間のうち、一次評価候補の収集に使う割合。残りを二次評価用に予約する。
+// 通常探索時間のうち、一次評価候補の収集に使う割合。
 const CANDIDATE_GENERATION_TIME_RATIO: f64 = 0.7;
-// 二次評価時間のうち、現在盤面での候補絞り込みに使う割合。
-const CURRENT_FULL_EVALUATION_TIME_RATIO: f64 = 0.5;
+// 通常探索時間のうち、二次評価終了までに使う累積割合。
+const CURRENT_FULL_EVALUATION_CUMULATIVE_TIME_RATIO: f64 = 0.85;
+// 中盤の追加時間を一次評価候補の収集に使う割合。
+const CANDIDATE_GENERATION_BONUS_TIME_RATIO: f64 = 0.2;
+// 中盤の追加時間を二次評価終了までに使う累積割合。残り 30% は三次評価用。
+const CURRENT_FULL_EVALUATION_BONUS_CUMULATIVE_TIME_RATIO: f64 = 0.7;
 // 人数の最大値 150 を収められる正方形の最小の一辺
 const MAX_SQUARE_SIDE: usize = 13;
 // 空き長方形として数える k x 2k の短辺の最大値。最大面積は 8 x 16 = 128。
@@ -129,7 +131,7 @@ struct AvailableComponents {
 #[derive(Clone, Copy)]
 struct RegionSearchTiming {
     deadline: Instant,
-    candidate_generation_bonus: Duration,
+    additional_time: Duration,
 }
 
 fn calculate_available_component_sizes(
@@ -529,7 +531,7 @@ fn retain_cheap_candidate(
     usage_fee: i64,
     cells: Vec<Cell>,
 ) {
-    if candidates.len() < MAX_FULL_EVALUATION_CANDIDATES {
+    if candidates.len() < MAX_CHEAP_EVALUATION_CANDIDATES {
         candidates.push((evaluation, boundary, usage_fee, cells));
         return;
     }
@@ -557,15 +559,15 @@ fn find_best_region(
     let deadline = timing.deadline;
     let candidate_generation_started_at = Instant::now();
     let remaining_search_time = deadline.saturating_duration_since(candidate_generation_started_at);
-    let candidate_generation_bonus = timing.candidate_generation_bonus.min(remaining_search_time);
-    let regular_search_time = remaining_search_time.saturating_sub(candidate_generation_bonus);
+    let additional_time = timing.additional_time.min(remaining_search_time);
+    let regular_search_time = remaining_search_time.saturating_sub(additional_time);
     let candidate_generation_deadline = candidate_generation_started_at
         + regular_search_time.mul_f64(CANDIDATE_GENERATION_TIME_RATIO)
-        + candidate_generation_bonus;
+        + additional_time.mul_f64(CANDIDATE_GENERATION_BONUS_TIME_RATIO);
     let mut included_in_candidates = BitBoard::empty();
     let mut used_as_start = BitBoard::empty();
     let mut next_start_index = 0;
-    let mut cheap_candidates = Vec::with_capacity(MAX_FULL_EVALUATION_CANDIDATES);
+    let mut cheap_candidates = Vec::with_capacity(MAX_CHEAP_EVALUATION_CANDIDATES);
     let mut exhausted_ordered_starts = false;
 
     loop {
@@ -663,11 +665,47 @@ fn find_best_region(
     }
 
     cheap_candidates.sort_unstable_by(|left, right| right.0.total_cmp(&left.0));
-    let current_full_evaluation_started_at = Instant::now();
-    let current_full_evaluation_deadline = current_full_evaluation_started_at
-        + deadline
-            .saturating_duration_since(current_full_evaluation_started_at)
-            .mul_f64(CURRENT_FULL_EVALUATION_TIME_RATIO);
+
+    let projected_evaluation_boards = if context.enable_projected_evaluation
+        && context.future_value_weight > 0.0
+    {
+        let arrival_time_ticks = context.departure_time_ticks - context.duration_ticks;
+        let one_third_time_ticks = arrival_time_ticks + context.duration_ticks / 3;
+        let two_thirds_time_ticks = arrival_time_ticks + context.duration_ticks * 2 / 3;
+        let one_third_occupied =
+            projected_occupied_board(occupied_until_ticks, one_third_time_ticks);
+        let two_thirds_occupied =
+            projected_occupied_board(occupied_until_ticks, two_thirds_time_ticks);
+        let one_third_matches_current = &one_third_occupied == occupied;
+        let two_thirds_matches_current = &two_thirds_occupied == occupied;
+        let projected_boards_match = one_third_occupied == two_thirds_occupied;
+        if one_third_matches_current && two_thirds_matches_current {
+            None
+        } else {
+            Some((
+                one_third_occupied,
+                two_thirds_occupied,
+                one_third_matches_current,
+                two_thirds_matches_current,
+                projected_boards_match,
+            ))
+        }
+    } else {
+        None
+    };
+
+    // 各 deadline は一次評価の開始時刻を基準とする累積時刻である。
+    // 前段が早く終わった場合、その未使用時間を後段がそのまま利用できる。
+    let current_full_evaluation_deadline = if projected_evaluation_boards.is_some() {
+        (candidate_generation_started_at
+            + regular_search_time.mul_f64(CURRENT_FULL_EVALUATION_CUMULATIVE_TIME_RATIO)
+            + additional_time
+                .mul_f64(CURRENT_FULL_EVALUATION_BONUS_CUMULATIVE_TIME_RATIO))
+        .min(deadline)
+    } else {
+        // 三次評価が不要なら、その予約時間も二次評価へ渡す。
+        deadline
+    };
     let mut current_full_candidates = Vec::new();
     for (cheap_evaluation, boundary, usage_fee, cells) in cheap_candidates {
         if !current_full_candidates.is_empty() && Instant::now() >= current_full_evaluation_deadline
@@ -687,63 +725,51 @@ fn find_best_region(
     }
 
     current_full_candidates.sort_unstable_by(|left, right| right.0.total_cmp(&left.0));
-    current_full_candidates.truncate(MAX_PROJECTED_EVALUATION_CANDIDATES);
 
     let mut best_candidate = current_full_candidates
         .first()
         .map(|candidate| (candidate.0, candidate.3, candidate.4, candidate.5.clone()));
-    if context.enable_projected_evaluation
-        && context.future_value_weight > 0.0
+    if let Some((
+        one_third_occupied,
+        two_thirds_occupied,
+        one_third_matches_current,
+        two_thirds_matches_current,
+        projected_boards_match,
+    )) = projected_evaluation_boards
         && Instant::now() < deadline
     {
-        let arrival_time_ticks = context.departure_time_ticks - context.duration_ticks;
-        let one_third_time_ticks = arrival_time_ticks + context.duration_ticks / 3;
-        let two_thirds_time_ticks = arrival_time_ticks + context.duration_ticks * 2 / 3;
-        let one_third_occupied =
-            projected_occupied_board(occupied_until_ticks, one_third_time_ticks);
-        let two_thirds_occupied =
-            projected_occupied_board(occupied_until_ticks, two_thirds_time_ticks);
-
-        let one_third_matches_current = &one_third_occupied == occupied;
-        let two_thirds_matches_current = &two_thirds_occupied == occupied;
-        let projected_boards_match = one_third_occupied == two_thirds_occupied;
-        if !one_third_matches_current || !two_thirds_matches_current {
-            let mut projected_best_candidate = None;
-            for (_, cheap_evaluation, current_space_score, boundary, usage_fee, cells) in
-                current_full_candidates
+        let mut projected_best_candidate = None;
+        for (_, cheap_evaluation, current_space_score, boundary, usage_fee, cells) in
+            current_full_candidates
+        {
+            if projected_best_candidate.is_some() && Instant::now() >= deadline {
+                break;
+            }
+            let one_third_space_score = if one_third_matches_current {
+                current_space_score
+            } else {
+                remaining_space_score(cells.as_slice(), grass, &one_third_occupied)
+            };
+            let two_thirds_space_score = if two_thirds_matches_current {
+                current_space_score
+            } else if projected_boards_match {
+                one_third_space_score
+            } else {
+                remaining_space_score(cells.as_slice(), grass, &two_thirds_occupied)
+            };
+            let average_space_score =
+                (current_space_score + one_third_space_score + two_thirds_space_score) / 3.0;
+            let evaluation =
+                evaluate_region_with_space_score(cheap_evaluation, average_space_score, context);
+            if projected_best_candidate
+                .as_ref()
+                .is_none_or(|(best_evaluation, _, _, _)| evaluation > *best_evaluation)
             {
-                if projected_best_candidate.is_some() && Instant::now() >= deadline {
-                    break;
-                }
-                let one_third_space_score = if one_third_matches_current {
-                    current_space_score
-                } else {
-                    remaining_space_score(cells.as_slice(), grass, &one_third_occupied)
-                };
-                let two_thirds_space_score = if two_thirds_matches_current {
-                    current_space_score
-                } else if projected_boards_match {
-                    one_third_space_score
-                } else {
-                    remaining_space_score(cells.as_slice(), grass, &two_thirds_occupied)
-                };
-                let average_space_score =
-                    (current_space_score + one_third_space_score + two_thirds_space_score) / 3.0;
-                let evaluation = evaluate_region_with_space_score(
-                    cheap_evaluation,
-                    average_space_score,
-                    context,
-                );
-                if projected_best_candidate
-                    .as_ref()
-                    .is_none_or(|(best_evaluation, _, _, _)| evaluation > *best_evaluation)
-                {
-                    projected_best_candidate = Some((evaluation, boundary, usage_fee, cells));
-                }
+                projected_best_candidate = Some((evaluation, boundary, usage_fee, cells));
             }
-            if projected_best_candidate.is_some() {
-                best_candidate = projected_best_candidate;
-            }
+        }
+        if projected_best_candidate.is_some() {
+            best_candidate = projected_best_candidate;
         }
     }
 
@@ -828,7 +854,7 @@ fn main() {
     let stdout = io::stdout();
     let mut out = io::BufWriter::new(stdout.lock());
     let mut elapsed_processing_time = initialization_started_at.elapsed();
-    let mut midgame_candidate_generation_bonus = Duration::ZERO;
+    let mut midgame_additional_time = Duration::ZERO;
 
     for i in 0..M {
         input! {
@@ -843,11 +869,11 @@ fn main() {
             let ideal_elapsed =
                 Duration::from_micros(HARD_TIME_LIMIT_US * MIDGAME_TIME_BONUS_START_TURN as u64);
             let unused_time = ideal_elapsed.saturating_sub(elapsed_processing_time);
-            midgame_candidate_generation_bonus = unused_time / MIDGAME_TIME_BONUS_TURN_COUNT;
+            midgame_additional_time = unused_time / MIDGAME_TIME_BONUS_TURN_COUNT;
         }
-        let candidate_generation_bonus =
+        let additional_time =
             if (MIDGAME_TIME_BONUS_START_TURN..MIDGAME_TIME_BONUS_END_TURN).contains(&i) {
-                midgame_candidate_generation_bonus
+                midgame_additional_time
             } else {
                 Duration::ZERO
             };
@@ -893,12 +919,12 @@ fn main() {
 
         let started_at = Instant::now();
         let search_deadline =
-            started_at + Duration::from_micros(SEARCH_TIME_LIMIT_US) + candidate_generation_bonus;
+            started_at + Duration::from_micros(SEARCH_TIME_LIMIT_US) + additional_time;
         let hard_deadline =
-            started_at + Duration::from_micros(HARD_TIME_LIMIT_US) + candidate_generation_bonus;
+            started_at + Duration::from_micros(HARD_TIME_LIMIT_US) + additional_time;
         let region_search_timing = RegionSearchTiming {
             deadline: search_deadline,
-            candidate_generation_bonus,
+            additional_time,
         };
         let available_components =
             calculate_available_component_sizes(&grass, &occupied, search_deadline);
