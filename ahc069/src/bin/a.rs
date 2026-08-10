@@ -31,6 +31,8 @@ const ENDGAME_FUTURE_VALUE_START_REMAINING_GROUPS: usize = 40;
 const ENDGAME_FUTURE_VALUE_FINAL_MULTIPLIER: f64 = 0.0;
 // 一次評価で保持する候補数。後段はこの中から deadline まで評価する。
 const MAX_CHEAP_EVALUATION_CANDIDATES: usize = 128;
+// 現在盤面での二次評価後、予測盤面で再評価する候補数。
+const MAX_PROJECTED_EVALUATION_CANDIDATES: usize = 8;
 // 三次評価を開始するターン。0..=50 ターンでは予測盤面の評価を行わない。
 const PROJECTED_EVALUATION_START_TURN: usize = 51;
 // 通常探索時間のうち、一次評価候補の収集に使う割合。
@@ -666,41 +668,39 @@ fn find_best_region(
 
     cheap_candidates.sort_unstable_by(|left, right| right.0.total_cmp(&left.0));
 
-    let projected_evaluation_boards = if context.enable_projected_evaluation
-        && context.future_value_weight > 0.0
-    {
-        let arrival_time_ticks = context.departure_time_ticks - context.duration_ticks;
-        let one_third_time_ticks = arrival_time_ticks + context.duration_ticks / 3;
-        let two_thirds_time_ticks = arrival_time_ticks + context.duration_ticks * 2 / 3;
-        let one_third_occupied =
-            projected_occupied_board(occupied_until_ticks, one_third_time_ticks);
-        let two_thirds_occupied =
-            projected_occupied_board(occupied_until_ticks, two_thirds_time_ticks);
-        let one_third_matches_current = &one_third_occupied == occupied;
-        let two_thirds_matches_current = &two_thirds_occupied == occupied;
-        let projected_boards_match = one_third_occupied == two_thirds_occupied;
-        if one_third_matches_current && two_thirds_matches_current {
-            None
+    let projected_evaluation_boards =
+        if context.enable_projected_evaluation && context.future_value_weight > 0.0 {
+            let arrival_time_ticks = context.departure_time_ticks - context.duration_ticks;
+            let one_third_time_ticks = arrival_time_ticks + context.duration_ticks / 3;
+            let two_thirds_time_ticks = arrival_time_ticks + context.duration_ticks * 2 / 3;
+            let one_third_occupied =
+                projected_occupied_board(occupied_until_ticks, one_third_time_ticks);
+            let two_thirds_occupied =
+                projected_occupied_board(occupied_until_ticks, two_thirds_time_ticks);
+            let one_third_matches_current = &one_third_occupied == occupied;
+            let two_thirds_matches_current = &two_thirds_occupied == occupied;
+            let projected_boards_match = one_third_occupied == two_thirds_occupied;
+            if one_third_matches_current && two_thirds_matches_current {
+                None
+            } else {
+                Some((
+                    one_third_occupied,
+                    two_thirds_occupied,
+                    one_third_matches_current,
+                    two_thirds_matches_current,
+                    projected_boards_match,
+                ))
+            }
         } else {
-            Some((
-                one_third_occupied,
-                two_thirds_occupied,
-                one_third_matches_current,
-                two_thirds_matches_current,
-                projected_boards_match,
-            ))
-        }
-    } else {
-        None
-    };
+            None
+        };
 
     // 各 deadline は一次評価の開始時刻を基準とする累積時刻である。
     // 前段が早く終わった場合、その未使用時間を後段がそのまま利用できる。
     let current_full_evaluation_deadline = if projected_evaluation_boards.is_some() {
         (candidate_generation_started_at
             + regular_search_time.mul_f64(CURRENT_FULL_EVALUATION_CUMULATIVE_TIME_RATIO)
-            + additional_time
-                .mul_f64(CURRENT_FULL_EVALUATION_BONUS_CUMULATIVE_TIME_RATIO))
+            + additional_time.mul_f64(CURRENT_FULL_EVALUATION_BONUS_CUMULATIVE_TIME_RATIO))
         .min(deadline)
     } else {
         // 三次評価が不要なら、その予約時間も二次評価へ渡す。
@@ -725,6 +725,7 @@ fn find_best_region(
     }
 
     current_full_candidates.sort_unstable_by(|left, right| right.0.total_cmp(&left.0));
+    current_full_candidates.truncate(MAX_PROJECTED_EVALUATION_CANDIDATES);
 
     let mut best_candidate = current_full_candidates
         .first()
