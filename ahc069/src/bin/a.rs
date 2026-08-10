@@ -16,10 +16,12 @@ const M: usize = 1000;
 const SEARCH_TIME_LIMIT_US: u64 = 1_600;
 // 各グループに対する配置・移動処理の絶対時間制限 (microseconds)
 const HARD_TIME_LIMIT_US: u64 = 1_850;
-// 100..900 ターンでは、100 ターンごとに累積余裕を次の区間へ均等配分する。
+// 100..900 ターンでは 100 ターンごと、900 ターンでは最後の 50 ターンへ余裕を配分する。
 const TIME_BONUS_START_TURN: usize = 100;
-const TIME_BONUS_END_TURN: usize = 900;
+const TIME_BONUS_REGULAR_END_TURN: usize = 900;
+const TIME_BONUS_END_TURN: usize = 950;
 const TIME_BONUS_BLOCK_TURNS: usize = 100;
+const TIME_BONUS_FINAL_BLOCK_TURNS: usize = 50;
 const TIME_BONUS_MAX_US: u64 = 1_000;
 // 残された空き正方形領域の 1 tick あたりの評価重み λ
 const PLACEMENT_SPACE_WEIGHT_PER_TICK: f64 = 0.7;
@@ -866,12 +868,20 @@ fn main() {
             v: i64,
         }
         let turn_processing_started_at = Instant::now();
-        if (TIME_BONUS_START_TURN..TIME_BONUS_END_TURN).contains(&i)
+        let bonus_distribution_turns = if (TIME_BONUS_START_TURN..TIME_BONUS_REGULAR_END_TURN)
+            .contains(&i)
             && (i - TIME_BONUS_START_TURN) % TIME_BONUS_BLOCK_TURNS == 0
         {
+            Some(TIME_BONUS_BLOCK_TURNS)
+        } else if i == TIME_BONUS_REGULAR_END_TURN {
+            Some(TIME_BONUS_FINAL_BLOCK_TURNS)
+        } else {
+            None
+        };
+        if let Some(distribution_turns) = bonus_distribution_turns {
             let ideal_elapsed = Duration::from_micros(HARD_TIME_LIMIT_US * i as u64);
             let unused_time = ideal_elapsed.saturating_sub(elapsed_processing_time);
-            block_additional_time = (unused_time / TIME_BONUS_BLOCK_TURNS as u32)
+            block_additional_time = (unused_time / distribution_turns as u32)
                 .min(Duration::from_micros(TIME_BONUS_MAX_US));
         }
         let additional_time = if (TIME_BONUS_START_TURN..TIME_BONUS_END_TURN).contains(&i) {
