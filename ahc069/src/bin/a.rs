@@ -65,7 +65,7 @@ const FILL_GATE_MAX_MULTIPLIER: f64 = 1.10;
 const FILL_GATE_START_RATIO: f64 = 0.40;
 const FILL_GATE_END_RATIO: f64 = 0.80;
 // 効率閾値を残りグループ数に応じて緩め始める終盤の長さ。
-const ENDGAME_EFFICIENCY_THRESHOLD_START_REMAINING_GROUPS: usize = 60;
+const ENDGAME_EFFICIENCY_THRESHOLD_START_REMAINING_GROUPS: usize = 120;
 // (グループ人数の上限, 効率閾値に掛ける倍率)
 const GROUP_SIZE_EFFICIENCY_THRESHOLD_MULTIPLIERS: [(usize, f64); 4] =
     [(30, 1.00), (70, 0.95), (110, 0.88), (150, 0.80)];
@@ -377,7 +377,10 @@ fn calculate_efficiency_threshold_endgame_multiplier(remaining_group_count: usiz
         return 1.0;
     }
 
-    remaining_group_count as f64 / ENDGAME_EFFICIENCY_THRESHOLD_START_REMAINING_GROUPS as f64
+    let remaining_ratio =
+        remaining_group_count as f64 / ENDGAME_EFFICIENCY_THRESHOLD_START_REMAINING_GROUPS as f64;
+    let progress = 1.0 - remaining_ratio;
+    1.0 - progress * progress
 }
 
 fn calculate_future_value_weight(remaining_group_count: usize) -> f64 {
