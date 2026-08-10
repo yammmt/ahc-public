@@ -21,6 +21,12 @@ const MIDGAME_TIME_BONUS_START_TURN: usize = 200;
 const MIDGAME_TIME_BONUS_END_TURN: usize = 700;
 const MIDGAME_TIME_BONUS_TURN_COUNT: u32 =
     (MIDGAME_TIME_BONUS_END_TURN - MIDGAME_TIME_BONUS_START_TURN) as u32;
+// 700 ターン開始時に余裕を再計測し、700..800 ターンへ均等配分する。
+const LATE_TIME_BONUS_START_TURN: usize = 700;
+const LATE_TIME_BONUS_END_TURN: usize = 800;
+const LATE_TIME_BONUS_TURN_COUNT: u32 =
+    (LATE_TIME_BONUS_END_TURN - LATE_TIME_BONUS_START_TURN) as u32;
+const LATE_TIME_BONUS_MAX_US: u64 = 1_000;
 // 残された空き正方形領域の 1 tick あたりの評価重み λ
 const PLACEMENT_SPACE_WEIGHT_PER_TICK: f64 = 0.7;
 // 退去時刻が近いグループと接する共有辺 1 本あたりの評価重み μ
@@ -856,6 +862,7 @@ fn main() {
     let mut out = io::BufWriter::new(stdout.lock());
     let mut elapsed_processing_time = initialization_started_at.elapsed();
     let mut midgame_additional_time = Duration::ZERO;
+    let mut late_additional_time = Duration::ZERO;
 
     for i in 0..M {
         input! {
@@ -872,9 +879,18 @@ fn main() {
             let unused_time = ideal_elapsed.saturating_sub(elapsed_processing_time);
             midgame_additional_time = unused_time / MIDGAME_TIME_BONUS_TURN_COUNT;
         }
+        if i == LATE_TIME_BONUS_START_TURN {
+            let ideal_elapsed =
+                Duration::from_micros(HARD_TIME_LIMIT_US * LATE_TIME_BONUS_START_TURN as u64);
+            let unused_time = ideal_elapsed.saturating_sub(elapsed_processing_time);
+            late_additional_time = (unused_time / LATE_TIME_BONUS_TURN_COUNT)
+                .min(Duration::from_micros(LATE_TIME_BONUS_MAX_US));
+        }
         let additional_time =
             if (MIDGAME_TIME_BONUS_START_TURN..MIDGAME_TIME_BONUS_END_TURN).contains(&i) {
                 midgame_additional_time
+            } else if (LATE_TIME_BONUS_START_TURN..LATE_TIME_BONUS_END_TURN).contains(&i) {
+                late_additional_time
             } else {
                 Duration::ZERO
             };
