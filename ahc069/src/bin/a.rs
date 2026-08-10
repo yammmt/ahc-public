@@ -28,6 +28,8 @@ const ENDGAME_FUTURE_VALUE_FINAL_MULTIPLIER: f64 = 0.0;
 const MAX_FULL_EVALUATION_CANDIDATES: usize = 64;
 // 現在盤面での二次評価後、予測盤面で再評価する候補数。
 const MAX_PROJECTED_EVALUATION_CANDIDATES: usize = 8;
+// 三次評価を開始するターン。0..=50 ターンでは予測盤面の評価を行わない。
+const PROJECTED_EVALUATION_START_TURN: usize = 51;
 // 探索時間のうち、一次評価候補の収集に使う割合。残りを二次評価用に予約する。
 const CANDIDATE_GENERATION_TIME_RATIO: f64 = 0.7;
 // 二次評価時間のうち、現在盤面での候補絞り込みに使う割合。
@@ -103,6 +105,7 @@ struct PlacementEvaluationContext {
     // 残りグループが少ない終盤では、将来の配置のための評価を弱める。
     // 今回の利用料はこの係数に依存させない。
     future_value_weight: f64,
+    enable_projected_evaluation: bool,
 }
 
 struct RegionSearchResult {
@@ -674,7 +677,10 @@ fn find_best_region(
     let mut best_candidate = current_full_candidates
         .first()
         .map(|candidate| (candidate.0, candidate.3, candidate.4, candidate.5.clone()));
-    if context.future_value_weight > 0.0 && Instant::now() < deadline {
+    if context.enable_projected_evaluation
+        && context.future_value_weight > 0.0
+        && Instant::now() < deadline
+    {
         let arrival_time_ticks = context.departure_time_ticks - context.duration_ticks;
         let one_third_time_ticks = arrival_time_ticks + context.duration_ticks / 3;
         let two_thirds_time_ticks = arrival_time_ticks + context.duration_ticks * 2 / 3;
@@ -820,6 +826,7 @@ fn main() {
         let estimated_arrival_rate_per_tick =
             remaining_group_count as f64 / remaining_time_ticks as f64;
         let future_value_weight = calculate_future_value_weight(remaining_group_count);
+        let enable_projected_evaluation = i >= PROJECTED_EVALUATION_START_TURN;
         let group_size_multiplier = group_size_efficiency_threshold_multiplier(p);
         let fill_gate = calculate_fill_gate(occupied.count(), p, grass_area);
         let efficiency_threshold_endgame_multiplier =
@@ -834,6 +841,7 @@ fn main() {
             departure_time_ticks: departure_time_ticks_for_group,
             estimated_arrival_rate_per_tick,
             future_value_weight,
+            enable_projected_evaluation,
         };
 
         let started_at = Instant::now();
@@ -944,6 +952,7 @@ fn main() {
                                 departure_time_ticks: departure_time_ticks[j],
                                 estimated_arrival_rate_per_tick,
                                 future_value_weight,
+                                enable_projected_evaluation,
                             };
                             let moved_region = calculate_available_component_sizes(
                                 &grass,
