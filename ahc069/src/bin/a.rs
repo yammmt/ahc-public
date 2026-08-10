@@ -16,6 +16,11 @@ const M: usize = 1000;
 const SEARCH_TIME_LIMIT_US: u64 = 1_600;
 // 各グループに対する配置・移動処理の絶対時間制限 (microseconds)
 const HARD_TIME_LIMIT_US: u64 = 1_850;
+// 200 ターン開始時までの未使用時間を、200..700 ターンの一次探索へ均等配分する。
+const MIDGAME_TIME_BONUS_START_TURN: usize = 200;
+const MIDGAME_TIME_BONUS_END_TURN: usize = 700;
+const MIDGAME_TIME_BONUS_TURN_COUNT: u32 =
+    (MIDGAME_TIME_BONUS_END_TURN - MIDGAME_TIME_BONUS_START_TURN) as u32;
 // 残された空き正方形領域の 1 tick あたりの評価重み λ
 const PLACEMENT_SPACE_WEIGHT_PER_TICK: f64 = 0.7;
 // 退去時刻が近いグループと接する共有辺 1 本あたりの評価重み μ
@@ -119,6 +124,12 @@ struct RegionSearchResult {
 struct AvailableComponents {
     ids: [usize; N * N],
     sizes: Vec<usize>,
+}
+
+#[derive(Clone, Copy)]
+struct RegionSearchTiming {
+    deadline: Instant,
+    candidate_generation_bonus: Duration,
 }
 
 fn calculate_available_component_sizes(
@@ -541,12 +552,16 @@ fn find_best_region(
     occupied_until_ticks: &[Vec<i64>],
     required_size: usize,
     context: &PlacementEvaluationContext,
-    deadline: Instant,
+    timing: RegionSearchTiming,
 ) -> Option<RegionSearchResult> {
+    let deadline = timing.deadline;
     let candidate_generation_started_at = Instant::now();
     let remaining_search_time = deadline.saturating_duration_since(candidate_generation_started_at);
+    let candidate_generation_bonus = timing.candidate_generation_bonus.min(remaining_search_time);
+    let regular_search_time = remaining_search_time.saturating_sub(candidate_generation_bonus);
     let candidate_generation_deadline = candidate_generation_started_at
-        + remaining_search_time.mul_f64(CANDIDATE_GENERATION_TIME_RATIO);
+        + regular_search_time.mul_f64(CANDIDATE_GENERATION_TIME_RATIO)
+        + candidate_generation_bonus;
     let mut included_in_candidates = BitBoard::empty();
     let mut used_as_start = BitBoard::empty();
     let mut next_start_index = 0;
@@ -787,6 +802,7 @@ fn main() {
         r: String,
         rows: [Chars; N],
     }
+    let initialization_started_at = Instant::now();
     let mut grass = BitBoard::empty();
     for (x, row) in rows.into_iter().enumerate() {
         for (y, cell) in row.into_iter().enumerate() {
@@ -811,6 +827,8 @@ fn main() {
         integer_part.parse::<i64>().unwrap() * 1000 + fractional_part.parse::<i64>().unwrap();
     let stdout = io::stdout();
     let mut out = io::BufWriter::new(stdout.lock());
+    let mut elapsed_processing_time = initialization_started_at.elapsed();
+    let mut midgame_candidate_generation_bonus = Duration::ZERO;
 
     for i in 0..M {
         input! {
@@ -820,6 +838,19 @@ fn main() {
             p: usize,
             v: i64,
         }
+        let turn_processing_started_at = Instant::now();
+        if i == MIDGAME_TIME_BONUS_START_TURN {
+            let ideal_elapsed =
+                Duration::from_micros(HARD_TIME_LIMIT_US * MIDGAME_TIME_BONUS_START_TURN as u64);
+            let unused_time = ideal_elapsed.saturating_sub(elapsed_processing_time);
+            midgame_candidate_generation_bonus = unused_time / MIDGAME_TIME_BONUS_TURN_COUNT;
+        }
+        let candidate_generation_bonus =
+            if (MIDGAME_TIME_BONUS_START_TURN..MIDGAME_TIME_BONUS_END_TURN).contains(&i) {
+                midgame_candidate_generation_bonus
+            } else {
+                Duration::ZERO
+            };
 
         for j in 0..i {
             if active[j] && departure_time_ticks[j] < arrival_time_ticks {
@@ -861,8 +892,14 @@ fn main() {
         };
 
         let started_at = Instant::now();
-        let search_deadline = started_at + Duration::from_micros(SEARCH_TIME_LIMIT_US);
-        let hard_deadline = started_at + Duration::from_micros(HARD_TIME_LIMIT_US);
+        let search_deadline =
+            started_at + Duration::from_micros(SEARCH_TIME_LIMIT_US) + candidate_generation_bonus;
+        let hard_deadline =
+            started_at + Duration::from_micros(HARD_TIME_LIMIT_US) + candidate_generation_bonus;
+        let region_search_timing = RegionSearchTiming {
+            deadline: search_deadline,
+            candidate_generation_bonus,
+        };
         let available_components =
             calculate_available_component_sizes(&grass, &occupied, search_deadline);
         let normal_region = available_components.as_ref().and_then(|components| {
@@ -873,7 +910,7 @@ fn main() {
                 &occupied_until_ticks,
                 p,
                 &placement_context,
-                search_deadline,
+                region_search_timing,
             )
         });
         let reject_normal_region = normal_region.as_ref().is_some_and(|result| {
@@ -939,7 +976,7 @@ fn main() {
                                     &occupied_until_ticks,
                                     p,
                                     &placement_context,
-                                    search_deadline,
+                                    region_search_timing,
                                 )
                             })
                             .map(|result| (result.cells, result.boundary, result.usage_fee));
@@ -983,7 +1020,7 @@ fn main() {
                                     &occupied_until_ticks,
                                     group_sizes[j],
                                     &moved_placement_context,
-                                    search_deadline,
+                                    region_search_timing,
                                 )
                             })
                             .map(|result| (result.cells, result.boundary, result.usage_fee));
@@ -1090,5 +1127,6 @@ fn main() {
             }
         }
         out.flush().unwrap();
+        elapsed_processing_time += turn_processing_started_at.elapsed();
     }
 }
