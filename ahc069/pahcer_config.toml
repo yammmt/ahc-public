@@ -9,7 +9,7 @@ score_regex = '(?m)^\s*Score\s*=\s*(?P<score>\d+)\s*$'
 [test]
 start_seed = 0
 end_seed = 100
-threads = 0
+threads = 4
 out_dir = "./pahcer"
 
 # ==============================
