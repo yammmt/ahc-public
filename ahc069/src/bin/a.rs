@@ -62,7 +62,7 @@ type Cell = (usize, usize);
 
 const BOARD_MASK: u64 = (1_u64 << N) - 1;
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 struct BitBoard {
     rows: [u64; N],
 }
@@ -689,30 +689,46 @@ fn find_best_region(
         let two_thirds_occupied =
             projected_occupied_board(occupied_until_ticks, two_thirds_time_ticks);
 
-        let mut projected_best_candidate = None;
-        for (_, cheap_evaluation, current_space_score, boundary, usage_fee, cells) in
-            current_full_candidates
-        {
-            if projected_best_candidate.is_some() && Instant::now() >= deadline {
-                break;
-            }
-            let one_third_space_score =
-                remaining_space_score(cells.as_slice(), grass, &one_third_occupied);
-            let two_thirds_space_score =
-                remaining_space_score(cells.as_slice(), grass, &two_thirds_occupied);
-            let average_space_score =
-                (current_space_score + one_third_space_score + two_thirds_space_score) / 3.0;
-            let evaluation =
-                evaluate_region_with_space_score(cheap_evaluation, average_space_score, context);
-            if projected_best_candidate
-                .as_ref()
-                .is_none_or(|(best_evaluation, _, _, _)| evaluation > *best_evaluation)
+        let one_third_matches_current = &one_third_occupied == occupied;
+        let two_thirds_matches_current = &two_thirds_occupied == occupied;
+        let projected_boards_match = one_third_occupied == two_thirds_occupied;
+        if !one_third_matches_current || !two_thirds_matches_current {
+            let mut projected_best_candidate = None;
+            for (_, cheap_evaluation, current_space_score, boundary, usage_fee, cells) in
+                current_full_candidates
             {
-                projected_best_candidate = Some((evaluation, boundary, usage_fee, cells));
+                if projected_best_candidate.is_some() && Instant::now() >= deadline {
+                    break;
+                }
+                let one_third_space_score = if one_third_matches_current {
+                    current_space_score
+                } else {
+                    remaining_space_score(cells.as_slice(), grass, &one_third_occupied)
+                };
+                let two_thirds_space_score = if two_thirds_matches_current {
+                    current_space_score
+                } else if projected_boards_match {
+                    one_third_space_score
+                } else {
+                    remaining_space_score(cells.as_slice(), grass, &two_thirds_occupied)
+                };
+                let average_space_score =
+                    (current_space_score + one_third_space_score + two_thirds_space_score) / 3.0;
+                let evaluation = evaluate_region_with_space_score(
+                    cheap_evaluation,
+                    average_space_score,
+                    context,
+                );
+                if projected_best_candidate
+                    .as_ref()
+                    .is_none_or(|(best_evaluation, _, _, _)| evaluation > *best_evaluation)
+                {
+                    projected_best_candidate = Some((evaluation, boundary, usage_fee, cells));
+                }
             }
-        }
-        if projected_best_candidate.is_some() {
-            best_candidate = projected_best_candidate;
+            if projected_best_candidate.is_some() {
+                best_candidate = projected_best_candidate;
+            }
         }
     }
 
