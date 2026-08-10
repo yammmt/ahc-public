@@ -68,7 +68,7 @@ const FILL_GATE_END_RATIO: f64 = 0.80;
 const ENDGAME_EFFICIENCY_THRESHOLD_START_REMAINING_GROUPS: usize = 60;
 // (グループ人数の上限, 効率閾値に掛ける倍率)
 const GROUP_SIZE_EFFICIENCY_THRESHOLD_MULTIPLIERS: [(usize, f64); 4] =
-    [(30, 1.00), (70, 1.0), (110, 1.00), (150, 0.95)];
+    [(30, 1.00), (70, 0.95), (110, 0.88), (150, 0.80)];
 type Cell = (usize, usize);
 
 const BOARD_MASK: u64 = (1_u64 << N) - 1;
