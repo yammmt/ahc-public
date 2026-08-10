@@ -30,7 +30,7 @@ const ENDGAME_FUTURE_VALUE_START_REMAINING_GROUPS: usize = 40;
 // 最終グループ到着時における、将来の盤面価値の倍率。
 const ENDGAME_FUTURE_VALUE_FINAL_MULTIPLIER: f64 = 0.0;
 // 一次評価で保持する候補数。後段はこの中から deadline まで評価する。
-const MAX_CHEAP_EVALUATION_CANDIDATES: usize = 128;
+const MAX_CHEAP_EVALUATION_CANDIDATES: usize = 80;
 // 現在盤面での二次評価後、予測盤面で再評価する候補数。
 const MAX_PROJECTED_EVALUATION_CANDIDATES: usize = 8;
 // 三次評価を開始するターン。0..=50 ターンでは予測盤面の評価を行わない。
