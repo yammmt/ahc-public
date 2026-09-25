@@ -1,0 +1,13 @@
+tools/*
+
+.codex/skills/problem/**
+!.codex/skills/problem/SKILL.md
+
+pahcer/*
+
+ahc072
+tester
+
+diagnostics/
+.codex/turn-metrics/*
+!.codex/turn-metrics/.keep
