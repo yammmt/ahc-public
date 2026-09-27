@@ -7,6 +7,7 @@ const DIRECTIONS: [(isize, isize, char); 4] =
     [(-1, 0, 'U'), (1, 0, 'D'), (0, -1, 'L'), (0, 1, 'R')];
 const MAX_OPERATIONS: usize = 100_000;
 const MAX_HEIGHT: usize = 8;
+const MAX_PAIR_STEPS: usize = 3;
 
 #[derive(Clone, Copy, Default)]
 struct Stack {
@@ -338,6 +339,163 @@ fn choose_relay(
     best
 }
 
+// Estimate transport operations while keeping other towers fixed. The moving
+// group is absent from `removed`, including both original cells after pairing.
+// This deliberately does not predict later collections or tower movements.
+fn transport_cost(
+    board: &Board,
+    start: usize,
+    color: usize,
+    moving: usize,
+    removed: &[usize],
+) -> Option<usize> {
+    let height = |cell| {
+        if removed.contains(&cell) {
+            0
+        } else {
+            board.stacks[cell].len()
+        }
+    };
+    let mut costs = vec![usize::MAX; board.stacks.len()];
+    let mut queue = VecDeque::from([start]);
+    costs[start] = 0;
+    while let Some(cell) = queue.pop_front() {
+        if board.nests[cell] == Some(color as u8) {
+            return Some(costs[cell]);
+        }
+        for direction in 0..DIRECTIONS.len() {
+            let mut to = cell;
+            for _ in 0..=height(cell) {
+                let Some(next) = board.adjacent(to, direction) else {
+                    break;
+                };
+                to = next;
+                if height(to) + moving <= MAX_HEIGHT && costs[to] == usize::MAX {
+                    costs[to] = costs[cell] + 1;
+                    queue.push_back(to);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn lost_singleton_support(board: &Board, cell: usize, distances: &[Vec<usize>]) -> usize {
+    let mut loss = 0;
+    for direction in 0..DIRECTIONS.len() {
+        let Some(user) = board.adjacent(cell, direction) else {
+            continue;
+        };
+        let stack = &board.stacks[user];
+        let Some(color) = stack.last() else {
+            continue;
+        };
+        let moving = stack.top_run_len();
+        if Some(color) == board.stacks[cell].last()
+            || board.nests[cell] == Some(color)
+            || moving + 1 > MAX_HEIGHT
+        {
+            continue;
+        }
+        let distance = &distances[usize::from(color)];
+        // One operation of potential saving per neighboring group that could
+        // enter this singleton and then jump two cells toward its own nest.
+        // No credit is given for the new pair becoming a taller springboard.
+        if distance[cell] < distance[user] && springboard_gain(board, cell, moving, distance) > 0 {
+            loss += 1;
+        }
+    }
+    loss
+}
+
+fn choose_pair(
+    board: &Board,
+    cell: usize,
+    color: usize,
+    distances: &[Vec<usize>],
+) -> Option<Vec<Action>> {
+    if board.stacks[cell].len() != 1 {
+        return None;
+    }
+    let (_, ordinary_to) = choose_move(board, cell, color, 1, &distances[color])?;
+    // Keep immediate collection and returning home as in the original solver.
+    if board.stacks[ordinary_to].last() == Some(color as u8)
+        || board.nests[ordinary_to] == Some(color as u8)
+    {
+        return None;
+    }
+    let mut steps = vec![usize::MAX; board.stacks.len()];
+    let mut previous = vec![None; board.stacks.len()];
+    let mut queue = VecDeque::from([cell]);
+    let mut candidates = Vec::new();
+    steps[cell] = 0;
+    while let Some(from) = queue.pop_front() {
+        if steps[from] == MAX_PAIR_STEPS {
+            continue;
+        }
+        for direction in 0..DIRECTIONS.len() {
+            let Some(to) = board.adjacent(from, direction) else {
+                continue;
+            };
+            if steps[to] != usize::MAX || board.nests[to] == Some(color as u8) {
+                continue;
+            }
+            let target = &board.stacks[to];
+            let is_partner = target.len() == 1 && target.last() == Some(color as u8);
+            if target.len() > 0 && !is_partner {
+                continue;
+            }
+            steps[to] = steps[from] + 1;
+            previous[to] = Some(Action {
+                from,
+                k: 0,
+                direction,
+                length: 1,
+            });
+            if is_partner {
+                candidates.push(to);
+            } else {
+                queue.push_back(to);
+            }
+        }
+    }
+    if candidates.is_empty() {
+        return None;
+    }
+    let source_cost = transport_cost(board, cell, color, 1, &[cell])?;
+    let support_loss = lost_singleton_support(board, cell, distances);
+    let mut best = None;
+    for partner in candidates {
+        let Some(partner_cost) = transport_cost(board, partner, color, 1, &[partner]) else {
+            continue;
+        };
+        let Some(pair_cost) = transport_cost(board, partner, color, 2, &[cell, partner]) else {
+            continue;
+        };
+        let separate_cost = source_cost + partner_cost;
+        let merged_cost = steps[partner] + pair_cost + support_loss;
+        if merged_cost >= separate_cost {
+            continue;
+        }
+        let priority = (separate_cost - merged_cost, MAX_PAIR_STEPS - steps[partner]);
+        if best
+            .as_ref()
+            .is_none_or(|&(best_priority, _)| priority > best_priority)
+        {
+            best = Some((priority, partner));
+        }
+    }
+    let (_, mut to) = best?;
+    let mut actions = Vec::new();
+    while to != cell {
+        let action = previous[to]?;
+        actions.push(action);
+        to = action.from;
+    }
+    actions.reverse();
+    Some(actions)
+}
+
 fn main() {
     input! {
         n: usize,
@@ -382,6 +540,17 @@ fn main() {
         let Some((cell, color)) = choose_target(&board, &distances) else {
             break;
         };
+        if let Some(plan) = choose_pair(&board, cell, color, &distances)
+            && actions.len() + plan.len() <= MAX_OPERATIONS
+        {
+            // Finish the short merge before selecting another target. Pairing
+            // does not gather further partners once this tower reaches two.
+            for action in plan {
+                board.apply(action);
+                actions.push(action);
+            }
+            continue;
+        }
         if actions.len() + 2 <= MAX_OPERATIONS
             && let Some(plan) = choose_relay(&board, cell, color, &distances[color])
         {
@@ -414,4 +583,70 @@ fn main() {
         );
     }
     print!("{output}");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn empty_board() -> Board {
+        Board {
+            n: 7,
+            walls: vec![false; 49],
+            nests: vec![None; 49],
+            stacks: vec![Stack::default(); 49],
+        }
+    }
+
+    #[test]
+    fn pair_completes_a_sideways_merge_and_stops_at_two() {
+        let mut board = empty_board();
+        let source = 3 * 7 + 2;
+        let partner = 3 * 7 + 4;
+        board.nests[3] = Some(0);
+        board.stacks[source].push(0);
+        board.stacks[partner].push(0);
+        let distances = vec![distances_from(&board, 3)];
+        let plan = choose_pair(&board, source, 0, &distances).unwrap();
+        assert_eq!(plan.len(), 2);
+        for action in plan {
+            board.apply(action);
+        }
+        assert_eq!(board.stacks[source].len(), 0);
+        assert_eq!(board.stacks[partner].len(), 2);
+        assert_eq!(board.stacks[partner].top_run_len(), 2);
+        assert!(choose_pair(&board, partner, 0, &distances).is_none());
+    }
+
+    #[test]
+    fn pair_rejects_distant_partners_and_existing_towers() {
+        let mut board = empty_board();
+        let source = 3 * 7;
+        let partner = source + 4;
+        board.nests[3] = Some(0);
+        board.stacks[source].push(0);
+        board.stacks[partner].push(0);
+        let distances = vec![distances_from(&board, 3)];
+        assert!(choose_pair(&board, source, 0, &distances).is_none());
+        board.stacks[partner].len = 0;
+        board.stacks[source + 2].push(0);
+        board.stacks[source + 2].push(0);
+        assert!(choose_pair(&board, source, 0, &distances).is_none());
+    }
+
+    #[test]
+    fn support_loss_counts_a_usable_jump_but_respects_walls() {
+        let mut board = empty_board();
+        let source = 3 * 7 + 3;
+        let nest = 3 * 7 + 6;
+        board.nests[3] = Some(0);
+        board.nests[nest] = Some(1);
+        board.stacks[source].push(0);
+        board.stacks[source - 1].push(1);
+        let distances = vec![distances_from(&board, 3), distances_from(&board, nest)];
+        assert_eq!(lost_singleton_support(&board, source, &distances), 1);
+        board.walls[source + 1] = true;
+        let distances = vec![distances_from(&board, 3), distances_from(&board, nest)];
+        assert_eq!(lost_singleton_support(&board, source, &distances), 0);
+    }
 }
