@@ -158,7 +158,56 @@ fn choose_target(board: &Board, distances: &[Vec<usize>]) -> Option<(usize, usiz
             }
         }
     }
-    best.map(|(cell, color, _, _)| (cell, color))
+    best.map(|(cell, color, cleanup_priority, _)| {
+        // Keep an existing tower only while another group can use it now.
+        // Full and mixed stacks still take precedence over preservation.
+        if cleanup_priority == 0
+            && board.stacks[cell].len() >= 2
+            && let Some(user) = choose_springboard_user(board, cell, distances)
+        {
+            return user;
+        }
+        (cell, color)
+    })
+}
+
+fn choose_springboard_user(
+    board: &Board,
+    springboard: usize,
+    distances: &[Vec<usize>],
+) -> Option<(usize, usize)> {
+    let mut best = None;
+    for (cell, stack) in board.stacks.iter().enumerate() {
+        let Some(color) = stack.last() else {
+            continue;
+        };
+        if stack.top_run_len() != stack.len()
+            || stack.len() == MAX_HEIGHT
+            || Some(color) == board.stacks[springboard].last()
+            || board.nests[springboard] == Some(color)
+        {
+            continue;
+        }
+        let color = usize::from(color);
+        let Some((_, to)) = choose_move(board, cell, color, stack.len(), &distances[color]) else {
+            continue;
+        };
+        if to != springboard {
+            continue;
+        }
+        let gain = springboard_gain(board, springboard, stack.len(), &distances[color]);
+        if gain == 0 {
+            continue;
+        }
+        let priority = (gain, distances[color][cell]);
+        if best
+            .as_ref()
+            .is_none_or(|&(best_priority, _, _)| priority > best_priority)
+        {
+            best = Some((priority, cell, color));
+        }
+    }
+    best.map(|(_, cell, color)| (cell, color))
 }
 
 fn springboard_gain(board: &Board, cell: usize, moving: usize, distances: &[usize]) -> usize {
