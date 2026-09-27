@@ -247,6 +247,19 @@ fn choose_move(
     best.map(|(_, action, to)| (action, to))
 }
 
+fn choose_group_move(
+    board: &Board,
+    cell: usize,
+    color: usize,
+    distances: &[usize],
+) -> Option<(Action, usize)> {
+    // Prefer moving the whole top run, then the largest legal portion of it.
+    // Keep the existing destination ranking for each possible group size.
+    (1..=board.stacks[cell].top_run_len())
+        .rev()
+        .find_map(|moving| choose_move(board, cell, color, moving, distances))
+}
+
 fn choose_relay(
     board: &Board,
     cell: usize,
@@ -254,8 +267,7 @@ fn choose_relay(
     distances: &[usize],
 ) -> Option<RelayPlan> {
     let moving = board.stacks[cell].top_run_len();
-    let (ordinary, ordinary_to) = choose_move(board, cell, color, moving, distances)
-        .or_else(|| choose_move(board, cell, color, 1, distances))?;
+    let (ordinary, ordinary_to) = choose_group_move(board, cell, color, distances)?;
     // Preserve the existing preference for collecting and transporting groups.
     if board.stacks[ordinary_to].last() == Some(color as u8)
         || board.nests[ordinary_to] == Some(color as u8)
@@ -264,10 +276,7 @@ fn choose_relay(
     }
     let mut after_first = board.clone();
     after_first.apply(ordinary);
-    let next_moving = after_first.stacks[ordinary_to].top_run_len();
-    let (_, ordinary_end) =
-        choose_move(&after_first, ordinary_to, color, next_moving, distances)
-            .or_else(|| choose_move(&after_first, ordinary_to, color, 1, distances))?;
+    let (_, ordinary_end) = choose_group_move(&after_first, ordinary_to, color, distances)?;
     if after_first.stacks[ordinary_end].last() == Some(color as u8) {
         return None;
     }
@@ -562,9 +571,7 @@ fn main() {
             }
             continue;
         }
-        let moving = board.stacks[cell].top_run_len();
-        let (action, _) = choose_move(&board, cell, color, moving, &distances[color])
-            .or_else(|| choose_move(&board, cell, color, 1, &distances[color]))
+        let (action, _) = choose_group_move(&board, cell, color, &distances[color])
             .expect("A single slime can move toward its nest");
         board.apply(action);
         actions.push(action);
@@ -596,6 +603,71 @@ mod tests {
             nests: vec![None; 49],
             stacks: vec![Stack::default(); 49],
         }
+    }
+
+    #[test]
+    fn group_move_leaves_enough_support_to_jump_six_slimes_three_cells() {
+        let mut board = empty_board();
+        board.walls.fill(true);
+        let source = 3 * 7;
+        board.walls[source..source + 7].fill(false);
+        board.nests[source + 6] = Some(1);
+        board.stacks[source].push(0);
+        for _ in 0..7 {
+            board.stacks[source].push(1);
+        }
+        for cell in [source + 1, source + 2] {
+            for _ in 0..3 {
+                board.stacks[cell].push(0);
+            }
+        }
+        board.stacks[source + 3].push(1);
+        let distances = distances_from(&board, source + 6);
+        assert!(choose_move(&board, source, 1, 7, &distances).is_none());
+        let (action, to) = choose_group_move(&board, source, 1, &distances).unwrap();
+        assert_eq!((action.k, action.length, to), (2, 3, source + 3));
+        let mut after = board.clone();
+        after.apply(action);
+        assert_eq!(&after.stacks[source].colors[..2], &[0, 1]);
+        assert_eq!(after.stacks[to].top_run_len(), 7);
+        // Towers can be passed over, but a wall cannot be jumped over.
+        board.walls[source + 2] = true;
+        let (action, to) = choose_group_move(&board, source, 1, &distances).unwrap();
+        assert_eq!((action.k, action.length, to), (3, 1, source + 1));
+    }
+
+    #[test]
+    fn group_move_limits_landing_height_before_returning_home() {
+        let mut board = empty_board();
+        board.walls.fill(true);
+        let source = 3 * 7;
+        board.walls[source..source + 2].fill(false);
+        board.nests[source + 1] = Some(1);
+        for _ in 0..8 {
+            board.stacks[source].push(1);
+        }
+        for _ in 0..6 {
+            board.stacks[source + 1].push(0);
+        }
+        let distances = distances_from(&board, source + 1);
+        let (action, to) = choose_group_move(&board, source, 1, &distances).unwrap();
+        assert_eq!((action.k, action.length, to), (6, 1, source + 1));
+        board.apply(action);
+        assert_eq!(board.stacks[source].len(), 6);
+        assert_eq!(board.stacks[to].len(), 6);
+    }
+
+    #[test]
+    fn group_move_still_moves_the_whole_run_when_possible() {
+        let mut board = empty_board();
+        let source = 3 * 7;
+        board.nests[source + 6] = Some(0);
+        for _ in 0..4 {
+            board.stacks[source].push(0);
+        }
+        let distances = distances_from(&board, source + 6);
+        let (action, to) = choose_group_move(&board, source, 0, &distances).unwrap();
+        assert_eq!((action.k, action.length, to), (0, 1, source + 1));
     }
 
     #[test]
