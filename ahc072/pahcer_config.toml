@@ -32,34 +32,40 @@ program = "cp"
 args = ["./target/release/a", "./ahc072"]
 
 # On macOS, there’s a possibility of SIGKILL or other issues occurring,
-# so it’s better to build the tester in advance
+# so it’s better to build the visualizer in advance
 # rather than running it with cargo run every time.
 
-# Compile the tester
+# Compile the visualizer
 [[test.compile_steps]]
 program = "cargo"
-args = ["build", "--release", "--bin", "tester", "--target-dir", "./target"]
+args = ["build", "--release", "--bin", "vis", "--target-dir", "./target"]
 current_dir = "./tools"
 
-# Remove the old tester
+# Remove the old visualizer
 [[test.compile_steps]]
 program = "rm"
-args = ["-f", "./tester"]
+args = ["-f", "./vis"]
 
-# Move the tester to the current directory
+# Copy the visualizer to the current directory
 [[test.compile_steps]]
 program = "cp"
-args = ["./tools/target/release/tester", "./tester"]
+args = ["./tools/target/release/vis", "./vis"]
 
 # ==============================
 #           TEST STEPS
 # ==============================
 
-# Run the tester with the user's program
+# Run the user's program
 [[test.test_steps]]
-program = "./tester"
-args = ["./ahc072"]
+program = "./ahc072"
+args = []
 stdin = "./tools/in/{SEED04}.txt"
 stdout = "./tools/out/{SEED04}.txt"
 stderr = "./tools/err/{SEED04}.txt"
 measure_time = true
+
+# Validate the output and calculate the score
+[[test.test_steps]]
+program = "./vis"
+args = ["./tools/in/{SEED04}.txt", "./tools/out/{SEED04}.txt", "--no-vis"]
+measure_time = false
