@@ -133,17 +133,32 @@ fn distances_from(board: &Board, start: usize) -> Vec<usize> {
 }
 
 fn choose_target(board: &Board, distances: &[Vec<usize>]) -> Option<(usize, usize)> {
-    let mut best: Option<(usize, usize, usize)> = None;
+    let mut best: Option<(usize, usize, usize, usize)> = None;
     for (cell, stack) in board.stacks.iter().enumerate() {
         if let Some(color) = stack.last() {
             let color = usize::from(color);
             let distance = distances[color][cell];
-            if best.is_none_or(|(_, _, best_distance)| distance > best_distance) {
-                best = Some((cell, color, distance));
+            // Clear full and mixed stacks before selecting the farthest slime freely.
+            // With every stack homogeneous and shorter than MAX_HEIGHT, any top
+            // slime can jump to a neighboring cell that is closer to its nest.
+            let cleanup_priority = if stack.len() == MAX_HEIGHT {
+                2
+            } else if stack.top_run_len() != stack.len() {
+                1
+            } else {
+                0
+            };
+            if best
+                .as_ref()
+                .is_none_or(|(_, _, best_priority, best_distance)| {
+                    (cleanup_priority, distance) > (*best_priority, *best_distance)
+                })
+            {
+                best = Some((cell, color, cleanup_priority, distance));
             }
         }
     }
-    best.map(|(cell, color, _)| (cell, color))
+    best.map(|(cell, color, _, _)| (cell, color))
 }
 
 fn springboard_gain(board: &Board, cell: usize, moving: usize, distances: &[usize]) -> usize {
@@ -266,19 +281,15 @@ fn main() {
 
     let mut actions = Vec::new();
     while actions.len() < MAX_OPERATIONS {
-        let Some((mut cell, color)) = choose_target(&board, &distances) else {
+        let Some((cell, color)) = choose_target(&board, &distances) else {
             break;
         };
-        while cell != nest_cells[color] && actions.len() < MAX_OPERATIONS {
-            assert_eq!(board.stacks[cell].last(), Some(color as u8));
-            let moving = board.stacks[cell].top_run_len();
-            let (action, next) = choose_move(&board, cell, color, moving, &distances[color])
-                .or_else(|| choose_move(&board, cell, color, 1, &distances[color]))
-                .expect("A single slime can move toward its nest");
-            board.apply(action);
-            actions.push(action);
-            cell = next;
-        }
+        let moving = board.stacks[cell].top_run_len();
+        let (action, _) = choose_move(&board, cell, color, moving, &distances[color])
+            .or_else(|| choose_move(&board, cell, color, 1, &distances[color]))
+            .expect("A single slime can move toward its nest");
+        board.apply(action);
+        actions.push(action);
     }
 
     let mut output = String::new();
