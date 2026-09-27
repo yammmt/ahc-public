@@ -49,6 +49,7 @@ impl Stack {
     }
 }
 
+#[derive(Clone)]
 struct Board {
     n: usize,
     walls: Vec<bool>,
@@ -107,6 +108,11 @@ struct Action {
     k: usize,
     direction: usize,
     length: usize,
+}
+
+struct RelayPlan {
+    actions: [Action; 2],
+    saving: usize,
 }
 
 type MovePriority = (bool, usize, usize, usize, usize);
@@ -189,6 +195,19 @@ fn choose_springboard_user(
             continue;
         }
         let color = usize::from(color);
+        // Use the same plan as the executor, including a possible detour.
+        if let Some(plan) = choose_relay(board, cell, color, &distances[color]) {
+            if plan.actions[1].from == springboard {
+                let priority = (plan.saving, distances[color][cell]);
+                if best
+                    .as_ref()
+                    .is_none_or(|&(best_priority, _, _)| priority > best_priority)
+                {
+                    best = Some((priority, cell, color));
+                }
+            }
+            continue;
+        }
         let Some((_, to)) = choose_move(board, cell, color, stack.len(), &distances[color]) else {
             continue;
         };
@@ -289,6 +308,98 @@ fn choose_move(
     best.map(|(_, action, to)| (action, to))
 }
 
+fn choose_relay(
+    board: &Board,
+    cell: usize,
+    color: usize,
+    distances: &[usize],
+) -> Option<RelayPlan> {
+    let moving = board.stacks[cell].top_run_len();
+    let (ordinary, ordinary_to) = choose_move(board, cell, color, moving, distances)
+        .or_else(|| choose_move(board, cell, color, 1, distances))?;
+    // Preserve the existing preference for collecting and transporting groups.
+    if board.stacks[ordinary_to].last() == Some(color as u8)
+        || board.nests[ordinary_to] == Some(color as u8)
+    {
+        return None;
+    }
+    let mut after_first = board.clone();
+    after_first.apply(ordinary);
+    let next_moving = after_first.stacks[ordinary_to].top_run_len();
+    let (_, ordinary_end) =
+        choose_move(&after_first, ordinary_to, color, next_moving, distances)
+            .or_else(|| choose_move(&after_first, ordinary_to, color, 1, distances))?;
+    if after_first.stacks[ordinary_end].last() == Some(color as u8) {
+        return None;
+    }
+    // Compare two operations plus remaining walking distance against the
+    // ordinary two moves. Also require a strict saving over walking from here;
+    // every completed relay then decreases the moving group's nest distance.
+    let cost_limit = distances[cell].min(2 + distances[ordinary_end]);
+    let k = board.stacks[cell].len() - moving;
+    let mut best: Option<RelayPlan> = None;
+    for direction in 0..DIRECTIONS.len() {
+        let mut via = cell;
+        for length in 1..=k + 1 {
+            let Some(next) = board.adjacent(via, direction) else {
+                break;
+            };
+            via = next;
+            let base = &board.stacks[via];
+            if base.len() == 0
+                || base.len() != base.top_run_len()
+                || base.last() == Some(color as u8)
+                || base.len() + moving > MAX_HEIGHT
+                || board.nests[via] == Some(color as u8)
+            {
+                continue;
+            }
+            for exit_direction in 0..DIRECTIONS.len() {
+                let mut to = via;
+                for exit_length in 1..=base.len() + 1 {
+                    let Some(next) = board.adjacent(to, exit_direction) else {
+                        break;
+                    };
+                    to = next;
+                    // Finish on an empty cell or at home, so the group does
+                    // not remain on a mixed tower when target selection resumes.
+                    if to == cell
+                        || (board.stacks[to].len() > 0 && board.nests[to] != Some(color as u8))
+                        || board.stacks[to].len() + moving > MAX_HEIGHT
+                    {
+                        continue;
+                    }
+                    let cost = 2 + distances[to];
+                    if cost >= cost_limit {
+                        continue;
+                    }
+                    let saving = cost_limit - cost;
+                    if best.as_ref().is_none_or(|plan| saving > plan.saving) {
+                        best = Some(RelayPlan {
+                            actions: [
+                                Action {
+                                    from: cell,
+                                    k,
+                                    direction,
+                                    length,
+                                },
+                                Action {
+                                    from: via,
+                                    k: base.len(),
+                                    direction: exit_direction,
+                                    length: exit_length,
+                                },
+                            ],
+                            saving,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    best
+}
+
 fn main() {
     input! {
         n: usize,
@@ -333,6 +444,17 @@ fn main() {
         let Some((cell, color)) = choose_target(&board, &distances) else {
             break;
         };
+        if actions.len() + 2 <= MAX_OPERATIONS
+            && let Some(plan) = choose_relay(&board, cell, color, &distances[color])
+        {
+            // The intermediate landing may increase distance. Commit both
+            // actions before reranking, keeping the springboard underneath.
+            for action in plan.actions {
+                board.apply(action);
+                actions.push(action);
+            }
+            continue;
+        }
         let moving = board.stacks[cell].top_run_len();
         let (action, _) = choose_move(&board, cell, color, moving, &distances[color])
             .or_else(|| choose_move(&board, cell, color, 1, &distances[color]))
