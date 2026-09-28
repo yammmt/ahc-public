@@ -12,3 +12,7 @@ vis
 diagnostics/
 .codex/turn-metrics/*
 !.codex/turn-metrics/.keep
+
+_ai_inst/*
+_ai_out/*
+
