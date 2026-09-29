@@ -12,13 +12,25 @@ const MAX_PAIR_STEPS: usize = 3;
 const MAX_REPLANS: usize = 512;
 const MAX_CANDIDATE_ROLLOUTS: usize = 3;
 const MAX_MERGE_PARTNERS: usize = 16;
+const MAX_MIXED_REPLANS: usize = 64;
+const MIXED_REPLAN_INTERVAL: usize = 4;
+const MAX_MIXED_PARTNERS: usize = 4;
+const MAX_MIXED_TRANSPORT_STEPS: usize = 24;
 const SEARCH_DEADLINE: Duration = Duration::from_millis(1650);
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 struct Stack {
     colors: [u8; MAX_HEIGHT], // Bottom to top in colors[..len].
     len: usize,
 }
+
+impl PartialEq for Stack {
+    fn eq(&self, other: &Self) -> bool {
+        self.len == other.len && self.colors[..self.len] == other.colors[..other.len]
+    }
+}
+
+impl Eq for Stack {}
 
 impl Stack {
     fn len(&self) -> usize {
@@ -660,6 +672,222 @@ fn merge_candidates(board: &Board, source: usize, color: usize) -> Vec<Vec<Actio
     ranked.into_iter().map(|(_, _, path)| path).collect()
 }
 
+// Move the selected homogeneous group without changing any background tower.
+// Other homogeneous colors can serve as temporary springboards and as partners.
+fn mixed_merge_paths(
+    board: &Board,
+    source: usize,
+    color: usize,
+    distances: &[Vec<usize>],
+) -> Vec<(usize, Vec<Action>)> {
+    let q = board.stacks[source].len();
+    if q == 0 || q == MAX_HEIGHT || board.stacks[source].top_run_len() != q {
+        return Vec::new();
+    }
+    let mut steps = vec![usize::MAX; board.stacks.len()];
+    let mut previous = vec![None; board.stacks.len()];
+    let mut queue = VecDeque::from([source]);
+    let mut partners = Vec::new();
+    steps[source] = 0;
+    while let Some(from) = queue.pop_front() {
+        let support = if from == source {
+            0
+        } else {
+            board.stacks[from].len()
+        };
+        for direction in 0..DIRECTIONS.len() {
+            let mut to = from;
+            for length in 1..=support + 1 {
+                let Some(next) = board.adjacent(to, direction) else {
+                    break;
+                };
+                to = next;
+                if steps[to] != usize::MAX || board.nests[to] == Some(color as u8) {
+                    continue;
+                }
+                let stack = &board.stacks[to];
+                if stack.len() + q > MAX_HEIGHT
+                    || stack.top_run_len() != stack.len()
+                    || stack.last() == Some(color as u8)
+                {
+                    continue;
+                }
+                steps[to] = steps[from] + 1;
+                previous[to] = Some(Action {
+                    from,
+                    k: support,
+                    direction,
+                    length,
+                });
+                if stack.len() > 0 {
+                    partners.push(to);
+                }
+                queue.push_back(to);
+            }
+        }
+    }
+    let mut ranked = Vec::new();
+    for partner in partners {
+        let partner_color = usize::from(board.stacks[partner].last().unwrap());
+        let estimate = steps[partner]
+            .saturating_add(distances[color][partner].min(distances[partner_color][partner]));
+        let mut path = Vec::new();
+        let mut at = partner;
+        while at != source {
+            let action = previous[at].expect("BFS predecessor");
+            path.push(action);
+            at = action.from;
+        }
+        path.reverse();
+        ranked.push((estimate, partner, path));
+    }
+    ranked.sort_by(|a, b| {
+        a.0.cmp(&b.0)
+            .then_with(|| a.2.len().cmp(&b.2.len()))
+            .then_with(|| a.1.cmp(&b.1))
+    });
+    ranked
+        .into_iter()
+        .take(MAX_MIXED_PARTNERS)
+        .map(|(_, partner, path)| (partner, path))
+        .collect()
+}
+
+// The background excludes both groups. State parity records which block is
+// on top; every whole-tower jump reverses it. A terminal must leave the other
+// block alone on an empty cell after automatic homecoming.
+fn mixed_transport_plans(
+    board: &Board,
+    source: usize,
+    partner: usize,
+    merge_path: &[Action],
+) -> Vec<Vec<Action>> {
+    let source_color = board.stacks[source].last().unwrap();
+    let partner_color = board.stacks[partner].last().unwrap();
+    let source_count = board.stacks[source].len();
+    let partner_count = board.stacks[partner].len();
+    let moving = source_count + partner_count;
+    let mut background = board.clone();
+    background.stacks[source] = Stack::default();
+    background.stacks[partner] = Stack::default();
+    let mut merged = board.clone();
+    for &action in merge_path {
+        if merged.stacks[action.from].len() != action.k + source_count
+            || merged.stacks[action.from].top_run_len() < source_count
+        {
+            return Vec::new();
+        }
+        merged.apply(action);
+    }
+    if merged.stacks[partner].len() != moving
+        || merged.stacks[partner].top_run_len() != source_count
+        || merged.stacks[partner].last() != Some(source_color)
+        || merged
+            .stacks
+            .iter()
+            .enumerate()
+            .any(|(cell, stack)| cell != partner && *stack != background.stacks[cell])
+    {
+        return Vec::new();
+    }
+
+    let start = partner * 2;
+    let mut steps = vec![usize::MAX; board.stacks.len() * 2];
+    let mut previous: Vec<Option<(usize, Action)>> = vec![None; steps.len()];
+    let mut queue = VecDeque::from([start]);
+    let mut found = [false; 2];
+    let mut plans = Vec::new();
+    steps[start] = 0;
+    while let Some(state) = queue.pop_front() {
+        if steps[state] >= MAX_MIXED_TRANSPORT_STEPS {
+            continue;
+        }
+        let from = state / 2;
+        let parity = state % 2;
+        let support = background.stacks[from].len();
+        let top_after_jump = if parity == 0 {
+            partner_color
+        } else {
+            source_color
+        };
+        for direction in 0..DIRECTIONS.len() {
+            let mut to = from;
+            for length in 1..=support + 1 {
+                let Some(next) = board.adjacent(to, direction) else {
+                    break;
+                };
+                to = next;
+                let landing_height = background.stacks[to].len();
+                if landing_height + moving > MAX_HEIGHT {
+                    continue;
+                }
+                let action = Action {
+                    from,
+                    k: support,
+                    direction,
+                    length,
+                };
+                if board.nests[to] == Some(top_after_jump) {
+                    if landing_height != 0 {
+                        continue;
+                    }
+                    let returned = usize::from(top_after_jump == partner_color);
+                    if found[returned] {
+                        continue;
+                    }
+                    found[returned] = true;
+                    let mut transport = vec![action];
+                    let mut at = state;
+                    while at != start {
+                        let (before, prior_action) = previous[at].expect("BFS predecessor");
+                        transport.push(prior_action);
+                        at = before;
+                    }
+                    transport.reverse();
+                    let mut actual = merged.clone();
+                    for &step in &transport {
+                        actual.apply(step);
+                    }
+                    let remaining_color = if top_after_jump == source_color {
+                        partner_color
+                    } else {
+                        source_color
+                    };
+                    let remaining_count = if top_after_jump == source_color {
+                        partner_count
+                    } else {
+                        source_count
+                    };
+                    if actual.stacks[to].len() == remaining_count
+                        && actual.stacks[to].top_run_len() == remaining_count
+                        && actual.stacks[to].last() == Some(remaining_color)
+                        && actual
+                            .stacks
+                            .iter()
+                            .enumerate()
+                            .all(|(cell, stack)| cell == to || *stack == background.stacks[cell])
+                    {
+                        let mut whole = merge_path.to_vec();
+                        whole.extend(transport);
+                        plans.push(whole);
+                    }
+                } else {
+                    let next_state = to * 2 + (1 - parity);
+                    if steps[next_state] == usize::MAX {
+                        steps[next_state] = steps[state] + 1;
+                        previous[next_state] = Some((state, action));
+                        queue.push_back(next_state);
+                    }
+                }
+            }
+        }
+        if found.iter().all(|&done| done) {
+            break;
+        }
+    }
+    plans
+}
+
 fn main() {
     input! {
         n: usize,
@@ -708,7 +936,14 @@ fn main() {
     let mut candidates = 0;
     let mut rollouts = 1;
     let mut accepted = 0;
+    let mut mixed_attempts = 0;
+    let mut mixed_partners = 0;
+    let mut mixed_candidates = 0;
+    let mut mixed_rollouts = 0;
+    let mut mixed_accepted = 0;
+    let mut mixed_actions = 0;
     while !saved.is_empty() {
+        let mut selected_mixed_actions = None;
         if replans < MAX_REPLANS
             && Instant::now() < deadline
             && let Some((cell, color)) = choose_target(&board, &distances)
@@ -748,6 +983,55 @@ fn main() {
                     accepted += 1;
                 }
             }
+            if mixed_attempts < MAX_MIXED_REPLANS
+                && replans % MIXED_REPLAN_INTERVAL == 1
+                && Instant::now() < deadline
+            {
+                mixed_attempts += 1;
+                let partners = mixed_merge_paths(&board, cell, color, &distances);
+                mixed_partners += partners.len();
+                for (partner, merge_path) in partners {
+                    if Instant::now() >= deadline {
+                        break;
+                    }
+                    if merge_path.len() >= plan_length(&saved) {
+                        continue;
+                    }
+                    let plans = mixed_transport_plans(&board, cell, partner, &merge_path);
+                    mixed_candidates += plans.len();
+                    for prefix in plans {
+                        if Instant::now() >= deadline {
+                            break;
+                        }
+                        if prefix.len() >= plan_length(&saved) {
+                            continue;
+                        }
+                        let mut after = board.clone();
+                        for &action in &prefix {
+                            after.apply(action);
+                        }
+                        let Some(mut continuation) = legacy_rollout(
+                            &after,
+                            &distances,
+                            remaining - prefix.len(),
+                            Some(deadline),
+                        ) else {
+                            continue;
+                        };
+                        rollouts += 1;
+                        mixed_rollouts += 1;
+                        if prefix.len() + plan_length(&continuation) < plan_length(&saved) {
+                            selected_mixed_actions = Some(prefix.len());
+                            continuation.push_front(prefix);
+                            saved = continuation;
+                            mixed_accepted += 1;
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(length) = selected_mixed_actions {
+            mixed_actions += length;
         }
         let unit = saved.pop_front().expect("Nonempty saved continuation");
         for action in unit {
@@ -756,7 +1040,7 @@ fn main() {
         }
     }
     eprintln!(
-        "merge_search replans={replans} candidates={candidates} rollouts={rollouts} accepted={accepted}"
+        "merge_search replans={replans} candidates={candidates} rollouts={rollouts} accepted={accepted} mixed_attempts={mixed_attempts} mixed_partners={mixed_partners} mixed_candidates={mixed_candidates} mixed_rollouts={mixed_rollouts} mixed_accepted={mixed_accepted} mixed_actions={mixed_actions}"
     );
 
     let mut output = String::new();
@@ -785,6 +1069,65 @@ mod tests {
             nests: vec![None; 49],
             stacks: vec![Stack::default(); 49],
         }
+    }
+
+    #[test]
+    fn mixed_transport_checks_top_color_before_homecoming() {
+        let mut board = empty_board();
+        let source = 3 * 7 + 1;
+        let partner = source + 1;
+        let source_nest = partner + 1;
+        let partner_nest = 2 * 7 + 2;
+        board.stacks[source].push(0);
+        board.stacks[partner].push(1);
+        board.nests[source_nest] = Some(0);
+        board.nests[partner_nest] = Some(1);
+        let merge = [Action {
+            from: source,
+            k: 0,
+            direction: 3,
+            length: 1,
+        }];
+        let plans = mixed_transport_plans(&board, source, partner, &merge);
+        assert_eq!(plans.len(), 1);
+        let mut after = board.clone();
+        for &action in &plans[0] {
+            after.apply(action);
+        }
+        assert_eq!(after.stacks[partner_nest].last(), Some(0));
+        assert_eq!(after.stacks[source_nest].len(), 0);
+    }
+
+    #[test]
+    fn mixed_transport_jumps_from_fixed_springboard_and_restores_it() {
+        let mut board = empty_board();
+        let source = 3 * 7 + 1;
+        let partner = source + 1;
+        let springboard = partner + 1;
+        let source_nest = 3 * 7 + 6;
+        board.stacks[source].push(0);
+        board.stacks[partner].push(1);
+        board.stacks[springboard].push(2);
+        board.stacks[springboard].push(2);
+        board.nests[source_nest] = Some(0);
+        board.nests[2 * 7 + 2] = Some(1);
+        let merge = [Action {
+            from: source,
+            k: 0,
+            direction: 3,
+            length: 1,
+        }];
+        let plans = mixed_transport_plans(&board, source, partner, &merge);
+        assert_eq!(plans.len(), 2);
+        let springboard_plan = plans.iter().find(|plan| plan.len() == 3).unwrap();
+        assert_eq!(springboard_plan[2].length, 3);
+        let mut after = board.clone();
+        for &action in springboard_plan {
+            after.apply(action);
+        }
+        assert_eq!(after.stacks[source_nest].last(), Some(1));
+        assert_eq!(after.stacks[source_nest].len(), 1);
+        assert_eq!(after.stacks[springboard], board.stacks[springboard]);
     }
 
     #[test]
