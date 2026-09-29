@@ -2,12 +2,17 @@ use proconio::input;
 use proconio::marker::Bytes;
 use std::collections::VecDeque;
 use std::fmt::Write;
+use std::time::{Duration, Instant};
 
 const DIRECTIONS: [(isize, isize, char); 4] =
     [(-1, 0, 'U'), (1, 0, 'D'), (0, -1, 'L'), (0, 1, 'R')];
 const MAX_OPERATIONS: usize = 100_000;
 const MAX_HEIGHT: usize = 8;
 const MAX_PAIR_STEPS: usize = 3;
+const MAX_REPLANS: usize = 24;
+const MAX_CANDIDATE_ROLLOUTS: usize = 3;
+const MAX_MERGE_PARTNERS: usize = 16;
+const SEARCH_DEADLINE: Duration = Duration::from_millis(1650);
 
 #[derive(Clone, Copy, Default)]
 struct Stack {
@@ -109,6 +114,12 @@ struct Action {
     k: usize,
     direction: usize,
     length: usize,
+}
+
+type Plan = VecDeque<Vec<Action>>;
+
+fn plan_length(plan: &Plan) -> usize {
+    plan.iter().map(Vec::len).sum()
 }
 
 struct RelayPlan {
@@ -505,6 +516,150 @@ fn choose_pair(
     Some(actions)
 }
 
+// A legacy decision is one unit: a short pair, a relay, or one ordinary move.
+// Units are kept intact when a saved continuation is resumed.
+fn legacy_rollout(
+    initial: &Board,
+    distances: &[Vec<usize>],
+    limit: usize,
+    deadline: Option<Instant>,
+) -> Option<Plan> {
+    let mut board = initial.clone();
+    let mut plan = Plan::new();
+    let mut count = 0;
+    while let Some((cell, color)) = choose_target(&board, distances) {
+        if count >= limit || deadline.is_some_and(|time| Instant::now() >= time) {
+            return None;
+        }
+        let unit = if let Some(pair) = choose_pair(&board, cell, color, distances)
+            && count + pair.len() <= limit
+        {
+            pair
+        } else if count + 2 <= limit
+            && let Some(relay) = choose_relay(&board, cell, color, &distances[color])
+        {
+            relay.actions.to_vec()
+        } else {
+            vec![choose_group_move(&board, cell, color, &distances[color])?.0]
+        };
+        if count + unit.len() > limit {
+            return None;
+        }
+        for &action in &unit {
+            board.apply(action);
+        }
+        count += unit.len();
+        plan.push_back(unit);
+    }
+    Some(plan)
+}
+
+// The source group is removed from the fixed background. Only empty cells and
+// homogeneous towers are visited. A homogeneous tower cannot lose residents
+// through automatic homecoming: such a tower cannot exist on its own nest.
+fn merge_candidates(board: &Board, source: usize, color: usize) -> Vec<Vec<Action>> {
+    let q = board.stacks[source].len();
+    if q == 0 || q == MAX_HEIGHT || board.stacks[source].top_run_len() != q {
+        return Vec::new();
+    }
+    let mut steps = vec![usize::MAX; board.stacks.len()];
+    let mut previous = vec![None; board.stacks.len()];
+    let mut queue = VecDeque::from([source]);
+    let mut partners = Vec::new();
+    steps[source] = 0;
+    while let Some(from) = queue.pop_front() {
+        let support = if from == source {
+            0
+        } else {
+            board.stacks[from].len()
+        };
+        for direction in 0..DIRECTIONS.len() {
+            let mut to = from;
+            for length in 1..=support + 1 {
+                let Some(next) = board.adjacent(to, direction) else {
+                    break;
+                };
+                to = next;
+                if steps[to] != usize::MAX || board.nests[to] == Some(color as u8) {
+                    continue;
+                }
+                let stack = &board.stacks[to];
+                if stack.len() + q > MAX_HEIGHT || stack.top_run_len() != stack.len() {
+                    continue;
+                }
+                steps[to] = steps[from] + 1;
+                previous[to] = Some(Action {
+                    from,
+                    k: support,
+                    direction,
+                    length,
+                });
+                if stack.len() > 0 && stack.last() == Some(color as u8) {
+                    partners.push(to);
+                } else {
+                    queue.push_back(to);
+                }
+            }
+        }
+    }
+
+    let source_cost = transport_cost(board, source, color, q, &[source]);
+    let mut ranked = Vec::new();
+    for partner in partners.into_iter().take(MAX_MERGE_PARTNERS) {
+        let p = board.stacks[partner].len();
+        let separate = source_cost.zip(transport_cost(board, partner, color, p, &[partner]));
+        let merged = transport_cost(board, partner, color, q + p, &[source, partner]);
+        let estimate = match (separate, merged) {
+            (Some((a, b)), Some(c)) => a as i64 + b as i64 - steps[partner] as i64 - c as i64,
+            _ => i64::MIN / 2,
+        };
+        let mut path = Vec::new();
+        let mut at = partner;
+        while at != source {
+            let action = previous[at].expect("BFS predecessor");
+            path.push(action);
+            at = action.from;
+        }
+        path.reverse();
+        // Simulate the entire candidate, including the game's color reversal
+        // and automatic homecoming, before admitting it to rollout.
+        let mut actual = board.clone();
+        let mut valid = true;
+        for (index, &action) in path.iter().enumerate() {
+            if actual.stacks[action.from].len() != action.k + q
+                || actual.stacks[action.from].top_run_len() < q
+            {
+                valid = false;
+                break;
+            }
+            actual.apply(action);
+            let next = if index + 1 == path.len() {
+                partner
+            } else {
+                path[index + 1].from
+            };
+            let expected = if next == partner {
+                q + p
+            } else {
+                q + board.stacks[next].len()
+            };
+            if actual.stacks[next].len() != expected || actual.stacks[next].top_run_len() < q {
+                valid = false;
+                break;
+            }
+        }
+        if valid && actual.stacks[partner].len() == q + p {
+            ranked.push((estimate, partner, path));
+        }
+    }
+    ranked.sort_by(|a, b| {
+        b.0.cmp(&a.0)
+            .then_with(|| a.2.len().cmp(&b.2.len()))
+            .then_with(|| a.1.cmp(&b.1))
+    });
+    ranked.into_iter().map(|(_, _, path)| path).collect()
+}
+
 fn main() {
     input! {
         n: usize,
@@ -544,38 +699,65 @@ fn main() {
         .map(|&nest| distances_from(&board, nest))
         .collect();
 
+    let started = Instant::now();
+    let deadline = started + SEARCH_DEADLINE;
+    let mut saved = legacy_rollout(&board, &distances, MAX_OPERATIONS, None)
+        .expect("Legacy solver must produce a complete baseline");
     let mut actions = Vec::new();
-    while actions.len() < MAX_OPERATIONS {
-        let Some((cell, color)) = choose_target(&board, &distances) else {
-            break;
-        };
-        if let Some(plan) = choose_pair(&board, cell, color, &distances)
-            && actions.len() + plan.len() <= MAX_OPERATIONS
+    let mut replans = 0;
+    let mut candidates = 0;
+    let mut rollouts = 1;
+    let mut accepted = 0;
+    while !saved.is_empty() {
+        if replans < MAX_REPLANS
+            && Instant::now() < deadline
+            && let Some((cell, color)) = choose_target(&board, &distances)
+            && board.stacks[cell].len() < MAX_HEIGHT
+            && board.stacks[cell].top_run_len() == board.stacks[cell].len()
         {
-            // Finish the short merge before selecting another target. Pairing
-            // does not gather further partners once this tower reaches two.
-            for action in plan {
-                board.apply(action);
-                actions.push(action);
+            replans += 1;
+            let remaining = MAX_OPERATIONS - actions.len();
+            if let Some(fresh) = legacy_rollout(&board, &distances, remaining, Some(deadline)) {
+                rollouts += 1;
+                if plan_length(&fresh) < plan_length(&saved) {
+                    saved = fresh;
+                }
             }
-            continue;
-        }
-        if actions.len() + 2 <= MAX_OPERATIONS
-            && let Some(plan) = choose_relay(&board, cell, color, &distances[color])
-        {
-            // The intermediate landing may increase distance. Commit both
-            // actions before reranking, keeping the springboard underneath.
-            for action in plan.actions {
-                board.apply(action);
-                actions.push(action);
+            let paths = merge_candidates(&board, cell, color);
+            candidates += paths.len();
+            for path in paths.into_iter().take(MAX_CANDIDATE_ROLLOUTS) {
+                if Instant::now() >= deadline {
+                    break;
+                }
+                if path.len() >= plan_length(&saved) {
+                    continue;
+                }
+                let mut after = board.clone();
+                for &action in &path {
+                    after.apply(action);
+                }
+                let Some(mut continuation) =
+                    legacy_rollout(&after, &distances, remaining - path.len(), Some(deadline))
+                else {
+                    continue;
+                };
+                rollouts += 1;
+                if path.len() + plan_length(&continuation) < plan_length(&saved) {
+                    continuation.push_front(path);
+                    saved = continuation;
+                    accepted += 1;
+                }
             }
-            continue;
         }
-        let (action, _) = choose_group_move(&board, cell, color, &distances[color])
-            .expect("A single slime can move toward its nest");
-        board.apply(action);
-        actions.push(action);
+        let unit = saved.pop_front().expect("Nonempty saved continuation");
+        for action in unit {
+            board.apply(action);
+            actions.push(action);
+        }
     }
+    eprintln!(
+        "merge_search replans={replans} candidates={candidates} rollouts={rollouts} accepted={accepted}"
+    );
 
     let mut output = String::new();
     for action in actions {
