@@ -11,6 +11,7 @@ const MAX_HEIGHT: usize = 8;
 const MAX_PAIR_STEPS: usize = 3;
 const MAX_REPLANS: usize = 512;
 const MAX_TARGET_CANDIDATES: usize = 4;
+const TARGET_SAMPLE_SEED: u64 = 0x0A72_2026_0930_0009;
 const MAX_CANDIDATE_ROLLOUTS: usize = 3;
 const MAX_MERGE_PARTNERS: usize = 16;
 const MAX_MIXED_REPLANS: usize = 64;
@@ -200,12 +201,112 @@ fn choose_target(board: &Board, distances: &[Vec<usize>]) -> Option<(usize, usiz
     best.map(|(cell, color, _, _)| (cell, color))
 }
 
+// SplitMix64 with a fixed seed. Only target candidate extraction consumes it.
+struct TargetRng {
+    state: u64,
+}
+
+impl TargetRng {
+    fn new(seed: u64) -> Self {
+        Self { state: seed }
+    }
+
+    fn next_u64(&mut self) -> u64 {
+        self.state = self.state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut value = self.state;
+        value = (value ^ (value >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        value = (value ^ (value >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        value ^ (value >> 31)
+    }
+
+    fn index(&mut self, size: usize) -> usize {
+        let modulus = size as u64;
+        let threshold = modulus.wrapping_neg() % modulus;
+        loop {
+            let value = self.next_u64();
+            if value >= threshold {
+                return (value % modulus) as usize;
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TargetSlot {
+    Fourth,
+    OtherColor,
+    Overall,
+    Fill,
+}
+
+impl TargetSlot {
+    fn index(self) -> usize {
+        match self {
+            Self::Fourth => 0,
+            Self::OtherColor => 1,
+            Self::Overall => 2,
+            Self::Fill => 3,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct TargetCandidate {
+    cell: usize,
+    color: usize,
+    rank: usize,
+    slot: TargetSlot,
+}
+
+struct TargetChoices {
+    first: (usize, usize),
+    additional: Vec<TargetCandidate>,
+}
+
+#[derive(Default)]
+struct TargetCounts {
+    rank: [usize; 3],  // 2-4, 5-8, 9+
+    color: [usize; 2], // Same as first, different from first
+    slot: [usize; 4],  // Fourth, other color, overall, fill
+}
+
+impl TargetCounts {
+    fn record(&mut self, candidate: TargetCandidate, first_color: usize) {
+        let rank_bucket = if candidate.rank <= 4 {
+            0
+        } else if candidate.rank <= 8 {
+            1
+        } else {
+            2
+        };
+        self.rank[rank_bucket] += 1;
+        self.color[usize::from(candidate.color != first_color)] += 1;
+        self.slot[candidate.slot.index()] += 1;
+    }
+}
+
+fn sample_target_index(
+    groups: &[(usize, usize)],
+    chosen: &[(usize, TargetSlot)],
+    different_color: bool,
+    rng: &mut TargetRng,
+) -> Option<usize> {
+    let available: Vec<_> = (1..groups.len())
+        .filter(|&index| {
+            !chosen.iter().any(|&(selected, _)| selected == index)
+                && (!different_color || groups[index].1 != groups[0].1)
+        })
+        .collect();
+    (!available.is_empty()).then(|| available[rng.index(available.len())])
+}
+
 // Return only ordinary homogeneous groups. A full or mixed stack must keep
 // the legacy cleanup priority, so it suppresses target comparison entirely.
 fn ordinary_target_candidates(
     board: &Board,
     distances: &[Vec<usize>],
-) -> Option<Vec<(usize, usize)>> {
+    rng: &mut TargetRng,
+) -> Option<TargetChoices> {
     let mut candidates = Vec::new();
     for (cell, stack) in board.stacks.iter().enumerate() {
         let Some(color) = stack.last() else {
@@ -221,13 +322,42 @@ fn ordinary_target_candidates(
         ));
     }
     candidates.sort_unstable_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
-    Some(
-        candidates
+    let groups: Vec<_> = candidates
+        .into_iter()
+        .map(|(_, cell, color)| (cell, color))
+        .collect();
+    let &first = groups.first()?;
+    let mut chosen = Vec::new();
+    if groups.len() >= MAX_TARGET_CANDIDATES {
+        chosen.push((MAX_TARGET_CANDIDATES - 1, TargetSlot::Fourth));
+    }
+    if let Some(index) = sample_target_index(&groups, &chosen, true, rng) {
+        chosen.push((index, TargetSlot::OtherColor));
+    }
+    if chosen.len() < MAX_TARGET_CANDIDATES - 1
+        && let Some(index) = sample_target_index(&groups, &chosen, false, rng)
+    {
+        chosen.push((index, TargetSlot::Overall));
+    }
+    while chosen.len() < MAX_TARGET_CANDIDATES - 1 {
+        let Some(index) = sample_target_index(&groups, &chosen, false, rng) else {
+            break;
+        };
+        chosen.push((index, TargetSlot::Fill));
+    }
+    chosen.sort_unstable_by_key(|&(index, _)| index);
+    Some(TargetChoices {
+        first,
+        additional: chosen
             .into_iter()
-            .take(MAX_TARGET_CANDIDATES)
-            .map(|(_, cell, color)| (cell, color))
+            .map(|(index, slot)| TargetCandidate {
+                cell: groups[index].0,
+                color: groups[index].1,
+                rank: index + 1,
+                slot,
+            })
             .collect(),
-    )
+    })
 }
 
 fn springboard_gain(board: &Board, cell: usize, moving: usize, distances: &[usize]) -> usize {
@@ -1350,6 +1480,7 @@ fn main() {
 
     let started = Instant::now();
     let deadline = started + SEARCH_DEADLINE;
+    let mut target_rng = TargetRng::new(TARGET_SAMPLE_SEED);
     let mut saved = legacy_rollout(&board, &distances, MAX_OPERATIONS, None)
         .expect("Legacy solver must produce a complete baseline");
     let mut actions = Vec::new();
@@ -1375,12 +1506,44 @@ fn main() {
     let mut target_rollouts = 0;
     let mut target_saved = 0;
     let mut target_savings = 0;
-    let mut target_executed = [0; MAX_TARGET_CANDIDATES - 1];
+    let mut target_executed = vec![0; board.stacks.len() + 1];
+    let mut target_extracted_counts = TargetCounts::default();
+    let mut target_completed_counts = TargetCounts::default();
+    let mut target_saved_counts = TargetCounts::default();
+    let mut target_executed_counts = TargetCounts::default();
     let mut target_deadline_hits = 0;
+    let mut target_time = Duration::ZERO;
+    let mut target_events = Vec::new();
+    let mut deadline_skipped_normal = 0;
+    let mut deadline_skipped_mixed = 0;
+    let mut deadline_skipped_pickup = 0;
+    let mut merge_deadline_breaks = 0;
+    let mut mixed_deadline_breaks = 0;
+    let mut pickup_deadline_breaks = 0;
     while !saved.is_empty() {
         let mut selected_mixed_actions = None;
         let mut selected_pickup_actions = None;
-        let mut selected_target_rank = None;
+        let mut selected_target_candidate = None;
+        let mut selected_target_saving = 0;
+        if replans < MAX_REPLANS
+            && Instant::now() >= deadline
+            && let Some((cell, _)) = choose_target(&board, &distances)
+            && board.stacks[cell].len() < MAX_HEIGHT
+            && board.stacks[cell].top_run_len() == board.stacks[cell].len()
+        {
+            deadline_skipped_normal += 1;
+            let hypothetical_replan = replans + deadline_skipped_normal;
+            if mixed_attempts < MAX_MIXED_REPLANS
+                && hypothetical_replan % MIXED_REPLAN_INTERVAL == 1
+            {
+                deadline_skipped_mixed += 1;
+            }
+            if pickup_attempts < MAX_PICKUP_REPLANS
+                && hypothetical_replan % PICKUP_REPLAN_INTERVAL == 1
+            {
+                deadline_skipped_pickup += 1;
+            }
+        }
         if replans < MAX_REPLANS
             && Instant::now() < deadline
             && let Some((cell, color)) = choose_target(&board, &distances)
@@ -1399,6 +1562,7 @@ fn main() {
             candidates += paths.len();
             for path in paths.into_iter().take(MAX_CANDIDATE_ROLLOUTS) {
                 if Instant::now() >= deadline {
+                    merge_deadline_breaks += 1;
                     break;
                 }
                 if path.len() >= plan_length(&saved) {
@@ -1429,6 +1593,7 @@ fn main() {
                 mixed_partners += partners.len();
                 for (partner, merge_path) in partners {
                     if Instant::now() >= deadline {
+                        mixed_deadline_breaks += 1;
                         break;
                     }
                     if merge_path.len() >= plan_length(&saved) {
@@ -1438,6 +1603,7 @@ fn main() {
                     mixed_candidates += plans.len();
                     for prefix in plans {
                         if Instant::now() >= deadline {
+                            mixed_deadline_breaks += 1;
                             break;
                         }
                         if prefix.len() >= plan_length(&saved) {
@@ -1477,6 +1643,7 @@ fn main() {
                 pickup_candidates_count += found.plans.len();
                 for prefix in found.plans.into_iter().take(MAX_PICKUP_ROLLOUTS) {
                     if Instant::now() >= deadline {
+                        pickup_deadline_breaks += 1;
                         break;
                     }
                     if prefix.len() >= plan_length(&saved) {
@@ -1508,22 +1675,25 @@ fn main() {
             // The first ranked group is exactly the ordinary legacy target.
             // Its full rollout was already evaluated above; only alternatives
             // need another rollout, after all existing search candidates.
-            if let Some(targets) = ordinary_target_candidates(&board, &distances) {
-                debug_assert_eq!(targets.first(), Some(&(cell, color)));
-                if targets.len() > 1 {
+            let target_started = Instant::now();
+            if let Some(targets) = ordinary_target_candidates(&board, &distances, &mut target_rng) {
+                debug_assert_eq!(targets.first, (cell, color));
+                if !targets.additional.is_empty() {
                     target_comparisons += 1;
                 }
-                for (index, &(candidate_cell, candidate_color)) in
-                    targets.iter().enumerate().skip(1)
-                {
+                let before_target_length = plan_length(&saved);
+                for &candidate in &targets.additional {
+                    target_extracted_counts.record(candidate, color);
+                }
+                for &candidate in &targets.additional {
                     if Instant::now() >= deadline {
                         target_deadline_hits += 1;
                         break;
                     }
                     let Some(unit) = legacy_unit(
                         &board,
-                        candidate_cell,
-                        candidate_color,
+                        candidate.cell,
+                        candidate.color,
                         &distances,
                         remaining,
                     ) else {
@@ -1547,19 +1717,23 @@ fn main() {
                     };
                     rollouts += 1;
                     target_rollouts += 1;
+                    target_completed_counts.record(candidate, color);
                     let candidate_length = unit.len() + plan_length(&continuation);
                     let saved_length = plan_length(&saved);
                     if candidate_length < saved_length {
                         selected_mixed_actions = None;
                         selected_pickup_actions = None;
-                        selected_target_rank = Some(index);
+                        selected_target_candidate = Some((candidate, color));
+                        selected_target_saving = before_target_length - candidate_length;
                         target_saved += 1;
                         target_savings += saved_length - candidate_length;
+                        target_saved_counts.record(candidate, color);
                         continuation.push_front(unit);
                         saved = continuation;
                     }
                 }
             }
+            target_time += target_started.elapsed();
         }
         if let Some(length) = selected_mixed_actions {
             mixed_actions += length;
@@ -1568,8 +1742,16 @@ fn main() {
             pickup_executed += 1;
             pickup_actions += length;
         }
-        if let Some(rank) = selected_target_rank {
-            target_executed[rank - 1] += 1;
+        if let Some((candidate, first_color)) = selected_target_candidate {
+            target_executed[candidate.rank] += 1;
+            target_executed_counts.record(candidate, first_color);
+            target_events.push((
+                candidate.rank,
+                actions.len(),
+                selected_target_saving,
+                candidate.color == first_color,
+                candidate.slot.index(),
+            ));
         }
         let unit = saved.pop_front().expect("Nonempty saved continuation");
         for action in unit {
@@ -1579,8 +1761,35 @@ fn main() {
     }
     eprintln!(
         "merge_search replans={replans} candidates={candidates} rollouts={rollouts} accepted={accepted} mixed_attempts={mixed_attempts} mixed_partners={mixed_partners} mixed_candidates={mixed_candidates} mixed_rollouts={mixed_rollouts} mixed_accepted={mixed_accepted} mixed_actions={mixed_actions} pickup_attempts={pickup_attempts} pickup_triples={pickup_triples} pickup_approaches={pickup_approaches_count} pickup_candidates={pickup_candidates_count} pickup_rollouts={pickup_rollouts} pickup_saved={pickup_saved} pickup_executed={pickup_executed} pickup_actions={pickup_actions} target_comparisons={target_comparisons} target_rollouts={target_rollouts} target_saved={target_saved} target_savings={target_savings} target_rank2={} target_rank3={} target_rank4={} target_deadline_hits={target_deadline_hits}",
-        target_executed[0], target_executed[1], target_executed[2],
+        target_executed[2], target_executed[3], target_executed[4],
     );
+    eprintln!(
+        "target_sampling seed={TARGET_SAMPLE_SEED} extracted_rank={:?} completed_rank={:?} saved_rank={:?} executed_rank={:?} extracted_color={:?} completed_color={:?} saved_color={:?} executed_color={:?} extracted_slot={:?} completed_slot={:?} saved_slot={:?} executed_slot={:?}",
+        target_extracted_counts.rank,
+        target_completed_counts.rank,
+        target_saved_counts.rank,
+        target_executed_counts.rank,
+        target_extracted_counts.color,
+        target_completed_counts.color,
+        target_saved_counts.color,
+        target_executed_counts.color,
+        target_extracted_counts.slot,
+        target_completed_counts.slot,
+        target_saved_counts.slot,
+        target_executed_counts.slot,
+    );
+    eprintln!(
+        "target_profile target_time_us={} deadline_skipped_normal={deadline_skipped_normal} deadline_skipped_mixed={deadline_skipped_mixed} deadline_skipped_pickup={deadline_skipped_pickup} merge_deadline_breaks={merge_deadline_breaks} mixed_deadline_breaks={mixed_deadline_breaks} pickup_deadline_breaks={pickup_deadline_breaks}",
+        target_time.as_micros(),
+    );
+    let mut event_log = String::new();
+    for (rank, operation, saving, same_color, slot) in target_events {
+        let _ = write!(
+            event_log,
+            "{rank}:{operation}:{saving}:{same_color}:{slot},"
+        );
+    }
+    eprintln!("target_events={event_log}");
 
     let mut output = String::new();
     for action in actions {
@@ -1615,22 +1824,127 @@ mod tests {
         let mut board = empty_board();
         board.nests[24] = Some(0);
         board.nests[6] = Some(1);
-        for cell in [0, 48, 16, 18, 25] {
+        for cell in [0, 48, 16, 18] {
             board.stacks[cell].push(0);
         }
         let distances = vec![distances_from(&board, 24), distances_from(&board, 6)];
-        let targets = ordinary_target_candidates(&board, &distances).unwrap();
-        assert_eq!(targets, vec![(0, 0), (48, 0), (16, 0), (18, 0)]);
-        assert_eq!(targets[0], choose_target(&board, &distances).unwrap());
+        let mut rng = TargetRng::new(TARGET_SAMPLE_SEED);
+        let targets = ordinary_target_candidates(&board, &distances, &mut rng).unwrap();
+        assert_eq!(targets.first, choose_target(&board, &distances).unwrap());
+        assert_eq!(
+            targets
+                .additional
+                .iter()
+                .map(|t| t.cell)
+                .collect::<Vec<_>>(),
+            vec![48, 16, 18]
+        );
+        assert_eq!(targets.additional[2].slot, TargetSlot::Fourth);
+
+        board.stacks[25].push(0);
+        let targets = ordinary_target_candidates(&board, &distances, &mut rng).unwrap();
+        assert_eq!(targets.additional.len(), 3);
+        assert!(
+            targets
+                .additional
+                .iter()
+                .any(|t| t.rank == 4 && t.slot == TargetSlot::Fourth)
+        );
+        assert!(
+            targets
+                .additional
+                .windows(2)
+                .all(|pair| pair[0].rank < pair[1].rank)
+        );
+        assert!(
+            !targets
+                .additional
+                .iter()
+                .any(|t| t.slot == TargetSlot::OtherColor)
+        );
 
         for _ in 1..MAX_HEIGHT {
             board.stacks[25].push(0);
         }
-        assert!(ordinary_target_candidates(&board, &distances).is_none());
+        assert!(ordinary_target_candidates(&board, &distances, &mut rng).is_none());
         board.stacks[25] = Stack::default();
         board.stacks[25].push(0);
         board.stacks[25].push(1);
-        assert!(ordinary_target_candidates(&board, &distances).is_none());
+        assert!(ordinary_target_candidates(&board, &distances, &mut rng).is_none());
+    }
+
+    #[test]
+    fn sampled_targets_are_distinct_ranked_and_reproducible() {
+        let mut board = empty_board();
+        board.nests[24] = Some(0);
+        board.nests[6] = Some(1);
+        for cell in 0..20 {
+            if board.nests[cell].is_none() {
+                board.stacks[cell].push((cell % 2) as u8);
+            }
+        }
+        let distances = vec![distances_from(&board, 24), distances_from(&board, 6)];
+        let mut left = TargetRng::new(TARGET_SAMPLE_SEED);
+        let mut right = TargetRng::new(TARGET_SAMPLE_SEED);
+        for _ in 0..20 {
+            let a = ordinary_target_candidates(&board, &distances, &mut left).unwrap();
+            let b = ordinary_target_candidates(&board, &distances, &mut right).unwrap();
+            assert_eq!(a.first, b.first);
+            assert_eq!(a.additional, b.additional);
+            assert_eq!(a.first, choose_target(&board, &distances).unwrap());
+            assert_eq!(a.additional.len(), 3);
+            assert!(
+                a.additional
+                    .windows(2)
+                    .all(|pair| pair[0].rank < pair[1].rank)
+            );
+            assert!(
+                a.additional
+                    .iter()
+                    .any(|candidate| candidate.rank == 4 && candidate.slot == TargetSlot::Fourth)
+            );
+            assert!(a.additional.iter().all(|candidate| candidate.rank > 1));
+            assert!(
+                a.additional
+                    .iter()
+                    .filter(|candidate| candidate.slot == TargetSlot::OtherColor)
+                    .all(|candidate| candidate.color != a.first.1)
+            );
+        }
+        let mut counts = TargetCounts::default();
+        counts.record(
+            TargetCandidate {
+                cell: 0,
+                color: 1,
+                rank: 12,
+                slot: TargetSlot::Overall,
+            },
+            0,
+        );
+        assert_eq!(counts.rank, [0, 0, 1]);
+        assert_eq!(counts.color, [0, 1]);
+        assert_eq!(counts.slot, [0, 0, 1, 0]);
+    }
+
+    #[test]
+    fn sampled_targets_include_every_alternative_when_groups_are_few() {
+        let mut board = empty_board();
+        board.nests[24] = Some(0);
+        board.nests[6] = Some(1);
+        board.stacks[0].push(0);
+        board.stacks[48].push(1);
+        let distances = vec![distances_from(&board, 24), distances_from(&board, 6)];
+        let mut rng = TargetRng::new(TARGET_SAMPLE_SEED);
+        let two = ordinary_target_candidates(&board, &distances, &mut rng).unwrap();
+        assert_eq!(two.additional.len(), 1);
+        assert_eq!(two.additional[0].rank, 2);
+
+        board.stacks[16].push(0);
+        let three = ordinary_target_candidates(&board, &distances, &mut rng).unwrap();
+        assert_eq!(
+            three.additional.iter().map(|t| t.rank).collect::<Vec<_>>(),
+            vec![2, 3]
+        );
     }
 
     #[test]
