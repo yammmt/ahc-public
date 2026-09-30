@@ -10,6 +10,7 @@ const MAX_OPERATIONS: usize = 100_000;
 const MAX_HEIGHT: usize = 8;
 const MAX_PAIR_STEPS: usize = 3;
 const MAX_REPLANS: usize = 512;
+const MAX_TARGET_CANDIDATES: usize = 4;
 const MAX_CANDIDATE_ROLLOUTS: usize = 3;
 const MAX_MERGE_PARTNERS: usize = 16;
 const MAX_MIXED_REPLANS: usize = 64;
@@ -197,6 +198,36 @@ fn choose_target(board: &Board, distances: &[Vec<usize>]) -> Option<(usize, usiz
         }
     }
     best.map(|(cell, color, _, _)| (cell, color))
+}
+
+// Return only ordinary homogeneous groups. A full or mixed stack must keep
+// the legacy cleanup priority, so it suppresses target comparison entirely.
+fn ordinary_target_candidates(
+    board: &Board,
+    distances: &[Vec<usize>],
+) -> Option<Vec<(usize, usize)>> {
+    let mut candidates = Vec::new();
+    for (cell, stack) in board.stacks.iter().enumerate() {
+        let Some(color) = stack.last() else {
+            continue;
+        };
+        if stack.len() == MAX_HEIGHT || stack.top_run_len() != stack.len() {
+            return None;
+        }
+        candidates.push((
+            distances[usize::from(color)][cell],
+            cell,
+            usize::from(color),
+        ));
+    }
+    candidates.sort_unstable_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+    Some(
+        candidates
+            .into_iter()
+            .take(MAX_TARGET_CANDIDATES)
+            .map(|(_, cell, color)| (cell, color))
+            .collect(),
+    )
 }
 
 fn springboard_gain(board: &Board, cell: usize, moving: usize, distances: &[usize]) -> usize {
@@ -537,6 +568,27 @@ fn choose_pair(
 }
 
 // A legacy decision is one unit: a short pair, a relay, or one ordinary move.
+fn legacy_unit(
+    board: &Board,
+    cell: usize,
+    color: usize,
+    distances: &[Vec<usize>],
+    remaining: usize,
+) -> Option<Vec<Action>> {
+    let unit = if let Some(pair) = choose_pair(board, cell, color, distances)
+        && pair.len() <= remaining
+    {
+        pair
+    } else if remaining >= 2
+        && let Some(relay) = choose_relay(board, cell, color, &distances[color])
+    {
+        relay.actions.to_vec()
+    } else {
+        vec![choose_group_move(board, cell, color, &distances[color])?.0]
+    };
+    (unit.len() <= remaining).then_some(unit)
+}
+
 // Units are kept intact when a saved continuation is resumed.
 fn legacy_rollout(
     initial: &Board,
@@ -551,20 +603,7 @@ fn legacy_rollout(
         if count >= limit || deadline.is_some_and(|time| Instant::now() >= time) {
             return None;
         }
-        let unit = if let Some(pair) = choose_pair(&board, cell, color, distances)
-            && count + pair.len() <= limit
-        {
-            pair
-        } else if count + 2 <= limit
-            && let Some(relay) = choose_relay(&board, cell, color, &distances[color])
-        {
-            relay.actions.to_vec()
-        } else {
-            vec![choose_group_move(&board, cell, color, &distances[color])?.0]
-        };
-        if count + unit.len() > limit {
-            return None;
-        }
+        let unit = legacy_unit(&board, cell, color, distances, limit - count)?;
         for &action in &unit {
             board.apply(action);
         }
@@ -1332,9 +1371,16 @@ fn main() {
     let mut pickup_saved = 0;
     let mut pickup_executed = 0;
     let mut pickup_actions = 0;
+    let mut target_comparisons = 0;
+    let mut target_rollouts = 0;
+    let mut target_saved = 0;
+    let mut target_savings = 0;
+    let mut target_executed = [0; MAX_TARGET_CANDIDATES - 1];
+    let mut target_deadline_hits = 0;
     while !saved.is_empty() {
         let mut selected_mixed_actions = None;
         let mut selected_pickup_actions = None;
+        let mut selected_target_rank = None;
         if replans < MAX_REPLANS
             && Instant::now() < deadline
             && let Some((cell, color)) = choose_target(&board, &distances)
@@ -1459,6 +1505,61 @@ fn main() {
                     }
                 }
             }
+            // The first ranked group is exactly the ordinary legacy target.
+            // Its full rollout was already evaluated above; only alternatives
+            // need another rollout, after all existing search candidates.
+            if let Some(targets) = ordinary_target_candidates(&board, &distances) {
+                debug_assert_eq!(targets.first(), Some(&(cell, color)));
+                if targets.len() > 1 {
+                    target_comparisons += 1;
+                }
+                for (index, &(candidate_cell, candidate_color)) in
+                    targets.iter().enumerate().skip(1)
+                {
+                    if Instant::now() >= deadline {
+                        target_deadline_hits += 1;
+                        break;
+                    }
+                    let Some(unit) = legacy_unit(
+                        &board,
+                        candidate_cell,
+                        candidate_color,
+                        &distances,
+                        remaining,
+                    ) else {
+                        continue;
+                    };
+                    if unit.len() >= plan_length(&saved) {
+                        continue;
+                    }
+                    let mut after = board.clone();
+                    for &action in &unit {
+                        after.apply(action);
+                    }
+                    let Some(mut continuation) =
+                        legacy_rollout(&after, &distances, remaining - unit.len(), Some(deadline))
+                    else {
+                        if Instant::now() >= deadline {
+                            target_deadline_hits += 1;
+                            break;
+                        }
+                        continue;
+                    };
+                    rollouts += 1;
+                    target_rollouts += 1;
+                    let candidate_length = unit.len() + plan_length(&continuation);
+                    let saved_length = plan_length(&saved);
+                    if candidate_length < saved_length {
+                        selected_mixed_actions = None;
+                        selected_pickup_actions = None;
+                        selected_target_rank = Some(index);
+                        target_saved += 1;
+                        target_savings += saved_length - candidate_length;
+                        continuation.push_front(unit);
+                        saved = continuation;
+                    }
+                }
+            }
         }
         if let Some(length) = selected_mixed_actions {
             mixed_actions += length;
@@ -1467,6 +1568,9 @@ fn main() {
             pickup_executed += 1;
             pickup_actions += length;
         }
+        if let Some(rank) = selected_target_rank {
+            target_executed[rank - 1] += 1;
+        }
         let unit = saved.pop_front().expect("Nonempty saved continuation");
         for action in unit {
             board.apply(action);
@@ -1474,7 +1578,8 @@ fn main() {
         }
     }
     eprintln!(
-        "merge_search replans={replans} candidates={candidates} rollouts={rollouts} accepted={accepted} mixed_attempts={mixed_attempts} mixed_partners={mixed_partners} mixed_candidates={mixed_candidates} mixed_rollouts={mixed_rollouts} mixed_accepted={mixed_accepted} mixed_actions={mixed_actions} pickup_attempts={pickup_attempts} pickup_triples={pickup_triples} pickup_approaches={pickup_approaches_count} pickup_candidates={pickup_candidates_count} pickup_rollouts={pickup_rollouts} pickup_saved={pickup_saved} pickup_executed={pickup_executed} pickup_actions={pickup_actions}"
+        "merge_search replans={replans} candidates={candidates} rollouts={rollouts} accepted={accepted} mixed_attempts={mixed_attempts} mixed_partners={mixed_partners} mixed_candidates={mixed_candidates} mixed_rollouts={mixed_rollouts} mixed_accepted={mixed_accepted} mixed_actions={mixed_actions} pickup_attempts={pickup_attempts} pickup_triples={pickup_triples} pickup_approaches={pickup_approaches_count} pickup_candidates={pickup_candidates_count} pickup_rollouts={pickup_rollouts} pickup_saved={pickup_saved} pickup_executed={pickup_executed} pickup_actions={pickup_actions} target_comparisons={target_comparisons} target_rollouts={target_rollouts} target_saved={target_saved} target_savings={target_savings} target_rank2={} target_rank3={} target_rank4={} target_deadline_hits={target_deadline_hits}",
+        target_executed[0], target_executed[1], target_executed[2],
     );
 
     let mut output = String::new();
@@ -1503,6 +1608,51 @@ mod tests {
             nests: vec![None; 49],
             stacks: vec![Stack::default(); 49],
         }
+    }
+
+    #[test]
+    fn ordinary_targets_preserve_legacy_first_choice_and_cell_ties() {
+        let mut board = empty_board();
+        board.nests[24] = Some(0);
+        board.nests[6] = Some(1);
+        for cell in [0, 48, 16, 18, 25] {
+            board.stacks[cell].push(0);
+        }
+        let distances = vec![distances_from(&board, 24), distances_from(&board, 6)];
+        let targets = ordinary_target_candidates(&board, &distances).unwrap();
+        assert_eq!(targets, vec![(0, 0), (48, 0), (16, 0), (18, 0)]);
+        assert_eq!(targets[0], choose_target(&board, &distances).unwrap());
+
+        for _ in 1..MAX_HEIGHT {
+            board.stacks[25].push(0);
+        }
+        assert!(ordinary_target_candidates(&board, &distances).is_none());
+        board.stacks[25] = Stack::default();
+        board.stacks[25].push(0);
+        board.stacks[25].push(1);
+        assert!(ordinary_target_candidates(&board, &distances).is_none());
+    }
+
+    #[test]
+    fn shared_legacy_unit_matches_first_rollout_unit() {
+        let mut board = empty_board();
+        let source = 3 * 7 + 2;
+        board.nests[3] = Some(0);
+        board.stacks[source].push(0);
+        board.stacks[source + 2].push(0);
+        let distances = vec![distances_from(&board, 3)];
+        let (cell, color) = choose_target(&board, &distances).unwrap();
+        let unit = legacy_unit(&board, cell, color, &distances, MAX_OPERATIONS).unwrap();
+        assert_eq!(unit.len(), 2);
+        let rollout = legacy_rollout(&board, &distances, MAX_OPERATIONS, None).unwrap();
+        let first = rollout.front().unwrap();
+        let action_fields = |actions: &[Action]| {
+            actions
+                .iter()
+                .map(|a| (a.from, a.k, a.direction, a.length))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(action_fields(&unit), action_fields(first));
     }
 
     #[test]
