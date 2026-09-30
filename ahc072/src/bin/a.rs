@@ -1,6 +1,6 @@
 use proconio::input;
 use proconio::marker::Bytes;
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::fmt::Write;
 use std::time::{Duration, Instant};
 
@@ -16,6 +16,14 @@ const MAX_MIXED_REPLANS: usize = 64;
 const MIXED_REPLAN_INTERVAL: usize = 4;
 const MAX_MIXED_PARTNERS: usize = 4;
 const MAX_MIXED_TRANSPORT_STEPS: usize = 24;
+const MAX_PICKUP_REPLANS: usize = 32;
+const PICKUP_REPLAN_INTERVAL: usize = 8;
+const MAX_PICKUP_PARTNERS: usize = 2;
+const MAX_PICKUP_THIRDS: usize = 3;
+const MAX_PICKUP_APPROACH_STEPS: usize = 12;
+const MAX_PICKUP_FINISH_STEPS: usize = 24;
+const MAX_PICKUP_STATES: usize = 4000;
+const MAX_PICKUP_ROLLOUTS: usize = 8;
 const SEARCH_DEADLINE: Duration = Duration::from_millis(1650);
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -888,6 +896,380 @@ fn mixed_transport_plans(
     plans
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct TwoColorStack {
+    // Bottom to top. Bit 0 is the source color; bit 1 is the partner color.
+    bits: u16,
+    len: u8,
+}
+
+impl TwoColorStack {
+    fn mask(len: u8) -> u16 {
+        (1u16 << len) - 1
+    }
+
+    fn new(source_count: usize, partner_count: usize) -> Self {
+        Self {
+            bits: Self::mask(partner_count as u8),
+            len: (source_count + partner_count) as u8,
+        }
+    }
+
+    fn top_bit(self) -> u16 {
+        (self.bits >> (self.len - 1)) & 1
+    }
+
+    fn reversed(self) -> Self {
+        let mut bits = 0;
+        for index in 0..self.len {
+            bits = (bits << 1) | ((self.bits >> index) & 1);
+        }
+        Self {
+            bits,
+            len: self.len,
+        }
+    }
+
+    fn with_lower_group(self, color_bit: u16, count: usize) -> Self {
+        let count = count as u8;
+        Self {
+            bits: (if color_bit == 0 { 0 } else { Self::mask(count) }) | (self.bits << count),
+            len: self.len + count,
+        }
+    }
+
+    fn after_home(mut self, nest: Option<u8>, source_color: u8, partner_color: u8) -> Self {
+        let nest_bit = if nest == Some(source_color) {
+            Some(0)
+        } else if nest == Some(partner_color) {
+            Some(1)
+        } else {
+            None
+        };
+        if let Some(bit) = nest_bit {
+            while self.len > 0 && self.top_bit() == bit {
+                self.len -= 1;
+            }
+            self.bits &= Self::mask(self.len);
+        }
+        self
+    }
+
+    fn is_single_color(self) -> bool {
+        self.len == 0 || self.bits == 0 || self.bits == Self::mask(self.len)
+    }
+
+    fn matches_stack(self, stack: &Stack, source_color: u8, partner_color: u8) -> bool {
+        stack.len() == usize::from(self.len)
+            && (0..usize::from(self.len)).all(|index| {
+                stack.colors[index]
+                    == if (self.bits >> index) & 1 == 0 {
+                        source_color
+                    } else {
+                        partner_color
+                    }
+            })
+    }
+}
+
+fn matches_background(actual: &Board, background: &Board, moving_cell: usize) -> bool {
+    actual
+        .stacks
+        .iter()
+        .enumerate()
+        .all(|(cell, stack)| cell == moving_cell || *stack == background.stacks[cell])
+}
+
+// Search to a chosen third group while both original colors are still present.
+// Homecoming before pickup is excluded, so the two arrival orientations suffice.
+fn pickup_approaches(
+    board: &Board,
+    source: usize,
+    partner: usize,
+    third: usize,
+    deadline: Instant,
+) -> Vec<(Vec<Action>, TwoColorStack)> {
+    let source_color = board.stacks[source].last().unwrap();
+    let partner_color = board.stacks[partner].last().unwrap();
+    let moving = board.stacks[source].len() + board.stacks[partner].len();
+    let initial = TwoColorStack::new(board.stacks[source].len(), board.stacks[partner].len());
+    let mut background = board.clone();
+    background.stacks[source] = Stack::default();
+    background.stacks[partner] = Stack::default();
+    let start = partner * 2;
+    let mut steps = vec![usize::MAX; board.stacks.len() * 2];
+    let mut previous: Vec<Option<(usize, Action)>> = vec![None; steps.len()];
+    let mut queue = VecDeque::from([start]);
+    let mut found = [false; 2];
+    let mut approaches = Vec::new();
+    steps[start] = 0;
+    while let Some(state) = queue.pop_front() {
+        if Instant::now() >= deadline {
+            break;
+        }
+        if steps[state] >= MAX_PICKUP_APPROACH_STEPS {
+            continue;
+        }
+        let from = state / 2;
+        let parity = state % 2;
+        let moving_stack = if parity == 0 {
+            initial
+        } else {
+            initial.reversed()
+        };
+        let incoming = moving_stack.reversed();
+        let incoming_color = if incoming.top_bit() == 0 {
+            source_color
+        } else {
+            partner_color
+        };
+        let support = background.stacks[from].len();
+        for direction in 0..DIRECTIONS.len() {
+            let mut to = from;
+            for length in 1..=support + 1 {
+                let Some(next) = board.adjacent(to, direction) else {
+                    break;
+                };
+                to = next;
+                let target = &background.stacks[to];
+                if target.top_run_len() != target.len()
+                    || target.len() + moving > MAX_HEIGHT
+                    || board.nests[to] == Some(incoming_color)
+                {
+                    continue;
+                }
+                let action = Action {
+                    from,
+                    k: support,
+                    direction,
+                    length,
+                };
+                let next_parity = 1 - parity;
+                if to == third && !found[next_parity] {
+                    found[next_parity] = true;
+                    let mut path = vec![action];
+                    let mut at = state;
+                    while at != start {
+                        let (before, prior) = previous[at].expect("BFS predecessor");
+                        path.push(prior);
+                        at = before;
+                    }
+                    path.reverse();
+                    let third_bit = u16::from(target.last() == Some(partner_color));
+                    approaches.push((path, incoming.with_lower_group(third_bit, target.len())));
+                }
+                let next_state = to * 2 + next_parity;
+                if steps[next_state] == usize::MAX {
+                    steps[next_state] = steps[state] + 1;
+                    previous[next_state] = Some((state, action));
+                    queue.push_back(next_state);
+                }
+            }
+        }
+        if found.iter().all(|&done| done) {
+            break;
+        }
+    }
+    approaches
+}
+
+struct PickupNode {
+    cell: usize,
+    colors: TwoColorStack,
+    depth: usize,
+    previous: Option<usize>,
+    action: Option<Action>,
+}
+
+// Search after the third group has joined. Partial automatic homecoming is
+// reflected in the packed stack; only a genuinely single-color state ends it.
+fn pickup_finish_plans(
+    board: &Board,
+    groups: [usize; 3],
+    merge_path: &[Action],
+    approach: &[Action],
+    picked_colors: TwoColorStack,
+    deadline: Instant,
+) -> Vec<Vec<Action>> {
+    let [source, partner, third] = groups;
+    let source_color = board.stacks[source].last().unwrap();
+    let partner_color = board.stacks[partner].last().unwrap();
+    let mut background = board.clone();
+    for cell in [source, partner, third] {
+        background.stacks[cell] = Stack::default();
+    }
+    let mut picked_board = board.clone();
+    for &action in merge_path.iter().chain(approach) {
+        picked_board.apply(action);
+    }
+    if !picked_colors.matches_stack(&picked_board.stacks[third], source_color, partner_color)
+        || !matches_background(&picked_board, &background, third)
+    {
+        return Vec::new();
+    }
+
+    let mut nodes = vec![PickupNode {
+        cell: third,
+        colors: picked_colors,
+        depth: 0,
+        previous: None,
+        action: None,
+    }];
+    let mut seen = HashSet::from([(third, picked_colors)]);
+    let mut seen_terminals = HashSet::new();
+    let mut plans = Vec::new();
+    let mut head = 0;
+    while head < nodes.len() {
+        if Instant::now() >= deadline {
+            break;
+        }
+        let state = head;
+        head += 1;
+        if nodes[state].depth >= MAX_PICKUP_FINISH_STEPS {
+            continue;
+        }
+        let from = nodes[state].cell;
+        let colors = nodes[state].colors;
+        let support = background.stacks[from].len();
+        for direction in 0..DIRECTIONS.len() {
+            let mut to = from;
+            for length in 1..=support + 1 {
+                let Some(next) = board.adjacent(to, direction) else {
+                    break;
+                };
+                to = next;
+                let target = &background.stacks[to];
+                if target.top_run_len() != target.len()
+                    || target.len() + usize::from(colors.len) > MAX_HEIGHT
+                {
+                    continue;
+                }
+                let landed =
+                    colors
+                        .reversed()
+                        .after_home(board.nests[to], source_color, partner_color);
+                let action = Action {
+                    from,
+                    k: support,
+                    direction,
+                    length,
+                };
+                if landed.is_single_color() {
+                    if landed.len > 0 && target.len() > 0 {
+                        continue;
+                    }
+                    if !seen_terminals.insert((to, landed)) {
+                        continue;
+                    }
+                    let mut tail = vec![action];
+                    let mut at = state;
+                    while let Some(previous) = nodes[at].previous {
+                        tail.push(nodes[at].action.expect("BFS action"));
+                        at = previous;
+                    }
+                    tail.reverse();
+                    let mut actual = picked_board.clone();
+                    for &step in &tail {
+                        actual.apply(step);
+                    }
+                    let valid_end = if landed.len == 0 {
+                        actual.stacks[to] == background.stacks[to]
+                    } else {
+                        landed.matches_stack(&actual.stacks[to], source_color, partner_color)
+                    };
+                    if valid_end && matches_background(&actual, &background, to) {
+                        let mut whole = merge_path.to_vec();
+                        whole.extend_from_slice(approach);
+                        whole.extend(tail);
+                        plans.push(whole);
+                    }
+                } else if nodes.len() < MAX_PICKUP_STATES && seen.insert((to, landed)) {
+                    nodes.push(PickupNode {
+                        cell: to,
+                        colors: landed,
+                        depth: nodes[state].depth + 1,
+                        previous: Some(state),
+                        action: Some(action),
+                    });
+                }
+            }
+        }
+        if plans.len() >= 4 {
+            break;
+        }
+    }
+    plans
+}
+
+struct PickupCandidates {
+    triples: usize,
+    approaches: usize,
+    plans: Vec<Vec<Action>>,
+}
+
+fn pickup_candidates(
+    board: &Board,
+    source: usize,
+    color: usize,
+    distances: &[Vec<usize>],
+    deadline: Instant,
+) -> PickupCandidates {
+    let mut result = PickupCandidates {
+        triples: 0,
+        approaches: 0,
+        plans: Vec::new(),
+    };
+    for (partner, merge_path) in mixed_merge_paths(board, source, color, distances)
+        .into_iter()
+        .take(MAX_PICKUP_PARTNERS)
+    {
+        if Instant::now() >= deadline {
+            break;
+        }
+        let partner_color = board.stacks[partner].last().unwrap();
+        let total = board.stacks[source].len() + board.stacks[partner].len();
+        let partner_distances = distances_from(board, partner);
+        let mut thirds: Vec<_> = board
+            .stacks
+            .iter()
+            .enumerate()
+            .filter_map(|(third, stack)| {
+                (third != source
+                    && third != partner
+                    && stack.len() > 0
+                    && stack.len() == stack.top_run_len()
+                    && (stack.last() == Some(color as u8) || stack.last() == Some(partner_color))
+                    && total + stack.len() <= MAX_HEIGHT)
+                    .then_some((partner_distances[third], third))
+            })
+            .collect();
+        thirds.sort_unstable();
+        for (_, third) in thirds.into_iter().take(MAX_PICKUP_THIRDS) {
+            if Instant::now() >= deadline {
+                break;
+            }
+            result.triples += 1;
+            let approaches = pickup_approaches(board, source, partner, third, deadline);
+            result.approaches += approaches.len();
+            for (approach, picked_colors) in approaches {
+                if Instant::now() >= deadline {
+                    break;
+                }
+                result.plans.extend(pickup_finish_plans(
+                    board,
+                    [source, partner, third],
+                    &merge_path,
+                    &approach,
+                    picked_colors,
+                    deadline,
+                ));
+            }
+        }
+    }
+    result.plans.sort_by_key(Vec::len);
+    result
+}
+
 fn main() {
     input! {
         n: usize,
@@ -942,8 +1324,17 @@ fn main() {
     let mut mixed_rollouts = 0;
     let mut mixed_accepted = 0;
     let mut mixed_actions = 0;
+    let mut pickup_attempts = 0;
+    let mut pickup_triples = 0;
+    let mut pickup_approaches_count = 0;
+    let mut pickup_candidates_count = 0;
+    let mut pickup_rollouts = 0;
+    let mut pickup_saved = 0;
+    let mut pickup_executed = 0;
+    let mut pickup_actions = 0;
     while !saved.is_empty() {
         let mut selected_mixed_actions = None;
+        let mut selected_pickup_actions = None;
         if replans < MAX_REPLANS
             && Instant::now() < deadline
             && let Some((cell, color)) = choose_target(&board, &distances)
@@ -1029,9 +1420,52 @@ fn main() {
                     }
                 }
             }
+            if pickup_attempts < MAX_PICKUP_REPLANS
+                && replans % PICKUP_REPLAN_INTERVAL == 1
+                && Instant::now() < deadline
+            {
+                pickup_attempts += 1;
+                let found = pickup_candidates(&board, cell, color, &distances, deadline);
+                pickup_triples += found.triples;
+                pickup_approaches_count += found.approaches;
+                pickup_candidates_count += found.plans.len();
+                for prefix in found.plans.into_iter().take(MAX_PICKUP_ROLLOUTS) {
+                    if Instant::now() >= deadline {
+                        break;
+                    }
+                    if prefix.len() >= plan_length(&saved) {
+                        continue;
+                    }
+                    let mut after = board.clone();
+                    for &action in &prefix {
+                        after.apply(action);
+                    }
+                    let Some(mut continuation) = legacy_rollout(
+                        &after,
+                        &distances,
+                        remaining - prefix.len(),
+                        Some(deadline),
+                    ) else {
+                        continue;
+                    };
+                    rollouts += 1;
+                    pickup_rollouts += 1;
+                    if prefix.len() + plan_length(&continuation) < plan_length(&saved) {
+                        selected_mixed_actions = None;
+                        selected_pickup_actions = Some(prefix.len());
+                        continuation.push_front(prefix);
+                        saved = continuation;
+                        pickup_saved += 1;
+                    }
+                }
+            }
         }
         if let Some(length) = selected_mixed_actions {
             mixed_actions += length;
+        }
+        if let Some(length) = selected_pickup_actions {
+            pickup_executed += 1;
+            pickup_actions += length;
         }
         let unit = saved.pop_front().expect("Nonempty saved continuation");
         for action in unit {
@@ -1040,7 +1474,7 @@ fn main() {
         }
     }
     eprintln!(
-        "merge_search replans={replans} candidates={candidates} rollouts={rollouts} accepted={accepted} mixed_attempts={mixed_attempts} mixed_partners={mixed_partners} mixed_candidates={mixed_candidates} mixed_rollouts={mixed_rollouts} mixed_accepted={mixed_accepted} mixed_actions={mixed_actions}"
+        "merge_search replans={replans} candidates={candidates} rollouts={rollouts} accepted={accepted} mixed_attempts={mixed_attempts} mixed_partners={mixed_partners} mixed_candidates={mixed_candidates} mixed_rollouts={mixed_rollouts} mixed_accepted={mixed_accepted} mixed_actions={mixed_actions} pickup_attempts={pickup_attempts} pickup_triples={pickup_triples} pickup_approaches={pickup_approaches_count} pickup_candidates={pickup_candidates_count} pickup_rollouts={pickup_rollouts} pickup_saved={pickup_saved} pickup_executed={pickup_executed} pickup_actions={pickup_actions}"
     );
 
     let mut output = String::new();
@@ -1069,6 +1503,81 @@ mod tests {
             nests: vec![None; 49],
             stacks: vec![Stack::default(); 49],
         }
+    }
+
+    #[test]
+    fn pickup_preserves_three_blocks_and_continues_after_partial_homecoming() {
+        let mut board = empty_board();
+        let source = 3 * 7 + 1;
+        let partner = source + 1;
+        let third = source + 3;
+        let source_nest = third + 1;
+        let partner_nest = 2 * 7 + 6;
+        board.stacks[source].push(0);
+        board.stacks[partner].push(1);
+        board.stacks[third].push(0);
+        board.nests[source_nest] = Some(0);
+        board.nests[partner_nest] = Some(1);
+        let merge = [Action {
+            from: source,
+            k: 0,
+            direction: 3,
+            length: 1,
+        }];
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let approaches = pickup_approaches(&board, source, partner, third, deadline);
+        let (approach, colors) = approaches
+            .iter()
+            .find(|(actions, colors)| actions.len() == 2 && colors.bits == 0b010)
+            .unwrap();
+        assert_eq!(colors.len, 3);
+        let partial = colors.after_home(Some(0), 0, 1);
+        assert_eq!((partial.bits, partial.len), (0b10, 2));
+        assert!(!partial.is_single_color());
+        let plans = pickup_finish_plans(
+            &board,
+            [source, partner, third],
+            &merge,
+            approach,
+            *colors,
+            deadline,
+        );
+        assert!(!plans.is_empty());
+        assert!(plans.iter().any(|plan| {
+            let mut after = board.clone();
+            let mut saw_partial = false;
+            for &action in plan {
+                after.apply(action);
+                if after.stacks[source_nest].len() == 2
+                    && after.stacks[source_nest].top_run_len() == 1
+                {
+                    saw_partial = true;
+                }
+            }
+            saw_partial
+                && after.stacks[third].len() == 0
+                && after.stacks[partner_nest].len() == 1
+                && after.stacks[partner_nest].last() == Some(0)
+        }));
+    }
+
+    #[test]
+    fn pickup_rejects_landing_above_height_limit() {
+        let mut board = empty_board();
+        let source = 3 * 7 + 1;
+        let partner = source + 1;
+        let third = source + 2;
+        for _ in 0..4 {
+            board.stacks[source].push(0);
+        }
+        for _ in 0..3 {
+            board.stacks[partner].push(1);
+        }
+        for _ in 0..2 {
+            board.stacks[third].push(0);
+        }
+        let deadline = Instant::now() + Duration::from_secs(1);
+        assert!(pickup_approaches(&board, source, partner, third, deadline).is_empty());
     }
 
     #[test]
