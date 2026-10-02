@@ -1151,7 +1151,7 @@ fn mixed_transport_plans(
     plans
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct TwoColorStack {
     // Bottom to top. Bit 0 is the source color; bit 1 is the partner color.
     bits: u16,
@@ -1235,9 +1235,199 @@ fn matches_background(actual: &Board, background: &Board, moving_cell: usize) ->
         .all(|(cell, stack)| cell == moving_cell || *stack == background.stacks[cell])
 }
 
-// Search to a chosen third group while both original colors are still present.
-// Homecoming before pickup is excluded, so the two arrival orientations suffice.
+#[derive(Default)]
+struct PickupApproachStats {
+    requests: usize,
+    initialized: usize,
+    expanded: usize,
+    deadline_hits: usize,
+    elapsed: Duration,
+}
+
+impl PickupApproachStats {
+    fn log(&self) {
+        eprintln!(
+            "pickup_approach_bfs requests={} initialized={} expanded={} time_us={} deadline_hits={}",
+            self.requests,
+            self.initialized,
+            self.expanded,
+            self.elapsed.as_micros(),
+            self.deadline_hits,
+        );
+    }
+}
+
+type PickupApproach = (Vec<Action>, TwoColorStack);
+
+#[derive(Default)]
+struct PickupArrival {
+    found: [bool; 2],
+    approaches: Vec<PickupApproach>,
+}
+
+// One fixed background and FIFO traversal per source/partner pair.
+// Third groups remain in the background, including after recording an arrival.
+struct PickupApproachBfs {
+    background: Board,
+    source_color: u8,
+    partner_color: u8,
+    moving: usize,
+    initial: TwoColorStack,
+    start: usize,
+    steps: Vec<usize>,
+    previous: Vec<Option<(usize, Action)>>,
+    queue: VecDeque<usize>,
+    third_index: Vec<Option<usize>>,
+    arrivals: Vec<PickupArrival>,
+}
+
+impl PickupApproachBfs {
+    fn new(
+        board: &Board,
+        source: usize,
+        partner: usize,
+        thirds: &[usize],
+        stats: &mut PickupApproachStats,
+    ) -> Self {
+        let started = Instant::now();
+        let mut background = board.clone();
+        background.stacks[source] = Stack::default();
+        background.stacks[partner] = Stack::default();
+        let start = partner * 2;
+        let mut steps = vec![usize::MAX; board.stacks.len() * 2];
+        steps[start] = 0;
+        let mut third_index = vec![None; board.stacks.len()];
+        for (index, &third) in thirds.iter().enumerate() {
+            third_index[third] = Some(index);
+        }
+        let search = Self {
+            background,
+            source_color: board.stacks[source].last().unwrap(),
+            partner_color: board.stacks[partner].last().unwrap(),
+            moving: board.stacks[source].len() + board.stacks[partner].len(),
+            initial: TwoColorStack::new(board.stacks[source].len(), board.stacks[partner].len()),
+            start,
+            previous: vec![None; steps.len()],
+            steps,
+            queue: VecDeque::from([start]),
+            third_index,
+            arrivals: thirds.iter().map(|_| PickupArrival::default()).collect(),
+        };
+        stats.initialized += 1;
+        stats.elapsed += started.elapsed();
+        search
+    }
+
+    // Pause only after every transition of a state has been processed.
+    // A deadline leaves the queue intact, unlike exhausting reachable states.
+    fn request(
+        &mut self,
+        third: usize,
+        deadline: Instant,
+        stats: &mut PickupApproachStats,
+    ) -> Vec<PickupApproach> {
+        let started = Instant::now();
+        stats.requests += 1;
+        let index = self.third_index[third].expect("Selected pickup group");
+        while !self.arrivals[index].found.iter().all(|&done| done) && !self.queue.is_empty() {
+            if Instant::now() >= deadline {
+                stats.deadline_hits += 1;
+                break;
+            }
+            let state = self.queue.pop_front().unwrap();
+            if self.steps[state] >= MAX_PICKUP_APPROACH_STEPS {
+                continue;
+            }
+            stats.expanded += 1;
+            self.expand(state);
+        }
+        // Preserve discovery order, including when another request found these.
+        let approaches = self.arrivals[index].approaches.clone();
+        stats.elapsed += started.elapsed();
+        approaches
+    }
+
+    fn expand(&mut self, state: usize) {
+        let from = state / 2;
+        let parity = state % 2;
+        let moving_stack = if parity == 0 {
+            self.initial
+        } else {
+            self.initial.reversed()
+        };
+        let incoming = moving_stack.reversed();
+        let incoming_color = if incoming.top_bit() == 0 {
+            self.source_color
+        } else {
+            self.partner_color
+        };
+        let support = self.background.stacks[from].len();
+        for direction in 0..DIRECTIONS.len() {
+            let mut to = from;
+            for length in 1..=support + 1 {
+                let Some(next) = self.background.adjacent(to, direction) else {
+                    break;
+                };
+                to = next;
+                let target = &self.background.stacks[to];
+                if target.top_run_len() != target.len()
+                    || target.len() + self.moving > MAX_HEIGHT
+                    || self.background.nests[to] == Some(incoming_color)
+                {
+                    continue;
+                }
+                let action = Action {
+                    from,
+                    k: support,
+                    direction,
+                    length,
+                };
+                let next_parity = 1 - parity;
+                // Arrival detection precedes the unvisited-state check, as before.
+                if let Some(index) = self.third_index[to]
+                    && !self.arrivals[index].found[next_parity]
+                {
+                    self.arrivals[index].found[next_parity] = true;
+                    let mut path = vec![action];
+                    let mut at = state;
+                    while at != self.start {
+                        let (before, prior) = self.previous[at].expect("BFS predecessor");
+                        path.push(prior);
+                        at = before;
+                    }
+                    path.reverse();
+                    let third_bit = u16::from(target.last() == Some(self.partner_color));
+                    self.arrivals[index]
+                        .approaches
+                        .push((path, incoming.with_lower_group(third_bit, target.len())));
+                }
+                let next_state = to * 2 + next_parity;
+                if self.steps[next_state] == usize::MAX {
+                    self.steps[next_state] = self.steps[state] + 1;
+                    self.previous[next_state] = Some((state, action));
+                    self.queue.push_back(next_state);
+                }
+            }
+        }
+    }
+}
+
+// Single-target convenience used only by the existing unit tests.
+#[cfg(test)]
 fn pickup_approaches(
+    board: &Board,
+    source: usize,
+    partner: usize,
+    third: usize,
+    deadline: Instant,
+) -> Vec<PickupApproach> {
+    let mut stats = PickupApproachStats::default();
+    PickupApproachBfs::new(board, source, partner, &[third], &mut stats)
+        .request(third, deadline, &mut stats)
+}
+
+#[cfg(test)]
+fn reference_pickup_approaches(
     board: &Board,
     source: usize,
     partner: usize,
@@ -1468,6 +1658,7 @@ fn pickup_candidates(
     color: usize,
     distances: &[Vec<usize>],
     deadline: Instant,
+    stats: &mut PickupApproachStats,
 ) -> PickupCandidates {
     let mut result = PickupCandidates {
         triples: 0,
@@ -1499,12 +1690,21 @@ fn pickup_candidates(
             })
             .collect();
         thirds.sort_unstable();
-        for (_, third) in thirds.into_iter().take(MAX_PICKUP_THIRDS) {
+        let thirds: Vec<_> = thirds
+            .into_iter()
+            .take(MAX_PICKUP_THIRDS)
+            .map(|(_, third)| third)
+            .collect();
+        let mut search = None;
+        for &third in &thirds {
             if Instant::now() >= deadline {
                 break;
             }
             result.triples += 1;
-            let approaches = pickup_approaches(board, source, partner, third, deadline);
+            let search = search.get_or_insert_with(|| {
+                PickupApproachBfs::new(board, source, partner, &thirds, stats)
+            });
+            let approaches = search.request(third, deadline, stats);
             result.approaches += approaches.len();
             for (approach, picked_colors) in approaches {
                 if Instant::now() >= deadline {
@@ -1582,6 +1782,7 @@ fn main() {
     let mut mixed_accepted = 0;
     let mut mixed_actions = 0;
     let mut pickup_attempts = 0;
+    let mut pickup_approach_stats = PickupApproachStats::default();
     let mut pickup_triples = 0;
     let mut pickup_approaches_count = 0;
     let mut pickup_candidates_count = 0;
@@ -1727,7 +1928,14 @@ fn main() {
                 && Instant::now() < deadline
             {
                 pickup_attempts += 1;
-                let found = pickup_candidates(&board, cell, color, &distances, deadline);
+                let found = pickup_candidates(
+                    &board,
+                    cell,
+                    color,
+                    &distances,
+                    deadline,
+                    &mut pickup_approach_stats,
+                );
                 pickup_triples += found.triples;
                 pickup_approaches_count += found.approaches;
                 pickup_candidates_count += found.plans.len();
@@ -1840,6 +2048,7 @@ fn main() {
             actions.push(action);
         }
     }
+    pickup_approach_stats.log();
     for (stats, kind) in rollout_stats
         .iter()
         .zip(["normal", "merge", "mixed", "pickup", "target"])
@@ -1903,6 +2112,237 @@ mod tests {
             walls: vec![false; 49],
             nests: vec![None; 49],
             stacks: vec![Stack::default(); 49],
+        }
+    }
+
+    fn compare_pickup_approaches(
+        board: &Board,
+        source: usize,
+        partner: usize,
+        thirds: &[usize],
+    ) -> Vec<Vec<PickupApproach>> {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let stacks = board.stacks.clone();
+        let mut stats = PickupApproachStats::default();
+        let mut results = Vec::new();
+        if !thirds.is_empty() {
+            let mut search = PickupApproachBfs::new(board, source, partner, thirds, &mut stats);
+            for &third in thirds {
+                let actual = search.request(third, deadline, &mut stats);
+                let expected = reference_pickup_approaches(board, source, partner, third, deadline);
+                // Action's equality covers all fields; packed colors cover order and count.
+                assert_eq!(actual, expected, "third={third}");
+                results.push(actual);
+            }
+            assert_eq!(stats.initialized, 1);
+        }
+        assert_eq!(stats.requests, thirds.len());
+        assert_eq!(stats.deadline_hits, 0);
+        assert_eq!(board.stacks, stacks);
+        results
+    }
+
+    fn pickup_line_board(n: usize, cells: &[usize]) -> Board {
+        let mut board = Board {
+            n,
+            walls: vec![true; n * n],
+            nests: vec![None; n * n],
+            stacks: vec![Stack::default(); n * n],
+        };
+        for &cell in cells {
+            board.walls[cell] = false;
+        }
+        board
+    }
+
+    #[test]
+    fn shared_pickup_zero_one_and_unreachable_targets() {
+        let mut board = empty_board();
+        board.stacks[22].push(0);
+        board.stacks[23].push(1);
+        board.nests[6] = Some(0);
+        board.nests[48] = Some(1);
+        let distances = vec![distances_from(&board, 6), distances_from(&board, 48)];
+        let mut stats = PickupApproachStats::default();
+        let candidates = pickup_candidates(
+            &board,
+            22,
+            0,
+            &distances,
+            Instant::now() + Duration::from_secs(60),
+            &mut stats,
+        );
+        assert_eq!(
+            (
+                candidates.triples,
+                candidates.approaches,
+                stats.initialized,
+                stats.requests,
+                stats.expanded
+            ),
+            (0, 0, 0, 0, 0)
+        );
+
+        let mut line = pickup_line_board(7, &[0, 24, 25, 48]);
+        line.stacks[0].push(0);
+        line.stacks[24].push(1);
+        line.stacks[25].push(0);
+        line.stacks[48].push(1);
+        let single = compare_pickup_approaches(&line, 0, 24, &[25]);
+        assert_eq!(single[0].len(), 1);
+        assert_eq!(single[0][0].0.len(), 1);
+        let multiple = compare_pickup_approaches(&line, 0, 24, &[48, 25]);
+        assert!(multiple[0].is_empty());
+        assert_eq!(multiple[1], single[0]);
+
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let mut stats = PickupApproachStats::default();
+        let mut search = PickupApproachBfs::new(&line, 0, 24, &[48, 25], &mut stats);
+        assert!(search.request(48, deadline, &mut stats).is_empty());
+        assert!(search.queue.is_empty());
+        let expanded = stats.expanded;
+        search.request(25, deadline, &mut stats);
+        assert_eq!(stats.expanded, expanded);
+    }
+
+    #[test]
+    fn shared_pickup_reuses_early_arrivals_and_resumes_at_state_boundaries() {
+        let mut board = empty_board();
+        board.stacks[0].push(0);
+        board.stacks[24].push(1);
+        board.stacks[25].push(0);
+        board.stacks[48].push(1);
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let mut stats = PickupApproachStats::default();
+        let mut search = PickupApproachBfs::new(&board, 0, 24, &[48, 25], &mut stats);
+        let far = search.request(48, deadline, &mut stats);
+        assert_eq!(far.len(), 2);
+        assert!(search.arrivals[1].found.iter().all(|&found| found));
+        let expanded = stats.expanded;
+        let near = search.request(25, deadline, &mut stats);
+        assert_eq!(near.len(), 2);
+        assert_eq!(stats.expanded, expanded);
+        assert_eq!(
+            near,
+            reference_pickup_approaches(&board, 0, 24, 25, deadline)
+        );
+        assert_eq!(
+            far,
+            reference_pickup_approaches(&board, 0, 24, 48, deadline)
+        );
+        // Far routes can use the other selected group as a springboard.
+        assert!(
+            far.iter()
+                .any(|(path, _)| path.iter().any(|a| a.from == 25 && a.k == 1))
+        );
+
+        let mut stats = PickupApproachStats::default();
+        let mut search = PickupApproachBfs::new(&board, 0, 24, &[25, 48], &mut stats);
+        assert_eq!(search.request(25, deadline, &mut stats), near);
+        assert!(!search.queue.is_empty());
+        let expanded = stats.expanded;
+        assert_eq!(search.request(48, deadline, &mut stats), far);
+        assert!(stats.expanded > expanded);
+        // Every state's predecessor is fixed at first discovery, including ties.
+        assert!(stats.expanded <= board.stacks.len() * 2);
+    }
+
+    #[test]
+    fn shared_pickup_preserves_first_path_among_equal_length_routes() {
+        let mut board = empty_board();
+        board.stacks[0].push(0);
+        board.stacks[24].push(1);
+        board.stacks[32].push(0);
+        let results = compare_pickup_approaches(&board, 0, 24, &[32]);
+        let first = &results[0][0];
+        assert_eq!(
+            first.0.iter().map(|a| a.direction).collect::<Vec<_>>(),
+            vec![1, 3]
+        );
+        assert_eq!(first.1, TwoColorStack { bits: 2, len: 3 });
+    }
+
+    #[test]
+    fn shared_pickup_depth_boundary_is_inclusive_for_arrival() {
+        let cells: Vec<_> = std::iter::once(0).chain(201..220).collect();
+        let mut board = pickup_line_board(20, &cells);
+        board.stacks[0].push(0);
+        board.stacks[201].push(1);
+        board.stacks[213].push(0);
+        board.stacks[214].push(1);
+        let results = compare_pickup_approaches(&board, 0, 201, &[213, 214]);
+        assert_eq!(results[0].len(), 1);
+        assert_eq!(results[0][0].0.len(), MAX_PICKUP_APPROACH_STEPS);
+        assert!(results[1].is_empty());
+    }
+
+    #[test]
+    fn shared_pickup_retains_height_homogeneity_and_homecoming_guards() {
+        let mut board = pickup_line_board(7, &[0, 24, 25]);
+        board.stacks[0].push(0);
+        board.stacks[24].push(1);
+        for _ in 0..7 {
+            board.stacks[25].push(0);
+        }
+        assert!(compare_pickup_approaches(&board, 0, 24, &[25])[0].is_empty());
+        board.stacks[25] = Stack::default();
+        board.stacks[25].push(0);
+        board.stacks[25].push(1);
+        assert!(compare_pickup_approaches(&board, 0, 24, &[25])[0].is_empty());
+        board.stacks[25] = Stack::default();
+        board.stacks[25].push(0);
+        board.nests[25] = Some(1); // Direct incoming top is partner color.
+        assert!(compare_pickup_approaches(&board, 0, 24, &[25])[0].is_empty());
+        board.nests[25] = Some(0);
+        assert_eq!(compare_pickup_approaches(&board, 0, 24, &[25])[0].len(), 1);
+        board.walls[25] = true;
+        assert!(compare_pickup_approaches(&board, 0, 24, &[25])[0].is_empty());
+    }
+
+    #[test]
+    fn shared_pickup_deadline_keeps_queue_and_only_returns_complete_paths() {
+        let mut board = empty_board();
+        board.stacks[0].push(0);
+        board.stacks[24].push(1);
+        board.stacks[25].push(0);
+        let mut stats = PickupApproachStats::default();
+        let mut search = PickupApproachBfs::new(&board, 0, 24, &[25], &mut stats);
+        assert!(search.request(25, Instant::now(), &mut stats).is_empty());
+        assert_eq!((stats.expanded, stats.deadline_hits), (0, 1));
+        assert_eq!(search.queue, VecDeque::from([24 * 2]));
+        let deadline = Instant::now() + Duration::from_secs(60);
+        assert_eq!(
+            search.request(25, deadline, &mut stats),
+            reference_pickup_approaches(&board, 0, 24, 25, deadline)
+        );
+    }
+
+    #[test]
+    fn shared_pickup_matches_reference_on_varied_backgrounds_and_target_orders() {
+        for variant in 0..32 {
+            let mut board = empty_board();
+            for cell in 0..49 {
+                board.walls[cell] = (cell * 7 + variant * 3) % 17 == 0;
+                if cell % 9 == variant % 9 {
+                    for _ in 0..1 + (cell + variant) % 6 {
+                        board.stacks[cell].push(2);
+                    }
+                }
+            }
+            let source = 22;
+            let partner = 23;
+            let mut thirds = vec![6, 25, 48];
+            if variant % 2 == 1 {
+                thirds.reverse();
+            }
+            for (index, cell) in [source, partner, 6, 25, 48].into_iter().enumerate() {
+                board.walls[cell] = false;
+                board.stacks[cell] = Stack::default();
+                board.stacks[cell].push((index % 2) as u8);
+            }
+            board.nests[10] = Some(0);
+            board.nests[38] = Some(1);
+            compare_pickup_approaches(&board, source, partner, &thirds);
         }
     }
 
