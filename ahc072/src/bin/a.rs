@@ -130,7 +130,7 @@ impl Board {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Action {
     from: usize,
     k: usize,
@@ -698,49 +698,135 @@ fn choose_pair(
 }
 
 // A legacy decision is one unit: a short pair, a relay, or one ordinary move.
+// Budget checks belong to the caller and never change this choice.
 fn legacy_unit(
     board: &Board,
     cell: usize,
     color: usize,
     distances: &[Vec<usize>],
-    remaining: usize,
 ) -> Option<Vec<Action>> {
-    let unit = if let Some(pair) = choose_pair(board, cell, color, distances)
-        && pair.len() <= remaining
-    {
-        pair
-    } else if remaining >= 2
-        && let Some(relay) = choose_relay(board, cell, color, &distances[color])
-    {
-        relay.actions.to_vec()
+    if let Some(pair) = choose_pair(board, cell, color, distances) {
+        Some(pair)
+    } else if let Some(relay) = choose_relay(board, cell, color, &distances[color]) {
+        Some(relay.actions.to_vec())
     } else {
-        vec![choose_group_move(board, cell, color, &distances[color])?.0]
-    };
-    (unit.len() <= remaining).then_some(unit)
+        Some(vec![
+            choose_group_move(board, cell, color, &distances[color])?.0,
+        ])
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RolloutStop {
+    Incumbent,
+    Deadline,
+    OperationLimit,
+    NoMove,
+}
+
+#[derive(Clone, Copy, Default)]
+struct RolloutStats {
+    attempts: usize,
+    completed: usize,
+    pruned: usize,
+    timed_out: usize,
+    operation_limit: usize,
+    no_move: usize,
+}
+
+impl RolloutStats {
+    fn record(&mut self, result: &Result<Plan, RolloutStop>) {
+        self.attempts += 1;
+        match result {
+            Ok(_) => self.completed += 1,
+            Err(RolloutStop::Incumbent) => self.pruned += 1,
+            Err(RolloutStop::Deadline) => self.timed_out += 1,
+            Err(RolloutStop::OperationLimit) => self.operation_limit += 1,
+            Err(RolloutStop::NoMove) => self.no_move += 1,
+        }
+    }
+
+    fn log(&self, kind: &str) {
+        eprintln!(
+            "rollout_pruning kind={kind} attempts={} completed={} pruned={} timed_out={} operation_limit={} no_move={}",
+            self.attempts,
+            self.completed,
+            self.pruned,
+            self.timed_out,
+            self.operation_limit,
+            self.no_move,
+        );
+    }
 }
 
 // Units are kept intact when a saved continuation is resumed.
+// The problem limit is inclusive; the incumbent bound is exclusive.
 fn legacy_rollout(
     initial: &Board,
     distances: &[Vec<usize>],
     limit: usize,
     deadline: Option<Instant>,
-) -> Option<Plan> {
+    incumbent_bound: Option<usize>,
+) -> Result<Plan, RolloutStop> {
+    if incumbent_bound == Some(0) {
+        return Err(RolloutStop::Incumbent);
+    }
     let mut board = initial.clone();
     let mut plan = Plan::new();
     let mut count = 0;
     while let Some((cell, color)) = choose_target(&board, distances) {
-        if count >= limit || deadline.is_some_and(|time| Instant::now() >= time) {
-            return None;
+        if count >= limit {
+            return Err(RolloutStop::OperationLimit);
         }
-        let unit = legacy_unit(&board, cell, color, distances, limit - count)?;
+        if deadline.is_some_and(|time| Instant::now() >= time) {
+            return Err(RolloutStop::Deadline);
+        }
+        let unit = legacy_unit(&board, cell, color, distances).ok_or(RolloutStop::NoMove)?;
+        let next_count = count + unit.len();
+        if incumbent_bound.is_some_and(|bound| next_count >= bound) {
+            return Err(RolloutStop::Incumbent);
+        }
+        if next_count > limit {
+            return Err(RolloutStop::OperationLimit);
+        }
         for &action in &unit {
             board.apply(action);
         }
-        count += unit.len();
+        count = next_count;
         plan.push_back(unit);
     }
-    Some(plan)
+    Ok(plan)
+}
+
+// Re-read the current saved length at every call site. No partial plan escapes.
+fn candidate_rollout(
+    initial: &Board,
+    distances: &[Vec<usize>],
+    prefix: &[Action],
+    remaining: usize,
+    saved_length: usize,
+    deadline: Option<Instant>,
+    stats: &mut RolloutStats,
+) -> Result<Plan, RolloutStop> {
+    let result = if prefix.len() >= saved_length {
+        Err(RolloutStop::Incumbent)
+    } else if prefix.len() > remaining {
+        Err(RolloutStop::OperationLimit)
+    } else {
+        let mut after = initial.clone();
+        for &action in prefix {
+            after.apply(action);
+        }
+        legacy_rollout(
+            &after,
+            distances,
+            remaining - prefix.len(),
+            deadline,
+            Some(saved_length - prefix.len()),
+        )
+    };
+    stats.record(&result);
+    result
 }
 
 // The source group is removed from the fixed background. Only empty cells and
@@ -1481,12 +1567,13 @@ fn main() {
     let started = Instant::now();
     let deadline = started + SEARCH_DEADLINE;
     let mut target_rng = TargetRng::new(TARGET_SAMPLE_SEED);
-    let mut saved = legacy_rollout(&board, &distances, MAX_OPERATIONS, None)
+    let mut saved = legacy_rollout(&board, &distances, MAX_OPERATIONS, None, None)
         .expect("Legacy solver must produce a complete baseline");
     let mut actions = Vec::new();
     let mut replans = 0;
     let mut candidates = 0;
     let mut rollouts = 1;
+    let mut rollout_stats = [RolloutStats::default(); 5];
     let mut accepted = 0;
     let mut mixed_attempts = 0;
     let mut mixed_partners = 0;
@@ -1552,7 +1639,15 @@ fn main() {
         {
             replans += 1;
             let remaining = MAX_OPERATIONS - actions.len();
-            if let Some(fresh) = legacy_rollout(&board, &distances, remaining, Some(deadline)) {
+            if let Ok(fresh) = candidate_rollout(
+                &board,
+                &distances,
+                &[],
+                remaining,
+                plan_length(&saved),
+                Some(deadline),
+                &mut rollout_stats[0],
+            ) {
                 rollouts += 1;
                 if plan_length(&fresh) < plan_length(&saved) {
                     saved = fresh;
@@ -1565,16 +1660,15 @@ fn main() {
                     merge_deadline_breaks += 1;
                     break;
                 }
-                if path.len() >= plan_length(&saved) {
-                    continue;
-                }
-                let mut after = board.clone();
-                for &action in &path {
-                    after.apply(action);
-                }
-                let Some(mut continuation) =
-                    legacy_rollout(&after, &distances, remaining - path.len(), Some(deadline))
-                else {
+                let Ok(mut continuation) = candidate_rollout(
+                    &board,
+                    &distances,
+                    &path,
+                    remaining,
+                    plan_length(&saved),
+                    Some(deadline),
+                    &mut rollout_stats[1],
+                ) else {
                     continue;
                 };
                 rollouts += 1;
@@ -1606,18 +1700,14 @@ fn main() {
                             mixed_deadline_breaks += 1;
                             break;
                         }
-                        if prefix.len() >= plan_length(&saved) {
-                            continue;
-                        }
-                        let mut after = board.clone();
-                        for &action in &prefix {
-                            after.apply(action);
-                        }
-                        let Some(mut continuation) = legacy_rollout(
-                            &after,
+                        let Ok(mut continuation) = candidate_rollout(
+                            &board,
                             &distances,
-                            remaining - prefix.len(),
+                            &prefix,
+                            remaining,
+                            plan_length(&saved),
                             Some(deadline),
+                            &mut rollout_stats[2],
                         ) else {
                             continue;
                         };
@@ -1646,18 +1736,14 @@ fn main() {
                         pickup_deadline_breaks += 1;
                         break;
                     }
-                    if prefix.len() >= plan_length(&saved) {
-                        continue;
-                    }
-                    let mut after = board.clone();
-                    for &action in &prefix {
-                        after.apply(action);
-                    }
-                    let Some(mut continuation) = legacy_rollout(
-                        &after,
+                    let Ok(mut continuation) = candidate_rollout(
+                        &board,
                         &distances,
-                        remaining - prefix.len(),
+                        &prefix,
+                        remaining,
+                        plan_length(&saved),
                         Some(deadline),
+                        &mut rollout_stats[3],
                     ) else {
                         continue;
                     };
@@ -1690,25 +1776,20 @@ fn main() {
                         target_deadline_hits += 1;
                         break;
                     }
-                    let Some(unit) = legacy_unit(
-                        &board,
-                        candidate.cell,
-                        candidate.color,
-                        &distances,
-                        remaining,
-                    ) else {
+                    let Some(unit) =
+                        legacy_unit(&board, candidate.cell, candidate.color, &distances)
+                    else {
                         continue;
                     };
-                    if unit.len() >= plan_length(&saved) {
-                        continue;
-                    }
-                    let mut after = board.clone();
-                    for &action in &unit {
-                        after.apply(action);
-                    }
-                    let Some(mut continuation) =
-                        legacy_rollout(&after, &distances, remaining - unit.len(), Some(deadline))
-                    else {
+                    let Ok(mut continuation) = candidate_rollout(
+                        &board,
+                        &distances,
+                        &unit,
+                        remaining,
+                        plan_length(&saved),
+                        Some(deadline),
+                        &mut rollout_stats[4],
+                    ) else {
                         if Instant::now() >= deadline {
                             target_deadline_hits += 1;
                             break;
@@ -1758,6 +1839,12 @@ fn main() {
             board.apply(action);
             actions.push(action);
         }
+    }
+    for (stats, kind) in rollout_stats
+        .iter()
+        .zip(["normal", "merge", "mixed", "pickup", "target"])
+    {
+        stats.log(kind);
     }
     eprintln!(
         "merge_search replans={replans} candidates={candidates} rollouts={rollouts} accepted={accepted} mixed_attempts={mixed_attempts} mixed_partners={mixed_partners} mixed_candidates={mixed_candidates} mixed_rollouts={mixed_rollouts} mixed_accepted={mixed_accepted} mixed_actions={mixed_actions} pickup_attempts={pickup_attempts} pickup_triples={pickup_triples} pickup_approaches={pickup_approaches_count} pickup_candidates={pickup_candidates_count} pickup_rollouts={pickup_rollouts} pickup_saved={pickup_saved} pickup_executed={pickup_executed} pickup_actions={pickup_actions} target_comparisons={target_comparisons} target_rollouts={target_rollouts} target_saved={target_saved} target_savings={target_savings} target_rank2={} target_rank3={} target_rank4={} target_deadline_hits={target_deadline_hits}",
@@ -1817,6 +1904,182 @@ mod tests {
             nests: vec![None; 49],
             stacks: vec![Stack::default(); 49],
         }
+    }
+
+    fn pair_fixture() -> (Board, Vec<Vec<usize>>) {
+        let mut board = empty_board();
+        board.nests[3] = Some(0);
+        board.stacks[23].push(0);
+        board.stacks[25].push(0);
+        let distances = vec![distances_from(&board, 3)];
+        (board, distances)
+    }
+
+    #[test]
+    fn incumbent_bound_preserves_shorter_complete_rollouts() {
+        let (board, distances) = pair_fixture();
+        let unbounded = legacy_rollout(&board, &distances, MAX_OPERATIONS, None, None).unwrap();
+        let length = plan_length(&unbounded);
+        assert_eq!(
+            unbounded.front().unwrap(),
+            &choose_pair(&board, 23, 0, &distances).unwrap()
+        );
+        assert_eq!(
+            legacy_rollout(&board, &distances, length, None, None).unwrap(),
+            unbounded
+        );
+        assert_eq!(
+            legacy_rollout(&board, &distances, MAX_OPERATIONS, None, Some(length + 1)).unwrap(),
+            unbounded
+        );
+        let mut after = board.clone();
+        for unit in &unbounded {
+            for &action in unit {
+                after.apply(action);
+            }
+        }
+        assert!(after.stacks.iter().all(|stack| stack.len() == 0));
+    }
+
+    #[test]
+    fn tied_and_longer_candidates_preserve_incumbent_and_input() {
+        let (board, distances) = pair_fixture();
+        let saved = legacy_rollout(&board, &distances, MAX_OPERATIONS, None, None).unwrap();
+        let original = saved.clone();
+        let stacks = board.stacks.clone();
+        let length = plan_length(&saved);
+        let mut stats = RolloutStats::default();
+        for bound in [length, length - 1] {
+            let result = candidate_rollout(
+                &board,
+                &distances,
+                &[],
+                MAX_OPERATIONS,
+                bound,
+                None,
+                &mut stats,
+            );
+            assert_eq!(result.unwrap_err(), RolloutStop::Incumbent);
+            assert_eq!(saved, original);
+            assert_eq!(board.stacks, stacks);
+        }
+        assert_eq!((stats.attempts, stats.completed, stats.pruned), (2, 0, 2));
+    }
+
+    #[test]
+    fn whole_pair_is_rejected_without_shorter_fallback() {
+        let (board, distances) = pair_fixture();
+        let (cell, color) = choose_target(&board, &distances).unwrap();
+        assert_eq!(
+            legacy_unit(&board, cell, color, &distances).unwrap().len(),
+            2
+        );
+        assert_eq!(
+            legacy_rollout(&board, &distances, MAX_OPERATIONS, None, Some(2)).unwrap_err(),
+            RolloutStop::Incumbent
+        );
+        assert_eq!(
+            legacy_rollout(&board, &distances, 1, None, None).unwrap_err(),
+            RolloutStop::OperationLimit
+        );
+    }
+
+    #[test]
+    fn completed_prefix_uses_zero_continuation_and_guarded_subtraction() {
+        let mut board = empty_board();
+        board.nests[1] = Some(0);
+        board.stacks[0].push(0);
+        let distances = vec![distances_from(&board, 1)];
+        let prefix = [Action {
+            from: 0,
+            k: 0,
+            direction: 3,
+            length: 1,
+        }];
+        let mut stats = RolloutStats::default();
+        assert!(
+            candidate_rollout(
+                &board,
+                &distances,
+                &prefix,
+                MAX_OPERATIONS,
+                2,
+                None,
+                &mut stats
+            )
+            .unwrap()
+            .is_empty()
+        );
+        for saved_length in [0, 1] {
+            assert_eq!(
+                candidate_rollout(
+                    &board,
+                    &distances,
+                    &prefix,
+                    MAX_OPERATIONS,
+                    saved_length,
+                    None,
+                    &mut stats
+                )
+                .unwrap_err(),
+                RolloutStop::Incumbent
+            );
+        }
+        let finished = empty_board();
+        assert!(
+            legacy_rollout(&finished, &distances, 0, None, None)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            legacy_rollout(&finished, &distances, 0, None, Some(1))
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            legacy_rollout(&finished, &distances, 0, None, Some(0)).unwrap_err(),
+            RolloutStop::Incumbent
+        );
+        assert_eq!((stats.attempts, stats.completed, stats.pruned), (3, 1, 2));
+    }
+
+    #[test]
+    fn incomplete_reasons_are_counted_separately() {
+        let (board, distances) = pair_fixture();
+        let mut stats = RolloutStats::default();
+        let expired = Instant::now();
+        assert_eq!(
+            candidate_rollout(
+                &board,
+                &distances,
+                &[],
+                MAX_OPERATIONS,
+                100,
+                Some(expired),
+                &mut stats
+            )
+            .unwrap_err(),
+            RolloutStop::Deadline
+        );
+        assert_eq!(
+            candidate_rollout(&board, &distances, &[], 1, 100, None, &mut stats).unwrap_err(),
+            RolloutStop::OperationLimit
+        );
+        let prefix = legacy_unit(&board, 23, 0, &distances).unwrap();
+        assert_eq!(
+            candidate_rollout(&board, &distances, &prefix, 1, 100, None, &mut stats).unwrap_err(),
+            RolloutStop::OperationLimit
+        );
+        assert_eq!(
+            (
+                stats.attempts,
+                stats.completed,
+                stats.pruned,
+                stats.timed_out,
+                stats.operation_limit
+            ),
+            (3, 0, 0, 1, 2)
+        );
     }
 
     #[test]
@@ -1956,9 +2219,9 @@ mod tests {
         board.stacks[source + 2].push(0);
         let distances = vec![distances_from(&board, 3)];
         let (cell, color) = choose_target(&board, &distances).unwrap();
-        let unit = legacy_unit(&board, cell, color, &distances, MAX_OPERATIONS).unwrap();
+        let unit = legacy_unit(&board, cell, color, &distances).unwrap();
         assert_eq!(unit.len(), 2);
-        let rollout = legacy_rollout(&board, &distances, MAX_OPERATIONS, None).unwrap();
+        let rollout = legacy_rollout(&board, &distances, MAX_OPERATIONS, None, None).unwrap();
         let first = rollout.front().unwrap();
         let action_fields = |actions: &[Action]| {
             actions
