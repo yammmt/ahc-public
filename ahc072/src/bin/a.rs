@@ -2337,10 +2337,71 @@ fn checked_existing_action(board: &mut Board, action: Action) -> bool {
     true
 }
 
+// A terminal leaves either no moving slime or one homogeneous moving group.
+// Keep unreachable terminals after every finite one without running a new BFS.
+fn existing_mixed_terminal_nest_distance(
+    plan: &ExistingMixedPlan,
+    colors: [u8; 2],
+    distances: &[Vec<usize>],
+) -> usize {
+    let moving = plan.end.colors;
+    if moving.len == 0 {
+        return 0;
+    }
+    assert!(moving.is_single_color());
+    let color = colors[usize::from(moving.bits != 0)];
+    distances[usize::from(color)][plan.end.cell]
+}
+
+fn rank_existing_mixed_terminal_indices(
+    plans: &[ExistingMixedPlan],
+    colors: [u8; 2],
+    distances: &[Vec<usize>],
+) -> Vec<usize> {
+    let mut order: Vec<_> = (0..plans.len()).collect();
+    order.sort_unstable_by_key(|&index| {
+        (
+            plans[index].prefix.len(),
+            existing_mixed_terminal_nest_distance(&plans[index], colors, distances),
+            index,
+        )
+    });
+    order
+}
+
+fn select_existing_mixed_terminal_indices(
+    plans: &[ExistingMixedPlan],
+    colors: [u8; 2],
+    distances: &[Vec<usize>],
+) -> Vec<usize> {
+    let ranked = rank_existing_mixed_terminal_indices(plans, colors, distances);
+    let mut selected = vec![false; plans.len()];
+    let mut represented = [false; 8];
+    let mut order = Vec::new();
+    for &index in &ranked {
+        let mask = usize::from(plans[index].collected);
+        if !represented[mask] && order.len() < MAX_EXISTING_MIXED_ROLLOUTS {
+            represented[mask] = true;
+            selected[index] = true;
+            order.push(index);
+        }
+    }
+    for &index in &ranked {
+        if order.len() >= MAX_EXISTING_MIXED_ROLLOUTS {
+            break;
+        }
+        if !selected[index] {
+            order.push(index);
+        }
+    }
+    order
+}
+
 fn existing_mixed_search(
     board: &Board,
     source: usize,
     colors: [u8; 2],
+    distances: &[Vec<usize>],
     deadline: Instant,
 ) -> ExistingMixedSearch {
     let (model, initial) = ExistingMixedModel::new(board, source, colors);
@@ -2352,7 +2413,7 @@ fn existing_mixed_search(
     };
     let mut frontier = ExistingMixedFrontier::new(initial, MAX_EXISTING_MIXED_STATES);
     let mut terminal_boards = HashSet::new();
-    let mut terminals: Vec<(usize, ExistingMixedPlan)> = Vec::new();
+    let mut terminals: Vec<ExistingMixedPlan> = Vec::new();
     'search: while !frontier.queue.is_empty() {
         if Instant::now() >= deadline {
             result.timed_out = true;
@@ -2417,17 +2478,14 @@ fn existing_mixed_search(
                 split: frontier.nodes[index].split,
                 sender_merges: frontier.nodes[index].sender_merges,
             });
-            terminals.push((
-                index,
-                ExistingMixedPlan {
-                    prefix: path,
-                    collected: state.collected,
-                    end: state,
-                    split: frontier.nodes[index].split,
-                    returned,
-                    sender_merges: frontier.nodes[index].sender_merges,
-                },
-            ));
+            terminals.push(ExistingMixedPlan {
+                prefix: path,
+                collected: state.collected,
+                end: state,
+                split: frontier.nodes[index].split,
+                returned,
+                sender_merges: frontier.nodes[index].sender_merges,
+            });
         } else {
             if depth >= MAX_EXISTING_MIXED_DEPTH {
                 result.depth_limit = true;
@@ -2467,28 +2525,12 @@ fn existing_mixed_search(
             }
         }
     }
-    // Settled order is minimum operation cost, then queue insertion ticket.
+    // First prefer fewer interval operations, then a closer remaining group,
+    // then the original settled order.  Representatives and remaining slots
+    // deliberately use the same ranking.
     result.rollout_limit = terminals.len() > MAX_EXISTING_MIXED_ROLLOUTS;
-    let mut selected = vec![false; terminals.len()];
-    let mut represented = [false; 8];
-    let mut order = Vec::new();
-    for (i, (_, plan)) in terminals.iter().enumerate() {
-        let mask = usize::from(plan.collected);
-        if !represented[mask] && order.len() < MAX_EXISTING_MIXED_ROLLOUTS {
-            represented[mask] = true;
-            selected[i] = true;
-            order.push(i);
-        }
-    }
-    for (i, &yes) in selected.iter().enumerate() {
-        if order.len() >= MAX_EXISTING_MIXED_ROLLOUTS {
-            break;
-        }
-        if !yes {
-            order.push(i);
-        }
-    }
-    let mut terminals: Vec<_> = terminals.into_iter().map(|(_, plan)| Some(plan)).collect();
+    let order = select_existing_mixed_terminal_indices(&terminals, colors, distances);
+    let mut terminals: Vec<_> = terminals.into_iter().map(Some).collect();
     result.sender.selected = order
         .iter()
         .map(|&i| terminals[i].as_ref().unwrap().sender_merges)
@@ -2941,7 +2983,8 @@ fn main() {
                         call_started + (EXISTING_MIXED_CASE_TIME - existing_mixed_stats.elapsed);
                     let local_deadline = deadline.min(call_end).min(case_end);
                     existing_mixed_stats.attempts += 1;
-                    let found = existing_mixed_search(&board, source, colors, local_deadline);
+                    let found =
+                        existing_mixed_search(&board, source, colors, &distances, local_deadline);
                     existing_mixed_stats.record_search(&found);
                     let _ = writeln!(
                         existing_mixed_stats.events,
@@ -3175,6 +3218,96 @@ mod tests {
             nests: vec![None; 49],
             stacks: vec![Stack::default(); 49],
         }
+    }
+
+    fn test_nest_distances(board: &Board) -> Vec<Vec<usize>> {
+        let mut distances = vec![vec![usize::MAX; board.stacks.len()]; 12];
+        for (cell, &nest) in board.nests.iter().enumerate() {
+            if let Some(color) = nest {
+                distances[usize::from(color)] = distances_from(board, cell);
+            }
+        }
+        distances
+    }
+
+    fn mixed_terminal_plan(
+        operations: usize,
+        collected: u8,
+        cell: usize,
+        bits: u16,
+        len: u8,
+    ) -> ExistingMixedPlan {
+        ExistingMixedPlan {
+            prefix: vec![
+                Action {
+                    from: 0,
+                    k: 0,
+                    direction: 3,
+                    length: 1,
+                };
+                operations
+            ],
+            collected,
+            end: ExistingMixedState {
+                cell,
+                colors: TwoColorStack { bits, len },
+                collected,
+            },
+            split: false,
+            returned: [0; 2],
+            sender_merges: 0,
+        }
+    }
+
+    #[test]
+    fn mixed_terminal_ranking_prefers_shorter_then_closer_then_original_order() {
+        let mut board = empty_board();
+        board.nests[0] = Some(0);
+        let distances = test_nest_distances(&board);
+        let plans = vec![
+            mixed_terminal_plan(1, 0, 6, 0, 1),
+            mixed_terminal_plan(2, 0, 1, 0, 1),
+            mixed_terminal_plan(1, 0, 3, 0, 1),
+            mixed_terminal_plan(1, 0, 3, 0, 1),
+        ];
+        assert_eq!(
+            rank_existing_mixed_terminal_indices(&plans, [0, 1], &distances),
+            vec![2, 3, 0, 1]
+        );
+    }
+
+    #[test]
+    fn mixed_terminal_ranking_treats_empty_group_as_distance_zero() {
+        let mut board = empty_board();
+        board.nests[0] = Some(0);
+        let distances = test_nest_distances(&board);
+        let plans = vec![
+            mixed_terminal_plan(1, 0, 6, 0, 1),
+            mixed_terminal_plan(1, 0, 48, 0, 0),
+        ];
+        assert_eq!(
+            existing_mixed_terminal_nest_distance(&plans[1], [0, 1], &distances),
+            0
+        );
+        assert_eq!(
+            rank_existing_mixed_terminal_indices(&plans, [0, 1], &distances),
+            vec![1, 0]
+        );
+    }
+
+    #[test]
+    fn mixed_terminal_selection_keeps_best_representative_for_each_mask_up_to_eight() {
+        let mut board = empty_board();
+        board.nests[0] = Some(0);
+        let distances = test_nest_distances(&board);
+        let mut plans = vec![mixed_terminal_plan(2, 0, 1, 0, 1)];
+        plans.push(mixed_terminal_plan(1, 0, 1, 0, 1));
+        for mask in 1..8 {
+            plans.push(mixed_terminal_plan(1, mask, 1, 0, 1));
+        }
+        let selected = select_existing_mixed_terminal_indices(&plans, [0, 1], &distances);
+        assert_eq!(selected.len(), MAX_EXISTING_MIXED_ROLLOUTS);
+        assert_eq!(selected, (1..=8).collect::<Vec<_>>());
     }
 
     fn compare_pickup_approaches(
@@ -4168,12 +4301,17 @@ mod tests {
         board.nests[24] = Some(0);
         board.nests[0] = Some(1);
         assert_eq!(existing_mixed_colors(&board.stacks[24]), Some([0, 1]));
-        let found =
-            existing_mixed_search(&board, 24, [0, 1], Instant::now() + Duration::from_secs(60));
+        let distances = test_nest_distances(&board);
+        let found = existing_mixed_search(
+            &board,
+            24,
+            [0, 1],
+            &distances,
+            Instant::now() + Duration::from_secs(60),
+        );
         assert!(found.expanded > 0 && found.registered <= 4000);
         assert!(found.invalid == 0 && !found.plans.is_empty());
         assert!(found.plans.iter().any(|p| p.split && p.returned[0] == 4));
-        let distances = vec![distances_from(&board, 24), distances_from(&board, 0)];
         let prefix = &found.plans[0].prefix;
         let mut stats = RolloutStats::default();
         let complete = candidate_rollout(
@@ -4216,14 +4354,25 @@ mod tests {
         let mut board = empty_board();
         put_colors(&mut board, 24, &[0, 1]);
         let before = board.stacks.clone();
-        let found =
-            existing_mixed_search(&board, 24, [0, 1], Instant::now() - Duration::from_secs(1));
+        let distances = test_nest_distances(&board);
+        let found = existing_mixed_search(
+            &board,
+            24,
+            [0, 1],
+            &distances,
+            Instant::now() - Duration::from_secs(1),
+        );
         assert!(found.timed_out && found.plans.is_empty());
         assert_eq!(board.stacks, before);
         board.walls.fill(true);
         board.walls[24] = false;
-        let found =
-            existing_mixed_search(&board, 24, [0, 1], Instant::now() + Duration::from_secs(60));
+        let found = existing_mixed_search(
+            &board,
+            24,
+            [0, 1],
+            &distances,
+            Instant::now() + Duration::from_secs(60),
+        );
         assert!(found.plans.is_empty() && !found.timed_out && found.invalid == 0);
         assert_eq!(found.registered, 1);
     }
@@ -4241,8 +4390,14 @@ mod tests {
         }
         put_colors(&mut board, 0, &[1, 0]);
         board.nests[24] = Some(0);
-        let found =
-            existing_mixed_search(&board, 0, [0, 1], Instant::now() + Duration::from_secs(60));
+        let distances = test_nest_distances(&board);
+        let found = existing_mixed_search(
+            &board,
+            0,
+            [0, 1],
+            &distances,
+            Instant::now() + Duration::from_secs(60),
+        );
         assert_eq!(found.invalid, 0);
         assert!(
             found
@@ -4297,10 +4452,12 @@ mod tests {
         put_colors(&mut board, 133, &[3]);
         assert_eq!(existing_mixed_colors(&board.stacks[108]), Some([2, 3]));
         let before = board.stacks.clone();
+        let distances = test_nest_distances(&board);
         let found = existing_mixed_search(
             &board,
             108,
             [2, 3],
+            &distances,
             Instant::now() + Duration::from_secs(60),
         );
         assert_eq!(found.invalid, 0);
@@ -4802,8 +4959,9 @@ mod tests {
     #[test]
     fn weighted_search_is_deterministic_and_replays_sender_segments() {
         let b = sender_case0000_fixture();
-        let x = existing_mixed_search(&b, 108, [2, 3], sender_test_deadline());
-        let y = existing_mixed_search(&b, 108, [2, 3], sender_test_deadline());
+        let distances = test_nest_distances(&b);
+        let x = existing_mixed_search(&b, 108, [2, 3], &distances, sender_test_deadline());
+        let y = existing_mixed_search(&b, 108, [2, 3], &distances, sender_test_deadline());
         assert_eq!(
             x.plans.iter().map(|p| &p.prefix).collect::<Vec<_>>(),
             y.plans.iter().map(|p| &p.prefix).collect::<Vec<_>>()
