@@ -1,6 +1,7 @@
 use proconio::input;
 use proconio::marker::Bytes;
-use std::collections::{HashSet, VecDeque};
+use std::cmp::Reverse;
+use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 use std::fmt::Write;
 use std::time::{Duration, Instant};
 
@@ -1971,11 +1972,309 @@ impl ExistingMixedModel {
     }
 }
 
+#[derive(Clone)]
+struct ExistingMixedEdge {
+    state: ExistingMixedState,
+    actions: Vec<Action>,
+    split: bool,
+    sender: bool,
+}
+
+#[derive(Default)]
+struct SenderStats {
+    requests: usize,
+    bfs: usize,
+    expanded: usize,
+    found: usize,
+    steps: usize,
+    lengths: [usize; 25],
+    invalid: usize,
+    timed_out: usize,
+    depth_hits: usize,
+    registered: usize,
+    selected: usize,
+    elapsed: Duration,
+}
+
+impl SenderStats {
+    fn add(&mut self, other: &Self) {
+        self.requests += other.requests;
+        self.bfs += other.bfs;
+        self.expanded += other.expanded;
+        self.found += other.found;
+        self.steps += other.steps;
+        for (a, b) in self.lengths.iter_mut().zip(other.lengths) {
+            *a += b;
+        }
+        self.invalid += other.invalid;
+        self.timed_out += other.timed_out;
+        self.depth_hits += other.depth_hits;
+        self.registered += other.registered;
+        self.selected += other.selected;
+        self.elapsed += other.elapsed;
+    }
+}
+
+impl ExistingMixedModel {
+    fn sender_edge(
+        &self,
+        state: ExistingMixedState,
+        index: usize,
+        max_steps: usize,
+        deadline: Instant,
+        stats: &mut SenderStats,
+    ) -> Option<ExistingMixedEdge> {
+        stats.requests += 1;
+        let sender = self.pickups[index];
+        let group = self.stack(sender, state.collected);
+        if state.colors.is_single_color()
+            || state.collected & (1 << index) != 0
+            || sender == state.cell
+            || group.len() == 0
+            || self.stack(state.cell, state.collected).len()
+                + usize::from(state.colors.len)
+                + group.len()
+                > MAX_HEIGHT
+            || max_steps == 0
+        {
+            return None;
+        }
+        let started = Instant::now();
+        let result = self.sender_path(state, index, max_steps, deadline, stats);
+        stats.elapsed += started.elapsed();
+        result
+    }
+
+    fn sender_path(
+        &self,
+        state: ExistingMixedState,
+        index: usize,
+        max_steps: usize,
+        deadline: Instant,
+        stats: &mut SenderStats,
+    ) -> Option<ExistingMixedEdge> {
+        stats.bfs += 1;
+        let sender = self.pickups[index];
+        let group = self.stack(sender, state.collected);
+        let q = group.len();
+        let color = group.last().unwrap();
+        let before = self.board_at(state);
+        let mut background = before.clone();
+        background.stacks[sender] = Stack::default();
+        let mut distances = vec![usize::MAX; background.stacks.len()];
+        let mut previous = vec![None; background.stacks.len()];
+        let mut queue = VecDeque::from([sender]);
+        distances[sender] = 0;
+        let mut arrival = None;
+        'bfs: while let Some(from) = queue.pop_front() {
+            if Instant::now() >= deadline {
+                stats.timed_out += 1;
+                return None;
+            }
+            if distances[from] >= max_steps {
+                stats.depth_hits += 1;
+                continue;
+            }
+            stats.expanded += 1;
+            let support = background.stacks[from].len();
+            for direction in 0..DIRECTIONS.len() {
+                let mut to = from;
+                for length in 1..=support + 1 {
+                    let Some(next) = background.adjacent(to, direction) else {
+                        break;
+                    };
+                    to = next;
+                    let target = background.stacks[to];
+                    if target.len() + q > MAX_HEIGHT {
+                        continue;
+                    }
+                    if to != state.cell
+                        && (target.top_run_len() != target.len()
+                            || background.nests[to] == Some(color))
+                    {
+                        continue;
+                    }
+                    if distances[to] != usize::MAX {
+                        continue;
+                    }
+                    distances[to] = distances[from] + 1;
+                    previous[to] = Some((
+                        from,
+                        Action {
+                            from,
+                            k: support,
+                            direction,
+                            length,
+                        },
+                    ));
+                    if to == state.cell {
+                        arrival = Some(to);
+                        break 'bfs;
+                    }
+                    queue.push_back(to);
+                }
+            }
+        }
+        let mut at = arrival?;
+        let mut actions = Vec::with_capacity(distances[at]);
+        while let Some((prior, action)) = previous[at] {
+            actions.push(action);
+            at = prior;
+        }
+        actions.reverse();
+        // Arrival appends a homogeneous sender; it never reverses the receiver.
+        let bit = u16::from(color == self.colors[1]);
+        let joined = TwoColorStack {
+            bits: state.colors.bits
+                | ((if bit == 1 {
+                    TwoColorStack::mask(q as u8)
+                } else {
+                    0
+                }) << state.colors.len),
+            len: state.colors.len + q as u8,
+        }
+        .after_home(
+            self.background.nests[state.cell],
+            self.colors[0],
+            self.colors[1],
+        );
+        let end = ExistingMixedState {
+            cell: state.cell,
+            colors: joined,
+            collected: state.collected | (1 << index),
+        };
+        let mut actual = before;
+        for &action in &actions {
+            if Instant::now() >= deadline {
+                stats.timed_out += 1;
+                return None;
+            }
+            if !checked_existing_action(&mut actual, action) {
+                stats.invalid += 1;
+                return None;
+            }
+        }
+        if actual.stacks != self.board_at(end).stacks {
+            stats.invalid += 1;
+            return None;
+        }
+        stats.found += 1;
+        stats.steps += actions.len();
+        stats.lengths[actions.len()] += 1;
+        Some(ExistingMixedEdge {
+            state: end,
+            actions,
+            split: false,
+            sender: true,
+        })
+    }
+}
+
 struct ExistingMixedNode {
     state: ExistingMixedState,
     depth: usize,
-    previous: Option<(usize, Action)>,
+    previous: Option<(usize, Vec<Action>)>,
     split: bool,
+    sender_merges: usize,
+    settled: bool,
+    ticket: usize,
+}
+
+// Positive integer costs bound each state's strict improvements to at most 24.
+// Hence the heap (including stale items) is bounded by 4000 * 25 entries.
+struct ExistingMixedFrontier {
+    nodes: Vec<ExistingMixedNode>,
+    indices: HashMap<ExistingMixedState, usize>,
+    queue: BinaryHeap<Reverse<(usize, usize, usize)>>,
+    next_ticket: usize,
+    capacity: usize,
+}
+
+impl ExistingMixedFrontier {
+    fn new(initial: ExistingMixedState, capacity: usize) -> Self {
+        Self {
+            nodes: vec![ExistingMixedNode {
+                state: initial,
+                depth: 0,
+                previous: None,
+                split: false,
+                sender_merges: 0,
+                settled: false,
+                ticket: 0,
+            }],
+            indices: HashMap::from([(initial, 0)]),
+            queue: BinaryHeap::from([Reverse((0, 0, 0))]),
+            next_ticket: 1,
+            capacity,
+        }
+    }
+    fn pop(&mut self, result: &mut ExistingMixedSearch) -> Option<usize> {
+        while let Some(Reverse((depth, ticket, index))) = self.queue.pop() {
+            let node = &mut self.nodes[index];
+            if node.settled || node.depth != depth || node.ticket != ticket {
+                result.stale += 1;
+                continue;
+            }
+            node.settled = true;
+            result.settled += 1;
+            return Some(index);
+        }
+        None
+    }
+    fn relax(&mut self, parent: usize, edge: ExistingMixedEdge, result: &mut ExistingMixedSearch) {
+        assert!(self.nodes[parent].settled);
+        let depth = self.nodes[parent].depth + edge.actions.len();
+        if depth > MAX_EXISTING_MIXED_DEPTH {
+            result.depth_limit = true;
+            return;
+        }
+        let index = if let Some(&index) = self.indices.get(&edge.state) {
+            if self.nodes[index].settled || self.nodes[index].depth <= depth {
+                return;
+            }
+            result.updates += 1;
+            index
+        } else {
+            if self.nodes.len() >= self.capacity {
+                result.state_limit = true;
+                return;
+            }
+            let index = self.nodes.len();
+            self.indices.insert(edge.state, index);
+            self.nodes.push(ExistingMixedNode {
+                state: edge.state,
+                depth,
+                previous: None,
+                split: false,
+                sender_merges: 0,
+                settled: false,
+                ticket: 0,
+            });
+            result.registered += 1;
+            index
+        };
+        if edge.sender {
+            result.sender.registered += 1;
+        }
+        let sender_merges = self.nodes[parent].sender_merges + usize::from(edge.sender);
+        let node = &mut self.nodes[index];
+        node.depth = depth;
+        node.previous = Some((parent, edge.actions));
+        node.split = edge.split;
+        node.sender_merges = sender_merges;
+        node.ticket = self.next_ticket;
+        self.queue.push(Reverse((depth, self.next_ticket, index)));
+        self.next_ticket += 1;
+        result.queue_peak = result.queue_peak.max(self.queue.len());
+    }
+    fn path(&self, mut index: usize) -> Vec<Action> {
+        let mut chunks = Vec::new();
+        while let Some((parent, actions)) = &self.nodes[index].previous {
+            chunks.push(actions.as_slice());
+            index = *parent;
+        }
+        chunks.into_iter().rev().flatten().copied().collect()
+    }
 }
 
 struct ExistingMixedPlan {
@@ -1984,11 +2283,26 @@ struct ExistingMixedPlan {
     end: ExistingMixedState,
     split: bool,
     returned: [usize; 2],
+    sender_merges: usize,
+}
+
+struct ExistingMixedTerminalInfo {
+    state: ExistingMixedState,
+    depth: usize,
+    returned: [usize; 2],
+    split: bool,
+    sender_merges: usize,
 }
 
 #[derive(Default)]
 struct ExistingMixedSearch {
     plans: Vec<ExistingMixedPlan>,
+    terminal_info: Vec<ExistingMixedTerminalInfo>,
+    sender: SenderStats,
+    updates: usize,
+    stale: usize,
+    settled: usize,
+    queue_peak: usize,
     pickups: Vec<usize>,
     registered: usize,
     expanded: usize,
@@ -2036,65 +2350,26 @@ fn existing_mixed_search(
         registered: 1,
         ..Default::default()
     };
-    let mut nodes = vec![ExistingMixedNode {
-        state: initial,
-        depth: 0,
-        previous: None,
-        split: false,
-    }];
-    let mut seen = HashSet::from([initial]);
+    let mut frontier = ExistingMixedFrontier::new(initial, MAX_EXISTING_MIXED_STATES);
     let mut terminal_boards = HashSet::new();
     let mut terminals: Vec<(usize, ExistingMixedPlan)> = Vec::new();
-    let mut head = 0;
-    'search: while head < nodes.len() {
+    'search: while !frontier.queue.is_empty() {
         if Instant::now() >= deadline {
             result.timed_out = true;
             break;
         }
-        let index = head;
-        head += 1;
-        if model.terminal(nodes[index].state) {
-            continue;
-        }
-        if nodes[index].depth >= MAX_EXISTING_MIXED_DEPTH {
-            result.depth_limit = true;
-            continue;
-        }
-        result.expanded += 1;
-        for transition in model.transitions(nodes[index].state) {
-            if seen.contains(&transition.state) {
-                continue;
-            }
-            if nodes.len() >= MAX_EXISTING_MIXED_STATES {
-                result.state_limit = true;
-                continue;
-            }
-            seen.insert(transition.state);
-            let depth = nodes[index].depth + 1;
-            let state = transition.state;
-            let at = nodes.len();
-            nodes.push(ExistingMixedNode {
-                state,
-                depth,
-                previous: Some((index, transition.action)),
-                split: transition.split,
-            });
-            result.registered += 1;
-            if !model.terminal(state) {
-                continue;
-            }
+        let Some(index) = frontier.pop(&mut result) else {
+            break;
+        };
+        let state = frontier.nodes[index].state;
+        let depth = frontier.nodes[index].depth;
+        if model.terminal(state) {
             result.terminals[usize::from(state.collected)] += 1;
             if terminals.len() >= MAX_EXISTING_MIXED_STATES {
                 result.terminal_limit = true;
                 continue;
             }
-            let mut path = Vec::with_capacity(depth);
-            let mut prior = at;
-            while let Some((before, action)) = nodes[prior].previous {
-                path.push(action);
-                prior = before;
-            }
-            path.reverse();
+            let path = frontier.path(index);
             let mut actual = board.clone();
             for &action in &path {
                 if Instant::now() >= deadline {
@@ -2135,19 +2410,64 @@ fn existing_mixed_search(
                     .sum::<usize>();
                 returned[i] = before - after;
             }
+            result.terminal_info.push(ExistingMixedTerminalInfo {
+                state,
+                depth,
+                returned,
+                split: frontier.nodes[index].split,
+                sender_merges: frontier.nodes[index].sender_merges,
+            });
             terminals.push((
-                at,
+                index,
                 ExistingMixedPlan {
                     prefix: path,
                     collected: state.collected,
                     end: state,
-                    split: nodes[at].split,
+                    split: frontier.nodes[index].split,
                     returned,
+                    sender_merges: frontier.nodes[index].sender_merges,
                 },
             ));
+        } else {
+            if depth >= MAX_EXISTING_MIXED_DEPTH {
+                result.depth_limit = true;
+                continue;
+            }
+            result.expanded += 1;
+            for transition in model.transitions(state) {
+                frontier.relax(
+                    index,
+                    ExistingMixedEdge {
+                        state: transition.state,
+                        actions: vec![transition.action],
+                        split: transition.split,
+                        sender: false,
+                    },
+                    &mut result,
+                );
+            }
+            for sender in 0..model.pickups.len() {
+                if Instant::now() >= deadline {
+                    result.timed_out = true;
+                    break 'search;
+                }
+                if let Some(edge) = model.sender_edge(
+                    state,
+                    sender,
+                    MAX_EXISTING_MIXED_DEPTH - depth,
+                    deadline,
+                    &mut result.sender,
+                ) {
+                    frontier.relax(index, edge, &mut result);
+                }
+                if Instant::now() >= deadline {
+                    result.timed_out = true;
+                    break 'search;
+                }
+            }
         }
     }
-    // BFS discovery order is depth order. Keep one shortest terminal per mask.
+    // Settled order is minimum operation cost, then queue insertion ticket.
     result.rollout_limit = terminals.len() > MAX_EXISTING_MIXED_ROLLOUTS;
     let mut selected = vec![false; terminals.len()];
     let mut represented = [false; 8];
@@ -2169,6 +2489,10 @@ fn existing_mixed_search(
         }
     }
     let mut terminals: Vec<_> = terminals.into_iter().map(|(_, plan)| Some(plan)).collect();
+    result.sender.selected = order
+        .iter()
+        .map(|&i| terminals[i].as_ref().unwrap().sender_merges)
+        .sum();
     result.plans = order
         .into_iter()
         .map(|i| terminals[i].take().unwrap())
@@ -2206,10 +2530,24 @@ struct ExistingMixedStats {
     elapsed: Duration,
     rollout: RolloutStats,
     events: String,
+    sender: SenderStats,
+    weighted_updates: usize,
+    weighted_stale: usize,
+    weighted_settled: usize,
+    weighted_queue_peak: usize,
+    sender_candidates: usize,
+    sender_saved: usize,
+    sender_executed: usize,
 }
 
 impl ExistingMixedStats {
     fn record_search(&mut self, result: &ExistingMixedSearch) {
+        self.sender.add(&result.sender);
+        self.weighted_updates += result.updates;
+        self.weighted_stale += result.stale;
+        self.weighted_settled += result.settled;
+        self.weighted_queue_peak = self.weighted_queue_peak.max(result.queue_peak);
+        self.sender_candidates += result.plans.iter().filter(|p| p.sender_merges > 0).count();
         self.expanded += result.expanded;
         self.registered += result.registered;
         for (total, count) in self.terminals.iter_mut().zip(result.terminals) {
@@ -2258,6 +2596,28 @@ impl ExistingMixedStats {
             "existing_mixed_caps pickup_hits={} rollout_limit_hits={}",
             self.pickup_hits, self.rollout_limit_hits
         );
+        eprintln!(
+            "existing_sender requests={} bfs={} expanded={} cache_hits=0 found={} path_steps={} invalid={} timed_out={} depth_hits={} registered={} selected_merges={} selected_candidates={} saved={} executed={} time_us={} updates={} stale={} settled={} queue_peak={}",
+            self.sender.requests,
+            self.sender.bfs,
+            self.sender.expanded,
+            self.sender.found,
+            self.sender.steps,
+            self.sender.invalid,
+            self.sender.timed_out,
+            self.sender.depth_hits,
+            self.sender.registered,
+            self.sender.selected,
+            self.sender_candidates,
+            self.sender_saved,
+            self.sender_executed,
+            self.sender.elapsed.as_micros(),
+            self.weighted_updates,
+            self.weighted_stale,
+            self.weighted_settled,
+            self.weighted_queue_peak
+        );
+        eprintln!("existing_sender_lengths counts={:?}", self.sender.lengths);
         self.rollout.log("existing_mixed");
         eprint!("{}", self.events);
     }
@@ -2600,6 +2960,41 @@ fn main() {
                         found.depth_limit,
                         plan_length(&saved)
                     );
+                    let _ = writeln!(
+                        existing_mixed_stats.events,
+                        "existing_sender_search step={} requests={} bfs={} expanded={} found={} path_steps={} invalid={} timed_out={} depth_hits={} registered={} selected_merges={} time_us={} updates={} stale={} settled={} queue_peak={}",
+                        actions.len(),
+                        found.sender.requests,
+                        found.sender.bfs,
+                        found.sender.expanded,
+                        found.sender.found,
+                        found.sender.steps,
+                        found.sender.invalid,
+                        found.sender.timed_out,
+                        found.sender.depth_hits,
+                        found.sender.registered,
+                        found.sender.selected,
+                        found.sender.elapsed.as_micros(),
+                        found.updates,
+                        found.stale,
+                        found.settled,
+                        found.queue_peak
+                    );
+                    for terminal in &found.terminal_info {
+                        let _ = writeln!(
+                            existing_mixed_stats.events,
+                            "existing_mixed_terminal step={} p={} collected={} end={} bits={} len={} returned={:?} split={} sender_merges={}",
+                            actions.len(),
+                            terminal.depth,
+                            terminal.state.collected,
+                            terminal.state.cell,
+                            terminal.state.colors.bits,
+                            terminal.state.colors.len,
+                            terminal.returned,
+                            terminal.split,
+                            terminal.sender_merges
+                        );
+                    }
                     let mut executed_candidate = None;
                     for (index, candidate) in found.plans.into_iter().enumerate() {
                         if Instant::now() >= local_deadline {
@@ -2625,7 +3020,7 @@ fn main() {
                         };
                         let _ = writeln!(
                             existing_mixed_stats.events,
-                            "existing_mixed_candidate step={} index={} S={} p={} status={} continuation={:?} collected={} end={} end_colors={:?} returned={:?} split={}",
+                            "existing_mixed_candidate step={} index={} S={} p={} status={} continuation={:?} collected={} end={} end_colors={:?} returned={:?} split={} sender_merges={}",
                             actions.len(),
                             index,
                             before,
@@ -2636,12 +3031,15 @@ fn main() {
                             candidate.end.cell,
                             candidate.end.colors,
                             candidate.returned,
-                            candidate.split
+                            candidate.split,
+                            candidate.sender_merges
                         );
                         if let Ok(mut continuation) = result {
                             let length = candidate.prefix.len() + plan_length(&continuation);
                             if length < before {
                                 existing_mixed_stats.saved += 1;
+                                existing_mixed_stats.sender_saved += candidate.sender_merges;
+
                                 existing_mixed_stats.savings += before - length;
                                 let _ = writeln!(
                                     existing_mixed_stats.events,
@@ -2655,14 +3053,15 @@ fn main() {
                                     candidate.returned,
                                     candidate.split
                                 );
-                                executed_candidate = Some(index);
+                                executed_candidate = Some((index, candidate.sender_merges));
                                 continuation.push_front(candidate.prefix);
                                 saved = continuation;
                             }
                         }
                     }
-                    if let Some(index) = executed_candidate {
+                    if let Some((index, sender_merges)) = executed_candidate {
                         existing_mixed_stats.executed += 1;
+                        existing_mixed_stats.sender_executed += sender_merges;
                         let _ = writeln!(
                             existing_mixed_stats.events,
                             "existing_mixed_execute step={} index={}",
@@ -3916,5 +4315,513 @@ mod tests {
             assert!(actual.stacks.iter().all(|s| s.len() <= 8));
         }
         assert_eq!(board.stacks, before);
+    }
+    fn sender_test_deadline() -> Instant {
+        Instant::now() + Duration::from_secs(60)
+    }
+
+    #[test]
+    fn sender_arrival_preserves_receiver_order_and_differs_from_pickup() {
+        let mut board = empty_board();
+        put_colors(&mut board, 24, &[0, 1]);
+        put_colors(&mut board, 23, &[1]);
+        let (model, state) = ExistingMixedModel::new(&board, 24, [0, 1]);
+        let incoming = model
+            .sender_edge(
+                state,
+                0,
+                24,
+                sender_test_deadline(),
+                &mut SenderStats::default(),
+            )
+            .unwrap();
+        let outgoing = model
+            .transitions(state)
+            .into_iter()
+            .find(|t| t.state.cell == 23 && t.state.collected == 1)
+            .unwrap();
+        assert_eq!(
+            &model.board_at(incoming.state).stacks[24].colors[..3],
+            &[0, 1, 1]
+        );
+        assert_eq!(
+            &model.board_at(outgoing.state).stacks[23].colors[..3],
+            &[1, 1, 0]
+        );
+        assert_eq!(incoming.actions.len(), 1);
+        let mut actual = board.clone();
+        for a in incoming.actions {
+            assert!(checked_existing_action(&mut actual, a));
+        }
+        assert_eq!(actual.stacks, model.board_at(incoming.state).stacks);
+    }
+
+    #[test]
+    fn sender_route_leaves_support_and_empties_origin() {
+        let mut board = empty_board();
+        board.walls.fill(true);
+        board.walls[21..=24].fill(false);
+        put_colors(&mut board, 24, &[0, 1]);
+        put_colors(&mut board, 21, &[1]);
+        put_colors(&mut board, 22, &[2, 2]);
+        let (model, state) = ExistingMixedModel::new(&board, 24, [0, 1]);
+        let edge = model
+            .sender_edge(
+                state,
+                0,
+                24,
+                sender_test_deadline(),
+                &mut SenderStats::default(),
+            )
+            .unwrap();
+        assert_eq!(edge.actions.len(), 2);
+        assert_eq!(edge.actions[0].k, 0);
+        assert_eq!(
+            (
+                edge.actions[1].from,
+                edge.actions[1].k,
+                edge.actions[1].length
+            ),
+            (22, 2, 2)
+        );
+        let mut actual = board.clone();
+        for &a in &edge.actions {
+            assert!(checked_existing_action(&mut actual, a));
+        }
+        assert_eq!(actual.stacks[21].len(), 0);
+        assert_eq!(actual.stacks[22], board.stacks[22]);
+        assert_eq!(actual.stacks, model.board_at(edge.state).stacks);
+        assert!(
+            model
+                .sender_edge(
+                    state,
+                    0,
+                    1,
+                    sender_test_deadline(),
+                    &mut SenderStats::default()
+                )
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn sender_arrival_above_background_checks_height_and_retains_support() {
+        let mut board = empty_board();
+        put_colors(&mut board, 24, &[0, 1]);
+        put_colors(&mut board, 23, &[2, 2]);
+        put_colors(&mut board, 22, &[1]);
+        let (model, initial) = ExistingMixedModel::new(&board, 24, [0, 1]);
+        let state = model
+            .transitions(initial)
+            .into_iter()
+            .find(|t| t.state.cell == 23)
+            .unwrap()
+            .state;
+        let edge = model
+            .sender_edge(
+                state,
+                0,
+                24,
+                sender_test_deadline(),
+                &mut SenderStats::default(),
+            )
+            .unwrap();
+        assert_eq!(model.stack(23, edge.state.collected).len(), 2);
+        assert_eq!(
+            &model.board_at(edge.state).stacks[23].colors[..5],
+            &[2, 2, 1, 0, 1]
+        );
+        let mut actual = model.board_at(state);
+        for a in edge.actions {
+            assert!(checked_existing_action(&mut actual, a));
+        }
+        assert_eq!(actual.stacks, model.board_at(edge.state).stacks);
+        let mut full = board;
+        put_colors(&mut full, 23, &[2, 2, 2, 2, 2, 2]);
+        let (model, mut state) = ExistingMixedModel::new(&full, 24, [0, 1]);
+        state.cell = 23;
+        let mut stats = SenderStats::default();
+        assert!(
+            model
+                .sender_edge(state, 0, 24, sender_test_deadline(), &mut stats)
+                .is_none()
+        );
+        assert_eq!(stats.bfs, 0);
+    }
+
+    #[test]
+    fn sender_home_on_arrival_but_not_during_route() {
+        let mut board = empty_board();
+        board.walls.fill(true);
+        board.walls[21..=24].fill(false);
+        put_colors(&mut board, 24, &[0, 1]);
+        put_colors(&mut board, 21, &[0]);
+        board.nests[24] = Some(0);
+        let (model, state) = ExistingMixedModel::new(&board, 24, [0, 1]);
+        let edge = model
+            .sender_edge(
+                state,
+                0,
+                24,
+                sender_test_deadline(),
+                &mut SenderStats::default(),
+            )
+            .unwrap();
+        assert_eq!(edge.state.colors, state.colors);
+        assert_eq!(edge.state.collected, 1);
+        let mut actual = board.clone();
+        for a in edge.actions {
+            assert!(checked_existing_action(&mut actual, a));
+        }
+        assert_eq!(actual.stacks, model.board_at(edge.state).stacks);
+        board.nests[22] = Some(0);
+        let (model, state) = ExistingMixedModel::new(&board, 24, [0, 1]);
+        assert!(
+            model
+                .sender_edge(
+                    state,
+                    0,
+                    24,
+                    sender_test_deadline(),
+                    &mut SenderStats::default()
+                )
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn sender_rejects_collected_same_cell_single_and_expired() {
+        let mut board = empty_board();
+        put_colors(&mut board, 24, &[0, 1]);
+        put_colors(&mut board, 23, &[1]);
+        let (model, state) = ExistingMixedModel::new(&board, 24, [0, 1]);
+        let mut invalid = state;
+        invalid.collected = 1;
+        assert!(
+            model
+                .sender_edge(
+                    invalid,
+                    0,
+                    24,
+                    sender_test_deadline(),
+                    &mut SenderStats::default()
+                )
+                .is_none()
+        );
+        invalid = state;
+        invalid.cell = 23;
+        assert!(
+            model
+                .sender_edge(
+                    invalid,
+                    0,
+                    24,
+                    sender_test_deadline(),
+                    &mut SenderStats::default()
+                )
+                .is_none()
+        );
+        invalid = state;
+        invalid.colors = TwoColorStack { bits: 0, len: 2 };
+        assert!(
+            model
+                .sender_edge(
+                    invalid,
+                    0,
+                    24,
+                    sender_test_deadline(),
+                    &mut SenderStats::default()
+                )
+                .is_none()
+        );
+        let mut stats = SenderStats::default();
+        assert!(
+            model
+                .sender_edge(
+                    state,
+                    0,
+                    24,
+                    Instant::now() - Duration::from_secs(1),
+                    &mut stats
+                )
+                .is_none()
+        );
+        assert_eq!(stats.timed_out, 1);
+    }
+
+    #[test]
+    fn weighted_frontier_improves_at_capacity_and_discards_stale_paths() {
+        let state = ExistingMixedState {
+            cell: 0,
+            colors: TwoColorStack { bits: 1, len: 2 },
+            collected: 0,
+        };
+        let mid = ExistingMixedState { cell: 1, ..state };
+        let end = ExistingMixedState { cell: 2, ..state };
+        let extra = ExistingMixedState { cell: 3, ..state };
+        let a = Action {
+            from: 0,
+            k: 0,
+            direction: 3,
+            length: 1,
+        };
+        let b = Action { from: 1, ..a };
+        let mut q = ExistingMixedFrontier::new(state, 3);
+        let mut result = ExistingMixedSearch {
+            registered: 1,
+            ..Default::default()
+        };
+        assert_eq!(q.pop(&mut result), Some(0));
+        q.relax(
+            0,
+            ExistingMixedEdge {
+                state: end,
+                actions: vec![a, b, a],
+                split: false,
+                sender: true,
+            },
+            &mut result,
+        );
+        q.relax(
+            0,
+            ExistingMixedEdge {
+                state: mid,
+                actions: vec![a],
+                split: false,
+                sender: false,
+            },
+            &mut result,
+        );
+        q.relax(
+            0,
+            ExistingMixedEdge {
+                state: extra,
+                actions: vec![a],
+                split: false,
+                sender: false,
+            },
+            &mut result,
+        );
+        assert!(result.state_limit);
+        let m = q.pop(&mut result).unwrap();
+        assert_eq!(q.nodes[m].state, mid);
+        q.relax(
+            m,
+            ExistingMixedEdge {
+                state: end,
+                actions: vec![b],
+                split: false,
+                sender: false,
+            },
+            &mut result,
+        );
+        let e = q.pop(&mut result).unwrap();
+        assert_eq!(q.nodes[e].depth, 2);
+        assert_eq!(q.path(e), vec![a, b]);
+        assert_eq!(q.nodes[e].sender_merges, 0);
+        assert_eq!(result.updates, 1);
+        assert_eq!(result.registered, 3);
+        assert!(q.pop(&mut result).is_none());
+        assert_eq!(result.stale, 1);
+    }
+
+    #[test]
+    fn weighted_equal_cost_keeps_first_path_and_segment_order() {
+        let state = ExistingMixedState {
+            cell: 0,
+            colors: TwoColorStack { bits: 1, len: 2 },
+            collected: 0,
+        };
+        let end = ExistingMixedState { cell: 2, ..state };
+        let other = ExistingMixedState { cell: 3, ..state };
+        let a = Action {
+            from: 0,
+            k: 0,
+            direction: 3,
+            length: 1,
+        };
+        let b = Action { from: 1, ..a };
+        let mut q = ExistingMixedFrontier::new(state, 4);
+        let mut r = ExistingMixedSearch::default();
+        q.pop(&mut r);
+        q.relax(
+            0,
+            ExistingMixedEdge {
+                state: end,
+                actions: vec![a, b],
+                split: false,
+                sender: true,
+            },
+            &mut r,
+        );
+        q.relax(
+            0,
+            ExistingMixedEdge {
+                state: other,
+                actions: vec![b, a],
+                split: false,
+                sender: true,
+            },
+            &mut r,
+        );
+        q.relax(
+            0,
+            ExistingMixedEdge {
+                state: end,
+                actions: vec![b, a],
+                split: false,
+                sender: true,
+            },
+            &mut r,
+        );
+        let e = q.pop(&mut r).unwrap();
+        assert_eq!(q.nodes[e].state, end);
+        assert_eq!(q.path(e), vec![a, b]);
+        assert_eq!(q.nodes[e].sender_merges, 1);
+        let other_index = q.pop(&mut r).unwrap();
+        assert_eq!(q.nodes[other_index].state, other);
+    }
+
+    fn sender_case0000_fixture() -> Board {
+        let mut b = Board {
+            n: 12,
+            walls: vec![false; 144],
+            nests: vec![None; 144],
+            stacks: vec![Stack::default(); 144],
+        };
+        let rows = [
+            "............",
+            "...c.##.....",
+            ".A..c##.....",
+            "...c#.##....",
+            "c..##.###B..",
+            "aa.#...##.b.",
+            "..##C..###..",
+            ".a#.d#..##.b",
+            "a##d.##b.##.",
+            "d...####b...",
+            "...######...",
+            ".d.......D..",
+        ];
+        for (r, row) in rows.iter().enumerate() {
+            for (c, v) in row.bytes().enumerate() {
+                if v == b'#' {
+                    b.walls[r * 12 + c] = true;
+                } else if v.is_ascii_uppercase() {
+                    b.nests[r * 12 + c] = Some(v - b'A');
+                }
+            }
+        }
+        for (cell, colors) in [
+            (60, vec![0]),
+            (61, vec![0]),
+            (70, vec![1]),
+            (85, vec![0]),
+            (88, vec![3]),
+            (95, vec![1]),
+            (96, vec![0]),
+            (99, vec![3]),
+            (108, vec![3, 2, 2, 2, 2]),
+            (116, vec![1, 1]),
+            (133, vec![3]),
+        ] {
+            put_colors(&mut b, cell, &colors);
+        }
+        b
+    }
+
+    #[test]
+    fn sender_case0000_two_step_route_and_complete_fixed_interval() {
+        let mut board = sender_case0000_fixture();
+        let (model, mut state) = ExistingMixedModel::new(&board, 108, [2, 3]);
+        let specs = [
+            (108, 0, 3, 1),
+            (133, 0, 0, 1),
+            (121, 0, 0, 1),
+            (109, 0, 3, 1),
+            (110, 0, 3, 1),
+            (111, 0, 0, 1),
+            (99, 0, 0, 1),
+            (87, 0, 3, 1),
+            (88, 0, 0, 1),
+            (76, 4, 3, 2),
+        ];
+        let actions: Vec<_> = specs
+            .iter()
+            .map(|&(from, k, direction, length)| Action {
+                from,
+                k,
+                direction,
+                length,
+            })
+            .collect();
+        state = model
+            .transitions(state)
+            .into_iter()
+            .find(|t| t.action == actions[0] && t.state.collected == 0)
+            .unwrap()
+            .state;
+        assert!(checked_existing_action(&mut board, actions[0]));
+        let sender = model
+            .sender_edge(
+                state,
+                0,
+                24,
+                sender_test_deadline(),
+                &mut SenderStats::default(),
+            )
+            .unwrap();
+        assert_eq!(sender.actions, &actions[1..3]);
+        for &a in &sender.actions {
+            assert!(checked_existing_action(&mut board, a));
+        }
+        state = sender.state;
+        assert_eq!(&board.stacks[109].colors[..6], &[2, 2, 2, 2, 3, 3]);
+        assert_eq!(board.stacks, model.board_at(state).stacks);
+        for (index, &action) in actions.iter().enumerate().skip(3) {
+            let transition = model
+                .transitions(state)
+                .into_iter()
+                .filter(|t| t.action == action)
+                .max_by_key(|t| t.state.collected.count_ones())
+                .unwrap();
+            assert!(checked_existing_action(&mut board, action));
+            state = transition.state;
+            assert_eq!(
+                board.stacks,
+                model.board_at(state).stacks,
+                "at operation {index}"
+            );
+        }
+        assert_eq!(state.collected, 7);
+        assert_eq!(state.cell, 78);
+        assert_eq!(&board.stacks[78].colors[..4], &[3, 3, 3, 3]);
+        assert!(board.stacks[76].len() == 0 && model.terminal(state));
+    }
+
+    #[test]
+    fn weighted_search_is_deterministic_and_replays_sender_segments() {
+        let b = sender_case0000_fixture();
+        let x = existing_mixed_search(&b, 108, [2, 3], sender_test_deadline());
+        let y = existing_mixed_search(&b, 108, [2, 3], sender_test_deadline());
+        assert_eq!(
+            x.plans.iter().map(|p| &p.prefix).collect::<Vec<_>>(),
+            y.plans.iter().map(|p| &p.prefix).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            (x.registered, x.updates, x.stale),
+            (y.registered, y.updates, y.stale)
+        );
+        assert_eq!(x.invalid, 0);
+        assert_eq!(x.sender.invalid, 0);
+        let (model, _) = ExistingMixedModel::new(&b, 108, [2, 3]);
+        for p in x.plans {
+            let mut actual = b.clone();
+            for a in &p.prefix {
+                assert!(checked_existing_action(&mut actual, *a));
+            }
+            assert_eq!(actual.stacks, model.board_at(p.end).stacks);
+            assert!(p.prefix.len() <= 24);
+        }
     }
 }
