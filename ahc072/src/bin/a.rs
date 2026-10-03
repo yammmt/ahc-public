@@ -1851,6 +1851,7 @@ const MAX_EXISTING_MIXED_PICKUPS: usize = 3;
 const MAX_EXISTING_MIXED_DEPTH: usize = 24;
 const MAX_EXISTING_MIXED_STATES: usize = 4000;
 const MAX_EXISTING_MIXED_ROLLOUTS: usize = 8;
+const MAX_EXISTING_MIXED_HOME_TABLES: usize = 8;
 const MAX_EXISTING_MIXED_CALLS: usize = 64;
 const EXISTING_MIXED_CALL_TIME: Duration = Duration::from_millis(10);
 const EXISTING_MIXED_CASE_TIME: Duration = Duration::from_millis(200);
@@ -2437,6 +2438,10 @@ struct ExistingMixedSearch {
     timed_out: bool,
     pickup_limit: bool,
     rollout_limit: bool,
+    home_tables: usize,
+    home_unreachable: usize,
+    home_fallback_groups: usize,
+    home_elapsed: Duration,
 }
 
 fn checked_existing_action(board: &mut Board, action: Action) -> bool {
@@ -2459,7 +2464,8 @@ fn checked_existing_action(board: &mut Board, action: Action) -> bool {
 }
 
 // A terminal leaves either no moving slime or one homogeneous moving group.
-// Keep unreachable terminals after every finite one without running a new BFS.
+// This is the old ranking, retained as the fallback when a bounded home-cost
+// calculation cannot complete before the local deadline.
 fn existing_mixed_terminal_nest_distance(
     plan: &ExistingMixedPlan,
     colors: [u8; 2],
@@ -2490,6 +2496,183 @@ fn rank_existing_mixed_terminal_indices(
     order
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct ExistingMixedHomeKey {
+    collected: u8,
+    returned: [usize; 2],
+    color: u8,
+    moving: u8,
+}
+
+#[derive(Default)]
+struct ExistingMixedHomeStats {
+    tables: usize,
+    unreachable: usize,
+    fallback_groups: usize,
+    elapsed: Duration,
+}
+
+fn existing_mixed_home_key(plan: &ExistingMixedPlan, colors: [u8; 2]) -> ExistingMixedHomeKey {
+    let moving = plan.end.colors;
+    let color = if moving.len == 0 {
+        u8::MAX
+    } else {
+        colors[usize::from(moving.bits != 0)]
+    };
+    ExistingMixedHomeKey {
+        collected: plan.collected,
+        returned: plan.returned,
+        color,
+        moving: moving.len,
+    }
+}
+
+fn terminal_transport_background(model: &ExistingMixedModel, plan: &ExistingMixedPlan) -> Board {
+    let mut background = model.board_at(plan.end);
+    background.stacks[plan.end.cell] = Stack::default();
+    background
+}
+
+// Build the directed movement graph first, then traverse its reverse edges.
+// An edge into an empty matching nest reaches the all-returned goal.  The
+// source support height determines the forward action, so reversing actions
+// directly would be incorrect.
+fn transport_home_costs(
+    background: &Board,
+    color: u8,
+    moving: usize,
+    deadline: Instant,
+) -> Option<Vec<usize>> {
+    let started = Instant::now();
+    let mut reverse = vec![Vec::new(); background.stacks.len()];
+    let mut goal = vec![false; background.stacks.len()];
+    for (from, can_return) in goal.iter_mut().enumerate() {
+        if background.walls[from] {
+            continue;
+        }
+        if Instant::now() >= deadline {
+            return None;
+        }
+        let support = background.stacks[from].len();
+        for direction in 0..DIRECTIONS.len() {
+            let mut to = from;
+            for _ in 1..=support + 1 {
+                let Some(next) = background.adjacent(to, direction) else {
+                    break;
+                };
+                to = next;
+                let target = background.stacks[to];
+                if target.len() + moving > MAX_HEIGHT {
+                    continue;
+                }
+                if background.nests[to] == Some(color) && target.len() == 0 {
+                    *can_return = true;
+                } else if !(background.nests[to] == Some(color)
+                    && target.last() == Some(color))
+                {
+                    // Landing on matching background slime would also remove
+                    // that background, which this fixed-background model forbids.
+                    reverse[to].push(from);
+                }
+            }
+        }
+    }
+    let mut costs = vec![usize::MAX; background.stacks.len()];
+    let mut queue = VecDeque::new();
+    for (cell, &can_return) in goal.iter().enumerate() {
+        if can_return {
+            costs[cell] = 1;
+            queue.push_back(cell);
+        }
+    }
+    while let Some(to) = queue.pop_front() {
+        if Instant::now() >= deadline {
+            return None;
+        }
+        for &from in &reverse[to] {
+            if costs[from] == usize::MAX {
+                costs[from] = costs[to] + 1;
+                queue.push_back(from);
+            }
+        }
+    }
+    let _ = started;
+    Some(costs)
+}
+
+fn rank_existing_mixed_terminal_home_cost_indices(
+    plans: &[ExistingMixedPlan],
+    model: &ExistingMixedModel,
+    colors: [u8; 2],
+    distances: &[Vec<usize>],
+    deadline: Instant,
+) -> (Vec<usize>, ExistingMixedHomeStats) {
+    let started = Instant::now();
+    let old_order = rank_existing_mixed_terminal_indices(plans, colors, distances);
+    let mut order = old_order.clone();
+    let mut groups: HashMap<ExistingMixedHomeKey, Vec<usize>> = HashMap::new();
+    for &index in &old_order {
+        groups
+            .entry(existing_mixed_home_key(&plans[index], colors))
+            .or_default()
+            .push(index);
+    }
+    let mut tables = HashMap::new();
+    let mut stats = ExistingMixedHomeStats::default();
+    for group in groups.values() {
+        if group.len() < 2 {
+            continue;
+        }
+        let key = existing_mixed_home_key(&plans[group[0]], colors);
+        let costs = if key.moving == 0 {
+            None
+        } else if let Some(costs) = tables.get(&key) {
+            Some(costs)
+        } else if tables.len() >= MAX_EXISTING_MIXED_HOME_TABLES || Instant::now() >= deadline {
+            stats.fallback_groups += 1;
+            continue;
+        } else {
+            let background = terminal_transport_background(model, &plans[group[0]]);
+            debug_assert!(group.iter().all(|&index| {
+                terminal_transport_background(model, &plans[index]).stacks == background.stacks
+            }));
+            let Some(costs) = transport_home_costs(
+                &background,
+                key.color,
+                usize::from(key.moving),
+                deadline,
+            ) else {
+                stats.fallback_groups += 1;
+                continue;
+            };
+            stats.tables += 1;
+            tables.insert(key, costs);
+            tables.get(&key)
+        };
+        let mut ranked = group.clone();
+        ranked.sort_unstable_by_key(|&index| {
+            let h = costs.map_or(0, |costs| costs[plans[index].end.cell]);
+            (
+                h == usize::MAX,
+                plans[index].prefix.len().saturating_add(h),
+                plans[index].prefix.len(),
+                old_order.iter().position(|&old| old == index).unwrap(),
+            )
+        });
+        stats.unreachable += group
+            .iter()
+            .filter(|&&index| costs.is_some_and(|costs| costs[plans[index].end.cell] == usize::MAX))
+            .count();
+        for (&old, &new) in group.iter().zip(ranked.iter()) {
+            let position = old_order.iter().position(|&index| index == old).unwrap();
+            order[position] = new;
+        }
+    }
+    stats.elapsed = started.elapsed();
+    (order, stats)
+}
+
+#[cfg(test)]
 fn select_existing_mixed_terminal_indices(
     plans: &[ExistingMixedPlan],
     colors: [u8; 2],
@@ -2516,6 +2699,38 @@ fn select_existing_mixed_terminal_indices(
         }
     }
     order
+}
+
+fn select_existing_mixed_terminal_home_cost_indices(
+    plans: &[ExistingMixedPlan],
+    model: &ExistingMixedModel,
+    colors: [u8; 2],
+    distances: &[Vec<usize>],
+    deadline: Instant,
+) -> (Vec<usize>, ExistingMixedHomeStats) {
+    let (ranked, stats) = rank_existing_mixed_terminal_home_cost_indices(
+        plans, model, colors, distances, deadline,
+    );
+    let mut selected = vec![false; plans.len()];
+    let mut represented = [false; 8];
+    let mut order = Vec::new();
+    for &index in &ranked {
+        let mask = usize::from(plans[index].collected);
+        if !represented[mask] && order.len() < MAX_EXISTING_MIXED_ROLLOUTS {
+            represented[mask] = true;
+            selected[index] = true;
+            order.push(index);
+        }
+    }
+    for &index in &ranked {
+        if order.len() >= MAX_EXISTING_MIXED_ROLLOUTS {
+            break;
+        }
+        if !selected[index] {
+            order.push(index);
+        }
+    }
+    (order, stats)
 }
 
 fn existing_mixed_search(
@@ -2650,7 +2865,13 @@ fn existing_mixed_search(
     // then the original settled order.  Representatives and remaining slots
     // deliberately use the same ranking.
     result.rollout_limit = terminals.len() > MAX_EXISTING_MIXED_ROLLOUTS;
-    let order = select_existing_mixed_terminal_indices(&terminals, colors, distances);
+    let (order, home_stats) = select_existing_mixed_terminal_home_cost_indices(
+        &terminals, &model, colors, distances, deadline,
+    );
+    result.home_tables = home_stats.tables;
+    result.home_unreachable = home_stats.unreachable;
+    result.home_fallback_groups = home_stats.fallback_groups;
+    result.home_elapsed = home_stats.elapsed;
     let mut terminals: Vec<_> = terminals.into_iter().map(Some).collect();
     result.sender.selected = order
         .iter()
@@ -2701,6 +2922,10 @@ struct ExistingMixedStats {
     sender_candidates: usize,
     sender_saved: usize,
     sender_executed: usize,
+    home_tables: usize,
+    home_unreachable: usize,
+    home_fallback_groups: usize,
+    home_elapsed: Duration,
 }
 
 impl ExistingMixedStats {
@@ -2724,6 +2949,10 @@ impl ExistingMixedStats {
         self.terminal_hits += usize::from(result.terminal_limit);
         self.pickup_hits += usize::from(result.pickup_limit);
         self.rollout_limit_hits += usize::from(result.rollout_limit);
+        self.home_tables += result.home_tables;
+        self.home_unreachable += result.home_unreachable;
+        self.home_fallback_groups += result.home_fallback_groups;
+        self.home_elapsed += result.home_elapsed;
         self.generated += result.plans.len();
         self.no_candidates += usize::from(result.plans.is_empty());
     }
@@ -2758,6 +2987,13 @@ impl ExistingMixedStats {
         eprintln!(
             "existing_mixed_caps pickup_hits={} rollout_limit_hits={}",
             self.pickup_hits, self.rollout_limit_hits
+        );
+        eprintln!(
+            "existing_mixed_home tables={} unreachable={} fallback_groups={} time_us={}",
+            self.home_tables,
+            self.home_unreachable,
+            self.home_fallback_groups,
+            self.home_elapsed.as_micros()
         );
         eprintln!(
             "existing_sender requests={} bfs={} expanded={} cache_hits=0 found={} path_steps={} invalid={} timed_out={} depth_hits={} registered={} selected_merges={} selected_candidates={} saved={} executed={} time_us={} updates={} stale={} settled={} queue_peak={}",
@@ -3465,6 +3701,108 @@ mod tests {
         let selected = select_existing_mixed_terminal_indices(&plans, [0, 1], &distances);
         assert_eq!(selected.len(), MAX_EXISTING_MIXED_ROLLOUTS);
         assert_eq!(selected, (1..=8).collect::<Vec<_>>());
+    }
+
+    fn forward_transport_home_costs(background: &Board, color: u8, moving: usize) -> Vec<usize> {
+        let mut costs = vec![usize::MAX; background.stacks.len()];
+        for start in 0..background.stacks.len() {
+            if background.walls[start] {
+                continue;
+            }
+            let mut queue = VecDeque::from([(start, 0usize)]);
+            let mut seen = vec![false; background.stacks.len()];
+            seen[start] = true;
+            while let Some((from, depth)) = queue.pop_front() {
+                let support = background.stacks[from].len();
+                for direction in 0..DIRECTIONS.len() {
+                    let mut to = from;
+                    for _ in 1..=support + 1 {
+                        let Some(next) = background.adjacent(to, direction) else {
+                            break;
+                        };
+                        to = next;
+                        let target = background.stacks[to];
+                        if target.len() + moving > MAX_HEIGHT {
+                            continue;
+                        }
+                        if background.nests[to] == Some(color) && target.len() == 0 {
+                            costs[start] = depth + 1;
+                            queue.clear();
+                            break;
+                        } else if !(background.nests[to] == Some(color)
+                            && target.last() == Some(color))
+                            && !seen[to]
+                        {
+                            seen[to] = true;
+                            queue.push_back((to, depth + 1));
+                        }
+                    }
+                }
+            }
+        }
+        costs
+    }
+
+    #[test]
+    fn transport_home_reverse_bfs_matches_forward_with_walls_and_supports() {
+        let mut board = empty_board();
+        board.walls.fill(true);
+        for cell in 0..7 {
+            board.walls[cell] = false;
+        }
+        board.walls[3] = true;
+        board.nests[6] = Some(0);
+        put_colors(&mut board, 1, &[1]);
+        put_colors(&mut board, 4, &[1]);
+        let reverse = transport_home_costs(&board, 0, 1, Instant::now() + Duration::from_secs(60))
+            .unwrap();
+        assert_eq!(reverse, forward_transport_home_costs(&board, 0, 1));
+        assert_eq!(reverse[0], usize::MAX);
+        assert_eq!(reverse[5], 1);
+
+        let mut blocked = board.clone();
+        blocked.walls[3] = false;
+        put_colors(&mut blocked, 6, &[2; MAX_HEIGHT]);
+        assert_eq!(
+            transport_home_costs(&blocked, 0, 1, Instant::now() + Duration::from_secs(60))
+                .unwrap()[5],
+            usize::MAX
+        );
+    }
+
+    #[test]
+    fn mixed_terminal_home_cost_ranking_uses_p_plus_h_and_deadline_fallback() {
+        let mut board = empty_board();
+        board.nests[6] = Some(0);
+        put_colors(&mut board, 0, &[0, 1]);
+        let (model, _) = ExistingMixedModel::new(&board, 0, [0, 1]);
+        let plans = vec![
+            mixed_terminal_plan(1, 0, 1, 0, 1),
+            mixed_terminal_plan(3, 0, 4, 0, 1),
+        ];
+        let distances = test_nest_distances(&board);
+        assert_eq!(
+            rank_existing_mixed_terminal_indices(&plans, [0, 1], &distances),
+            vec![0, 1]
+        );
+        let (ranked, stats) = rank_existing_mixed_terminal_home_cost_indices(
+            &plans,
+            &model,
+            [0, 1],
+            &distances,
+            Instant::now() + Duration::from_secs(60),
+        );
+        assert_eq!(ranked, vec![1, 0]);
+        assert_eq!(stats.tables, 1);
+        let (fallback, stats) = rank_existing_mixed_terminal_home_cost_indices(
+            &plans,
+            &model,
+            [0, 1],
+            &distances,
+            Instant::now() - Duration::from_secs(1),
+        );
+        assert_eq!(fallback, vec![0, 1]);
+        assert_eq!(stats.fallback_groups, 1);
     }
 
     #[test]
