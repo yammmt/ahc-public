@@ -21,7 +21,7 @@ const MAX_MIXED_PARTNERS: usize = 4;
 const MAX_MIXED_TRANSPORT_STEPS: usize = 24;
 const MAX_PICKUP_REPLANS: usize = 32;
 const PICKUP_REPLAN_INTERVAL: usize = 8;
-const MAX_PICKUP_PARTNERS: usize = 2;
+const MAX_PICKUP_PARTNERS: usize = 4;
 const MAX_PICKUP_THIRDS: usize = 3;
 const MAX_PICKUP_APPROACH_STEPS: usize = 12;
 const MAX_PICKUP_FINISH_STEPS: usize = 24;
@@ -150,6 +150,15 @@ struct RelayPlan {
     saving: usize,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct AdjacentSpringboardPlan {
+    actions: [Action; 2],
+    source: usize,
+    color: usize,
+    landing: usize,
+    gain: usize,
+}
+
 type MovePriority = (bool, usize, usize, usize, usize);
 type MoveCandidate = (MovePriority, Action, usize);
 
@@ -171,6 +180,118 @@ fn distances_from(board: &Board, start: usize) -> Vec<usize> {
         }
     }
     distances
+}
+
+fn adjacent_springboard_plan(
+    board: &Board,
+    a_action: Action,
+    distances: &[Vec<usize>],
+) -> Option<AdjacentSpringboardPlan> {
+    let a = a_action.from;
+    let a_height = board.stacks[a].len();
+    if a_height == 0 {
+        return None;
+    }
+    let mut best = None;
+    for direction_to_a in 0..DIRECTIONS.len() {
+        let Some(b) = board.adjacent(a, direction_to_a) else {
+            continue;
+        };
+        let b_stack = board.stacks[b];
+        let Some(b_color) = b_stack.last() else {
+            continue;
+        };
+        let b_color = usize::from(b_color);
+        let b_height = b_stack.len();
+        if b_stack.top_run_len() != b_height
+            || b_color == board.stacks[a].last().map_or(b_color, usize::from)
+            || a_height + b_height > MAX_HEIGHT
+            || board.nests[a] == Some(b_color as u8)
+        {
+            continue;
+        }
+        let first = Action {
+            from: b,
+            k: 0,
+            direction: direction_to_a ^ 1,
+            length: 1,
+        };
+        let mut after_first = board.clone();
+        if !checked_existing_action(&mut after_first, first)
+            || after_first.stacks[a].len() != a_height + b_height
+        {
+            continue;
+        }
+        for direction in 0..DIRECTIONS.len() {
+            let mut landing = a;
+            for length in 1..=a_height + 1 {
+                let Some(next) = board.adjacent(landing, direction) else {
+                    break;
+                };
+                landing = next;
+                if length < 2
+                    || landing == b
+                    || (board.stacks[landing].len() > 0
+                        && board.nests[landing] != Some(b_color as u8))
+                    || board.stacks[landing].len() + b_height > MAX_HEIGHT
+                {
+                    continue;
+                }
+                let second = Action {
+                    from: a,
+                    k: a_height,
+                    direction,
+                    length,
+                };
+                let mut replay = after_first.clone();
+                if !checked_existing_action(&mut replay, second) {
+                    continue;
+                }
+                if replay.stacks[a] != board.stacks[a]
+                    || replay.stacks[b].len() != 0
+                    || (board.nests[landing] == Some(b_color as u8)
+                        && replay.stacks[landing] != board.stacks[landing])
+                    || replay.stacks.iter().enumerate().any(|(cell, stack)| {
+                        cell != a && cell != b && cell != landing && *stack != board.stacks[cell]
+                    })
+                {
+                    continue;
+                }
+                let distance_before = distances[b_color][b];
+                let distance_after = distances[b_color][landing];
+                let gain = distance_before.saturating_sub(distance_after.saturating_add(2));
+                if gain == 0 {
+                    continue;
+                }
+                let plan = AdjacentSpringboardPlan {
+                    actions: [first, second],
+                    source: b,
+                    color: b_color,
+                    landing,
+                    gain,
+                };
+                if best
+                    .as_ref()
+                    .is_none_or(|current: &AdjacentSpringboardPlan| {
+                        (
+                            plan.gain,
+                            Reverse(plan.source),
+                            Reverse(plan.actions[1].direction),
+                            Reverse(plan.actions[1].length),
+                        ) > (
+                            current.gain,
+                            Reverse(current.source),
+                            Reverse(current.actions[1].direction),
+                            Reverse(current.actions[1].length),
+                        )
+                    })
+                {
+                    best = Some(plan);
+                }
+            }
+        }
+    }
+    best
 }
 
 fn choose_target(board: &Board, distances: &[Vec<usize>]) -> Option<(usize, usize)> {
@@ -2741,6 +2862,10 @@ fn main() {
     let mut target_saved_counts = TargetCounts::default();
     let mut target_executed_counts = TargetCounts::default();
     let mut target_deadline_hits = 0;
+    let mut springboard_generated = 0;
+    let mut springboard_evaluated = 0;
+    let mut springboard_saved = 0;
+    let mut springboard_executed = 0;
     let mut target_time = Duration::ZERO;
     let mut target_events = Vec::new();
     let mut deadline_skipped_normal = 0;
@@ -2753,6 +2878,7 @@ fn main() {
         let mut selected_mixed_actions = None;
         let mut selected_pickup_actions = None;
         let mut selected_target_candidate = None;
+        let mut selected_springboard = None;
         let mut selected_target_saving = 0;
         if replans < MAX_REPLANS
             && Instant::now() >= deadline
@@ -2920,15 +3046,31 @@ fn main() {
                 for &candidate in &targets.additional {
                     target_extracted_counts.record(candidate, color);
                 }
-                for &candidate in &targets.additional {
+                let springboard = targets
+                    .additional
+                    .last()
+                    .and_then(|_| saved.front())
+                    .and_then(|unit| unit.first())
+                    .and_then(|&first| adjacent_springboard_plan(&board, first, &distances));
+                springboard_generated += usize::from(springboard.is_some());
+                for (index, &candidate) in targets.additional.iter().enumerate() {
                     if Instant::now() >= deadline {
                         target_deadline_hits += 1;
                         break;
                     }
-                    let Some(unit) =
-                        legacy_unit(&board, candidate.cell, candidate.color, &distances)
-                    else {
-                        continue;
+                    let replacement = (index + 1 == targets.additional.len())
+                        .then_some(springboard)
+                        .flatten();
+                    let unit = if let Some(plan) = replacement {
+                        springboard_evaluated += 1;
+                        plan.actions.to_vec()
+                    } else {
+                        let Some(unit) =
+                            legacy_unit(&board, candidate.cell, candidate.color, &distances)
+                        else {
+                            continue;
+                        };
+                        unit
                     };
                     let Ok(mut continuation) = candidate_rollout(
                         &board,
@@ -2947,17 +3089,26 @@ fn main() {
                     };
                     rollouts += 1;
                     target_rollouts += 1;
-                    target_completed_counts.record(candidate, color);
+                    if replacement.is_none() {
+                        target_completed_counts.record(candidate, color);
+                    }
                     let candidate_length = unit.len() + plan_length(&continuation);
                     let saved_length = plan_length(&saved);
                     if candidate_length < saved_length {
                         selected_mixed_actions = None;
                         selected_pickup_actions = None;
-                        selected_target_candidate = Some((candidate, color));
                         selected_target_saving = before_target_length - candidate_length;
-                        target_saved += 1;
-                        target_savings += saved_length - candidate_length;
-                        target_saved_counts.record(candidate, color);
+                        if let Some(plan) = replacement {
+                            selected_target_candidate = None;
+                            selected_springboard = Some(plan);
+                            springboard_saved += 1;
+                        } else {
+                            selected_target_candidate = Some((candidate, color));
+                            selected_springboard = None;
+                            target_saved += 1;
+                            target_savings += saved_length - candidate_length;
+                            target_saved_counts.record(candidate, color);
+                        }
                         continuation.push_front(unit);
                         saved = continuation;
                     }
@@ -3147,6 +3298,9 @@ fn main() {
             ));
         }
         let unit = saved.pop_front().expect("Nonempty saved continuation");
+        if selected_springboard.is_some_and(|plan| unit.as_slice() == plan.actions) {
+            springboard_executed += 1;
+        }
         for action in unit {
             board.apply(action);
             actions.push(action);
@@ -3191,6 +3345,9 @@ fn main() {
         );
     }
     eprintln!("target_events={event_log}");
+    eprintln!(
+        "adjacent_springboard generated={springboard_generated} evaluated={springboard_evaluated} saved={springboard_saved} executed={springboard_executed}"
+    );
 
     let mut output = String::new();
     for action in actions {
@@ -3308,6 +3465,88 @@ mod tests {
         let selected = select_existing_mixed_terminal_indices(&plans, [0, 1], &distances);
         assert_eq!(selected.len(), MAX_EXISTING_MIXED_ROLLOUTS);
         assert_eq!(selected, (1..=8).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn adjacent_springboard_moves_neighbor_before_preserving_the_departing_tower() {
+        let mut board = empty_board();
+        board.walls.fill(true);
+        for cell in 0..7 {
+            board.walls[cell] = false;
+        }
+        put_colors(&mut board, 2, &[0]);
+        put_colors(&mut board, 1, &[1]);
+        board.nests[6] = Some(1);
+        let distances = test_nest_distances(&board);
+        let plan = adjacent_springboard_plan(
+            &board,
+            Action {
+                from: 2,
+                k: 0,
+                direction: 3,
+                length: 1,
+            },
+            &distances,
+        )
+        .unwrap();
+        assert_eq!(plan.source, 1);
+        assert_eq!(plan.landing, 4);
+        assert_eq!(plan.gain, 1);
+        let mut replay = board.clone();
+        for action in plan.actions {
+            assert!(checked_existing_action(&mut replay, action));
+        }
+        assert_eq!(replay.stacks[2], board.stacks[2]);
+        assert_eq!(replay.stacks[1].len(), 0);
+
+        let mut walled = board.clone();
+        walled.walls[3] = true;
+        assert!(
+            adjacent_springboard_plan(
+                &walled,
+                Action {
+                    from: 2,
+                    k: 0,
+                    direction: 3,
+                    length: 1,
+                },
+                &test_nest_distances(&walled),
+            )
+            .is_none()
+        );
+
+        let mut home = board.clone();
+        home.nests[2] = Some(1);
+        assert!(
+            adjacent_springboard_plan(
+                &home,
+                Action {
+                    from: 2,
+                    k: 0,
+                    direction: 3,
+                    length: 1,
+                },
+                &test_nest_distances(&home),
+            )
+            .is_none()
+        );
+
+        let mut tall = board;
+        put_colors(&mut tall, 2, &[0, 0, 0, 0, 0, 0, 0]);
+        put_colors(&mut tall, 1, &[1, 1]);
+        assert!(
+            adjacent_springboard_plan(
+                &tall,
+                Action {
+                    from: 2,
+                    k: 0,
+                    direction: 3,
+                    length: 1,
+                },
+                &test_nest_distances(&tall),
+            )
+            .is_none()
+        );
     }
 
     fn compare_pickup_approaches(
