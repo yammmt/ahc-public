@@ -16,3 +16,5 @@ diagnostics/
 _ai_inst/*
 _ai_out/*
 
+.claude/skills/problem/**
+!claude/skills/problem/SKILL.md
