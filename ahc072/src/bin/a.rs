@@ -11,6 +11,7 @@ const MAX_OPERATIONS: usize = 100_000;
 const MAX_HEIGHT: usize = 8;
 const MAX_PAIR_STEPS: usize = 3;
 const MAX_REPLANS: usize = 512;
+const MAX_SIMPLE_PAIR_CANDIDATES: usize = 8;
 const MAX_TARGET_CANDIDATES: usize = 4;
 const TARGET_SAMPLE_SEED: u64 = 0x0A72_2026_0930_0009;
 const MAX_CANDIDATE_ROLLOUTS: usize = 3;
@@ -949,6 +950,76 @@ fn candidate_rollout(
     };
     stats.record(&result);
     result
+}
+
+// Try only adjacent homogeneous towers. Carry both colors along the first
+// common shortest-path direction, and keep merge + transport as one unit.
+fn simple_pair_candidates(board: &Board, distances: &[Vec<usize>]) -> Vec<Vec<Action>> {
+    let mut candidates = Vec::new();
+    for source in 0..board.stacks.len() {
+        let source_stack = &board.stacks[source];
+        if source_stack.len() == 0 || source_stack.top_run_len() != source_stack.len() {
+            continue;
+        }
+        let source_color = usize::from(source_stack.colors[0]);
+        for direction in 0..DIRECTIONS.len() {
+            let Some(partner) = board.adjacent(source, direction) else {
+                continue;
+            };
+            let partner_stack = &board.stacks[partner];
+            if partner_stack.len() == 0
+                || partner_stack.top_run_len() != partner_stack.len()
+                || source_stack.len() + partner_stack.len() > MAX_HEIGHT
+            {
+                continue;
+            }
+            let partner_color = usize::from(partner_stack.colors[0]);
+            if source_color == partner_color {
+                continue;
+            }
+            let merge = Action {
+                from: source,
+                k: 0,
+                direction,
+                length: 1,
+            };
+            let mut after = board.clone();
+            after.apply(merge);
+            let mut cell = partner;
+            let mut prefix = vec![merge];
+            let height = source_stack.len() + partner_stack.len();
+            // Homecoming may remove one color during the merge or transport.
+            // Stop as soon as the two-color group no longer exists intact.
+            while after.stacks[cell].len() == height {
+                let next_move = (0..DIRECTIONS.len()).find_map(|direction| {
+                    let next = after.adjacent(cell, direction)?;
+                    (after.stacks[next].len() == 0
+                        && distances[source_color][next] < distances[source_color][cell]
+                        && distances[partner_color][next] < distances[partner_color][cell])
+                        .then_some((direction, next))
+                });
+                let Some((direction, next)) = next_move else {
+                    break;
+                };
+                let action = Action {
+                    from: cell,
+                    k: 0,
+                    direction,
+                    length: 1,
+                };
+                after.apply(action);
+                prefix.push(action);
+                cell = next;
+            }
+            if prefix.len() > 1 {
+                candidates.push(prefix);
+                if candidates.len() == MAX_SIMPLE_PAIR_CANDIDATES {
+                    return candidates;
+                }
+            }
+        }
+    }
+    candidates
 }
 
 // The source group is removed from the fixed background. Only empty cells and
@@ -2567,9 +2638,7 @@ fn transport_home_costs(
                 }
                 if background.nests[to] == Some(color) && target.len() == 0 {
                     *can_return = true;
-                } else if !(background.nests[to] == Some(color)
-                    && target.last() == Some(color))
-                {
+                } else if !(background.nests[to] == Some(color) && target.last() == Some(color)) {
                     // Landing on matching background slime would also remove
                     // that background, which this fixed-background model forbids.
                     reverse[to].push(from);
@@ -2636,12 +2705,9 @@ fn rank_existing_mixed_terminal_home_cost_indices(
             debug_assert!(group.iter().all(|&index| {
                 terminal_transport_background(model, &plans[index]).stacks == background.stacks
             }));
-            let Some(costs) = transport_home_costs(
-                &background,
-                key.color,
-                usize::from(key.moving),
-                deadline,
-            ) else {
+            let Some(costs) =
+                transport_home_costs(&background, key.color, usize::from(key.moving), deadline)
+            else {
                 stats.fallback_groups += 1;
                 continue;
             };
@@ -2708,9 +2774,8 @@ fn select_existing_mixed_terminal_home_cost_indices(
     distances: &[Vec<usize>],
     deadline: Instant,
 ) -> (Vec<usize>, ExistingMixedHomeStats) {
-    let (ranked, stats) = rank_existing_mixed_terminal_home_cost_indices(
-        plans, model, colors, distances, deadline,
-    );
+    let (ranked, stats) =
+        rank_existing_mixed_terminal_home_cost_indices(plans, model, colors, distances, deadline);
     let mut selected = vec![false; plans.len()];
     let mut represented = [false; 8];
     let mut order = Vec::new();
@@ -3073,6 +3138,11 @@ fn main() {
     let mut rollouts = 1;
     let mut rollout_stats = [RolloutStats::default(); 5];
     let mut accepted = 0;
+    let mut simple_pair_generated = 0;
+    let mut simple_pair_evaluated = 0;
+    let mut simple_pair_saved = 0;
+    let mut simple_pair_executed = 0;
+    let mut simple_pair_stats = RolloutStats::default();
     let mut mixed_attempts = 0;
     let mut mixed_partners = 0;
     let mut mixed_candidates = 0;
@@ -3111,6 +3181,7 @@ fn main() {
     let mut mixed_deadline_breaks = 0;
     let mut pickup_deadline_breaks = 0;
     while !saved.is_empty() {
+        let mut selected_simple_pair = None;
         let mut selected_mixed_actions = None;
         let mut selected_pickup_actions = None;
         let mut selected_target_candidate = None;
@@ -3515,6 +3586,38 @@ fn main() {
                 existing_mixed_stats.too_many_colors += 1;
             }
         }
+        if actions.len() < MAX_REPLANS && Instant::now() < deadline {
+            let prefixes = simple_pair_candidates(&board, &distances);
+            simple_pair_generated += prefixes.len();
+            for prefix in prefixes {
+                if Instant::now() >= deadline {
+                    break;
+                }
+                simple_pair_evaluated += 1;
+                let Ok(mut continuation) = candidate_rollout(
+                    &board,
+                    &distances,
+                    &prefix,
+                    MAX_OPERATIONS - actions.len(),
+                    plan_length(&saved),
+                    Some(deadline),
+                    &mut simple_pair_stats,
+                ) else {
+                    continue;
+                };
+                rollouts += 1;
+                if prefix.len() + plan_length(&continuation) < plan_length(&saved) {
+                    selected_mixed_actions = None;
+                    selected_pickup_actions = None;
+                    selected_target_candidate = None;
+                    selected_springboard = None;
+                    selected_simple_pair = Some(prefix.clone());
+                    continuation.push_front(prefix);
+                    saved = continuation;
+                    simple_pair_saved += 1;
+                }
+            }
+        }
         if let Some(length) = selected_mixed_actions {
             mixed_actions += length;
         }
@@ -3537,11 +3640,18 @@ fn main() {
         if selected_springboard.is_some_and(|plan| unit.as_slice() == plan.actions) {
             springboard_executed += 1;
         }
+        if selected_simple_pair.as_ref() == Some(&unit) {
+            simple_pair_executed += 1;
+        }
         for action in unit {
             board.apply(action);
             actions.push(action);
         }
     }
+    simple_pair_stats.log("simple_pair");
+    eprintln!(
+        "simple_pair generated={simple_pair_generated} evaluated={simple_pair_evaluated} saved={simple_pair_saved} executed={simple_pair_executed}"
+    );
     existing_mixed_stats.log();
     pickup_approach_stats.log();
     for (stats, kind) in rollout_stats
@@ -3754,8 +3864,8 @@ mod tests {
         board.nests[6] = Some(0);
         put_colors(&mut board, 1, &[1]);
         put_colors(&mut board, 4, &[1]);
-        let reverse = transport_home_costs(&board, 0, 1, Instant::now() + Duration::from_secs(60))
-            .unwrap();
+        let reverse =
+            transport_home_costs(&board, 0, 1, Instant::now() + Duration::from_secs(60)).unwrap();
         assert_eq!(reverse, forward_transport_home_costs(&board, 0, 1));
         assert_eq!(reverse[0], usize::MAX);
         assert_eq!(reverse[5], 1);
@@ -3764,8 +3874,8 @@ mod tests {
         blocked.walls[3] = false;
         put_colors(&mut blocked, 6, &[2; MAX_HEIGHT]);
         assert_eq!(
-            transport_home_costs(&blocked, 0, 1, Instant::now() + Duration::from_secs(60))
-                .unwrap()[5],
+            transport_home_costs(&blocked, 0, 1, Instant::now() + Duration::from_secs(60)).unwrap()
+                [5],
             usize::MAX
         );
     }
