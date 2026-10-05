@@ -3087,13 +3087,34 @@ impl ExistingMixedStats {
     }
 }
 
+// Restart the whole search with other target sampling seeds while time
+// remains, and output the shortest answer. The first run is the original one.
+const RESTART_MARGIN: Duration = Duration::from_millis(50);
+
 fn main() {
     input! {
         n: usize,
         k: usize,
         rows: [Bytes; n],
     }
+    let started = Instant::now();
+    let deadline = started + SEARCH_DEADLINE;
+    let mut best = solve(n, k, &rows, TARGET_SAMPLE_SEED, deadline);
+    let mut runs = 1;
+    let mut seed = TARGET_SAMPLE_SEED;
+    while Instant::now() + RESTART_MARGIN < deadline {
+        seed = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(1);
+        let output = solve(n, k, &rows, seed, deadline);
+        runs += 1;
+        if output.lines().count() < best.lines().count() {
+            best = output;
+        }
+    }
+    eprintln!("restarts runs={runs} best={}", best.lines().count());
+    print!("{best}");
+}
 
+fn solve(n: usize, k: usize, rows: &[Vec<u8>], sample_seed: u64, deadline: Instant) -> String {
     let mut board = Board {
         n,
         walls: vec![false; n * n],
@@ -3126,9 +3147,7 @@ fn main() {
         .map(|&nest| distances_from(&board, nest))
         .collect();
 
-    let started = Instant::now();
-    let deadline = started + SEARCH_DEADLINE;
-    let mut target_rng = TargetRng::new(TARGET_SAMPLE_SEED);
+    let mut target_rng = TargetRng::new(sample_seed);
     let mut saved = legacy_rollout(&board, &distances, MAX_OPERATIONS, None, None)
         .expect("Legacy solver must produce a complete baseline");
     let mut actions = Vec::new();
@@ -3665,7 +3684,7 @@ fn main() {
         target_executed[2], target_executed[3], target_executed[4],
     );
     eprintln!(
-        "target_sampling seed={TARGET_SAMPLE_SEED} extracted_rank={:?} completed_rank={:?} saved_rank={:?} executed_rank={:?} extracted_color={:?} completed_color={:?} saved_color={:?} executed_color={:?} extracted_slot={:?} completed_slot={:?} saved_slot={:?} executed_slot={:?}",
+        "target_sampling seed={sample_seed} extracted_rank={:?} completed_rank={:?} saved_rank={:?} executed_rank={:?} extracted_color={:?} completed_color={:?} saved_color={:?} executed_color={:?} extracted_slot={:?} completed_slot={:?} saved_slot={:?} executed_slot={:?}",
         target_extracted_counts.rank,
         target_completed_counts.rank,
         target_saved_counts.rank,
@@ -3707,7 +3726,7 @@ fn main() {
             action.length,
         );
     }
-    print!("{output}");
+    output
 }
 
 #[cfg(test)]
