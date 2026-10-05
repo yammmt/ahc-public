@@ -28,7 +28,7 @@ const MAX_PICKUP_APPROACH_STEPS: usize = 12;
 const MAX_PICKUP_FINISH_STEPS: usize = 24;
 const MAX_PICKUP_STATES: usize = 4000;
 const MAX_PICKUP_ROLLOUTS: usize = 8;
-const SEARCH_DEADLINE: Duration = Duration::from_millis(1650);
+const SEARCH_DEADLINE: Duration = Duration::from_millis(1950);
 
 #[derive(Clone, Copy, Debug, Default)]
 struct Stack {
