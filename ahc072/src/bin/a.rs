@@ -3714,7 +3714,7 @@ fn solve(n: usize, k: usize, rows: &[Vec<u8>], sample_seed: u64, deadline: Insta
                     }
                 }
             }
-            if pickup_attempts < MAX_PICKUP_REPLANS
+            if false && pickup_attempts < MAX_PICKUP_REPLANS
                 && replans % PICKUP_REPLAN_INTERVAL == 1
                 && Instant::now() < deadline
             {
