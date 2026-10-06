@@ -3669,7 +3669,7 @@ fn solve(n: usize, k: usize, rows: &[Vec<u8>], sample_seed: u64, deadline: Insta
                     accepted += 1;
                 }
             }
-            if mixed_attempts < MAX_MIXED_REPLANS
+            if false && mixed_attempts < MAX_MIXED_REPLANS
                 && replans % MIXED_REPLAN_INTERVAL == 1
                 && Instant::now() < deadline
             {
