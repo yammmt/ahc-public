@@ -1192,11 +1192,25 @@ fn bus_move(board: &Board, cell: usize, distances: &[Vec<usize>]) -> Option<Acti
         return None;
     }
     let colors = &stack.colors[..stack.len()];
+    let mut fallback = None;
     for direction in 0..DIRECTIONS.len() {
         let Some(to) = board.adjacent(cell, direction) else {
             continue;
         };
         if board.stacks[to].len() > 0 {
+            if fallback.is_none()
+                && board.stacks[to].len() + stack.len() <= MAX_HEIGHT
+                && colors.iter().all(|&color| {
+                    distances[usize::from(color)][to] < distances[usize::from(color)][cell]
+                })
+            {
+                fallback = Some(Action {
+                    from: cell,
+                    k: 0,
+                    direction,
+                    length: 1,
+                });
+            }
             continue;
         }
         if colors
@@ -1211,7 +1225,7 @@ fn bus_move(board: &Board, cell: usize, distances: &[Vec<usize>]) -> Option<Acti
             });
         }
     }
-    None
+    fallback
 }
 
 fn legacy_unit(
