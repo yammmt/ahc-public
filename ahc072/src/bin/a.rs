@@ -1226,6 +1226,72 @@ fn bus_priority(_board: &Board, _to: usize, landing: usize) -> usize {
     landing
 }
 
+// Join a stack whose slimes head the same way, forming a whole-stack bus,
+// unless the ordinary move already collects or returns home.
+fn bus_join_move(
+    board: &Board,
+    cell: usize,
+    color: usize,
+    distances: &[Vec<usize>],
+) -> Option<Action> {
+    let stack = &board.stacks[cell];
+    let moving = stack.top_run_len();
+    if moving != stack.len() {
+        return None;
+    }
+    let own = &distances[color];
+    let (_, ordinary_to) = choose_group_move(board, cell, color, own)?;
+    if board.stacks[ordinary_to].last() == Some(color as u8)
+        || board.nests[ordinary_to] == Some(color as u8)
+    {
+        return None;
+    }
+    let mut best: Option<((usize, usize), Action)> = None;
+    for direction in 0..DIRECTIONS.len() {
+        let mut to = cell;
+        for length in 1..=1 {
+            let Some(next) = board.adjacent(to, direction) else {
+                break;
+            };
+            to = next;
+            let landing = &board.stacks[to];
+            if landing.len() == 0
+                || landing.len() + moving > MAX_HEIGHT
+                || own[to] >= own[cell]
+                || landing.last() == Some(color as u8)
+                || board.nests[to].is_some()
+            {
+                continue;
+            }
+            // After landing, some neighbor must bring every slime closer.
+            let together = (0..DIRECTIONS.len()).any(|onward| {
+                board.adjacent(to, onward).is_some_and(|after| {
+                    own[after] < own[to]
+                        && landing.colors[..landing.len()].iter().all(|&other| {
+                            distances[usize::from(other)][after] < distances[usize::from(other)][to]
+                        })
+                })
+            });
+            if !together {
+                continue;
+            }
+            let priority = (landing.len(), length);
+            if best.is_none_or(|(current, _)| priority > current) {
+                best = Some((
+                    priority,
+                    Action {
+                        from: cell,
+                        k: 0,
+                        direction,
+                        length,
+                    },
+                ));
+            }
+        }
+    }
+    best.map(|(_, action)| action)
+}
+
 fn legacy_unit(
     board: &Board,
     cell: usize,
@@ -1239,6 +1305,10 @@ fn legacy_unit(
     }
     if let Some(pair) = choose_pair(board, cell, color, distances) {
         Some(pair)
+    } else if USE_BUS.load(std::sync::atomic::Ordering::Relaxed)
+        && let Some(action) = bus_join_move(board, cell, color, distances)
+    {
+        Some(vec![action])
     } else if let Some(relay) = choose_relay(board, cell, color, &distances[color]) {
         Some(relay.actions.to_vec())
     } else {
