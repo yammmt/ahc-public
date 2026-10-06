@@ -970,6 +970,18 @@ fn transport_cost(
     moving: usize,
     removed: &[usize],
 ) -> Option<usize> {
+    transport_cost_within(board, start, color, moving, removed, usize::MAX)
+}
+
+// Same as transport_cost, but gives up beyond `max_cost`.
+fn transport_cost_within(
+    board: &Board,
+    start: usize,
+    color: usize,
+    moving: usize,
+    removed: &[usize],
+    max_cost: usize,
+) -> Option<usize> {
     let height = |cell| {
         if removed.contains(&cell) {
             0
@@ -1009,6 +1021,9 @@ fn transport_cost(
                 return Some(costs[cell] as usize);
             }
             let next_cost = costs[cell] + 1;
+            if usize::from(next_cost) > max_cost {
+                continue;
+            }
             for direction in 0..DIRECTIONS.len() {
                 let mut to = cell;
                 for _ in 0..=height(cell) {
@@ -1120,11 +1135,22 @@ fn choose_pair(
         let Some(partner_cost) = transport_cost(board, partner, color, 1, &[partner]) else {
             continue;
         };
-        let Some(pair_cost) = transport_cost(board, partner, color, 2, &[cell, partner]) else {
+        let separate_cost = source_cost + partner_cost;
+        let fixed_cost = entry(partner).1 + support_loss;
+        if fixed_cost >= separate_cost {
+            continue;
+        }
+        let Some(pair_cost) = transport_cost_within(
+            board,
+            partner,
+            color,
+            2,
+            &[cell, partner],
+            separate_cost - fixed_cost - 1,
+        ) else {
             continue;
         };
-        let separate_cost = source_cost + partner_cost;
-        let merged_cost = entry(partner).1 + pair_cost + support_loss;
+        let merged_cost = fixed_cost + pair_cost;
         if merged_cost >= separate_cost {
             continue;
         }
