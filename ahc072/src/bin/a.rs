@@ -805,6 +805,7 @@ fn alternative_moves(board: &Board, cell: usize, distances: &[usize]) -> Vec<Act
 }
 
 const MAX_INCOMING_MOVES: usize = 6;
+const RANDOM_STACK_CANDIDATES: usize = 4;
 
 // Moves of other stacks' top runs onto the target cell, preferring groups
 // whose own nest distance does not grow by riding along.
@@ -3572,6 +3573,7 @@ fn solve(n: usize, k: usize, rows: &[Vec<u8>], sample_seed: u64, deadline: Insta
         .collect();
 
     let mut target_rng = TargetRng::new(sample_seed);
+    let mut move_rng = TargetRng::new(sample_seed ^ 0x3C6E_F372_FE94_F82B);
     // Restarts spend less time on the existing mixed search.
     let existing_mixed_case_time = if sample_seed == TARGET_SAMPLE_SEED {
         EXISTING_MIXED_CASE_TIME
@@ -3887,6 +3889,19 @@ fn solve(n: usize, k: usize, rows: &[Vec<u8>], sample_seed: u64, deadline: Insta
             let first_unit = saved.front().cloned();
             let mut alternatives = alternative_moves(&board, cell, &distances[color]);
             alternatives.extend(incoming_moves(&board, cell, &distances));
+            // A few moves of random other stacks.
+            let occupied: Vec<usize> = (0..board.stacks.len())
+                .filter(|&other| other != cell && board.stacks[other].len() > 0)
+                .collect();
+            for _ in 0..RANDOM_STACK_CANDIDATES.min(occupied.len()) {
+                let other = occupied[move_rng.index(occupied.len())];
+                let other_color = usize::from(board.stacks[other].last().unwrap());
+                alternatives.extend(
+                    alternative_moves(&board, other, &distances[other_color])
+                        .into_iter()
+                        .take(1),
+                );
+            }
             for action in alternatives {
                 if Instant::now() >= deadline {
                     break;
