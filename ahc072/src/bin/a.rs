@@ -3569,11 +3569,11 @@ fn main() {
     if std::env::var("LEGACY_ONLY").is_ok() {
         // Experiment mode: report only the plain policy length.
         let expired = started;
-        let plan = solve(n, k, &rows, TARGET_SAMPLE_SEED, expired, &[]);
+        let plan = solve(n, k, &rows, TARGET_SAMPLE_SEED, expired, &[], false);
         println!("{}", plan.len());
         return;
     }
-    let mut best = solve(n, k, &rows, TARGET_SAMPLE_SEED, deadline, &[]);
+    let mut best = solve(n, k, &rows, TARGET_SAMPLE_SEED, deadline, &[], false);
     let mut runs = 1;
     let mut seed = TARGET_SAMPLE_SEED;
     let mut rng = TargetRng::new(TARGET_SAMPLE_SEED ^ 0x5DEE_CE66);
@@ -3585,7 +3585,7 @@ fn main() {
         } else {
             0
         };
-        let output = solve(n, k, &rows, seed, deadline, &best[..keep]);
+        let output = solve(n, k, &rows, seed, deadline, &best[..keep], keep > 0 || runs % 2 == 0);
         runs += 1;
         if output.len() < best.len() {
             best = output;
@@ -3614,6 +3614,7 @@ fn solve(
     sample_seed: u64,
     deadline: Instant,
     prefix: &[Action],
+    kick: bool,
 ) -> Vec<Action> {
     let mut board = Board {
         n,
@@ -3653,6 +3654,19 @@ fn solve(
     for &action in prefix {
         board.apply(action);
         actions.push(action);
+    }
+    if kick {
+        // Perturb: force a random alternative move of the current target.
+        let mut kick_rng = TargetRng::new(sample_seed ^ 0x6A09_E667_F3BC_C908);
+        if let Some((cell, color)) = choose_target(&board, &distances) {
+            let mut moves = alternative_moves(&board, cell, &distances[color]);
+            moves.extend(incoming_moves(&board, cell, &distances));
+            if !moves.is_empty() {
+                let action = moves[kick_rng.index(moves.len())];
+                board.apply(action);
+                actions.push(action);
+            }
+        }
     }
     let mut target_rng = TargetRng::new(sample_seed);
     let mut move_rng = TargetRng::new(sample_seed ^ 0x3C6E_F372_FE94_F82B);
