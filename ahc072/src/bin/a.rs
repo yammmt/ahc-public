@@ -805,6 +805,9 @@ fn alternative_moves(board: &Board, cell: usize, distances: &[usize]) -> Vec<Act
 }
 
 const MAX_INCOMING_MOVES: usize = 6;
+// Whole mixed stacks travel together only on sparse boards.
+static USE_BUS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+const BUS_MAX_SLIMES: usize = 80;
 const RANDOM_STACK_CANDIDATES: usize = 4;
 
 // Moves of other stacks' top runs onto the target cell, preferring groups
@@ -1182,12 +1185,46 @@ fn choose_pair(
 
 // A legacy decision is one unit: a short pair, a relay, or one ordinary move.
 // Budget checks belong to the caller and never change this choice.
+// Move a whole mixed stack one cell when that brings every color closer.
+fn bus_move(board: &Board, cell: usize, distances: &[Vec<usize>]) -> Option<Action> {
+    let stack = &board.stacks[cell];
+    if stack.top_run_len() == stack.len() {
+        return None;
+    }
+    let colors = &stack.colors[..stack.len()];
+    for direction in 0..DIRECTIONS.len() {
+        let Some(to) = board.adjacent(cell, direction) else {
+            continue;
+        };
+        if board.stacks[to].len() > 0 {
+            continue;
+        }
+        if colors
+            .iter()
+            .all(|&color| distances[usize::from(color)][to] < distances[usize::from(color)][cell])
+        {
+            return Some(Action {
+                from: cell,
+                k: 0,
+                direction,
+                length: 1,
+            });
+        }
+    }
+    None
+}
+
 fn legacy_unit(
     board: &Board,
     cell: usize,
     color: usize,
     distances: &[Vec<usize>],
 ) -> Option<Vec<Action>> {
+    if USE_BUS.load(std::sync::atomic::Ordering::Relaxed)
+        && let Some(action) = bus_move(board, cell, distances)
+    {
+        return Some(vec![action]);
+    }
     if let Some(pair) = choose_pair(board, cell, color, distances) {
         Some(pair)
     } else if let Some(relay) = choose_relay(board, cell, color, &distances[color]) {
@@ -3511,6 +3548,12 @@ fn main() {
     }
     let started = Instant::now();
     let deadline = started + SEARCH_DEADLINE;
+    let slimes = rows
+        .iter()
+        .flatten()
+        .filter(|symbol| symbol.is_ascii_lowercase())
+        .count();
+    USE_BUS.store(slimes < BUS_MAX_SLIMES, std::sync::atomic::Ordering::Relaxed);
     if std::env::var("LEGACY_ONLY").is_ok() {
         // Experiment mode: report only the plain policy length.
         let expired = started;
