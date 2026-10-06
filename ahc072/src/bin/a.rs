@@ -804,6 +804,53 @@ fn alternative_moves(board: &Board, cell: usize, distances: &[usize]) -> Vec<Act
     result
 }
 
+const MAX_INCOMING_MOVES: usize = 6;
+
+// Moves of other stacks' top runs onto the target cell, preferring groups
+// whose own nest distance does not grow by riding along.
+fn incoming_moves(board: &Board, target: usize, distances: &[Vec<usize>]) -> Vec<Action> {
+    let target_height = board.stacks[target].len();
+    let mut moves = Vec::new();
+    for direction in 0..DIRECTIONS.len() {
+        let mut from = target;
+        for length in 1..MAX_HEIGHT {
+            let Some(next) = board.adjacent(from, direction) else {
+                break;
+            };
+            from = next;
+            let stack = &board.stacks[from];
+            let Some(color) = stack.last() else {
+                continue;
+            };
+            let distance = &distances[usize::from(color)];
+            let run = stack.top_run_len();
+            for moving in 1..=run {
+                let k = stack.len() - moving;
+                if length > k + 1 || target_height + moving > MAX_HEIGHT {
+                    continue;
+                }
+                let gain = distance[from] as isize - distance[target] as isize;
+                moves.push((
+                    (gain, moving),
+                    Action {
+                        from,
+                        k,
+                        direction: direction ^ 1,
+                        length,
+                    },
+                ));
+            }
+        }
+    }
+    moves.sort_by(|a, b| b.0.cmp(&a.0));
+    moves
+        .into_iter()
+        .filter(|((gain, _), _)| *gain >= 0)
+        .take(MAX_INCOMING_MOVES)
+        .map(|(_, action)| action)
+        .collect()
+}
+
 fn choose_group_move(
     board: &Board,
     cell: usize,
@@ -3802,7 +3849,9 @@ fn solve(n: usize, k: usize, rows: &[Vec<u8>], sample_seed: u64, deadline: Insta
             let remaining = MAX_OPERATIONS - actions.len();
             // Plain pilot step: other single moves of the target's top run.
             let first_unit = saved.front().cloned();
-            for action in alternative_moves(&board, cell, &distances[color]) {
+            let mut alternatives = alternative_moves(&board, cell, &distances[color]);
+            alternatives.extend(incoming_moves(&board, cell, &distances));
+            for action in alternatives {
                 if Instant::now() >= deadline {
                     break;
                 }
