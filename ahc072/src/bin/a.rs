@@ -2307,6 +2307,7 @@ const MAX_EXISTING_MIXED_HOME_TABLES: usize = 8;
 const MAX_EXISTING_MIXED_CALLS: usize = 64;
 const EXISTING_MIXED_CALL_TIME: Duration = Duration::from_millis(10);
 const EXISTING_MIXED_CASE_TIME: Duration = Duration::from_millis(60);
+const EXISTING_MIXED_RESTART_TIME: Duration = Duration::from_millis(15);
 
 fn existing_mixed_colors(stack: &Stack) -> Option<[u8; 2]> {
     let mut present = [false; 12];
@@ -3542,6 +3543,12 @@ fn solve(n: usize, k: usize, rows: &[Vec<u8>], sample_seed: u64, deadline: Insta
         .collect();
 
     let mut target_rng = TargetRng::new(sample_seed);
+    // Restarts spend less time on the existing mixed search.
+    let existing_mixed_case_time = if sample_seed == TARGET_SAMPLE_SEED {
+        EXISTING_MIXED_CASE_TIME
+    } else {
+        EXISTING_MIXED_RESTART_TIME
+    };
     let mut saved = legacy_rollout(&board, &distances, MAX_OPERATIONS, None, None)
         .expect("Legacy solver must produce a complete baseline");
     let mut actions = Vec::new();
@@ -3888,7 +3895,7 @@ fn solve(n: usize, k: usize, rows: &[Vec<u8>], sample_seed: u64, deadline: Insta
             } else if let Some(colors) = existing_mixed_colors(stack) {
                 if existing_mixed_stats.attempts >= MAX_EXISTING_MIXED_CALLS {
                     existing_mixed_stats.call_skips += 1;
-                } else if existing_mixed_stats.elapsed >= EXISTING_MIXED_CASE_TIME {
+                } else if existing_mixed_stats.elapsed >= existing_mixed_case_time {
                     existing_mixed_stats.case_time_skips += 1;
                 } else if Instant::now() >= deadline {
                     existing_mixed_stats.global_time_skips += 1;
@@ -3896,7 +3903,7 @@ fn solve(n: usize, k: usize, rows: &[Vec<u8>], sample_seed: u64, deadline: Insta
                     let call_started = Instant::now();
                     let call_end = call_started + EXISTING_MIXED_CALL_TIME;
                     let case_end =
-                        call_started + (EXISTING_MIXED_CASE_TIME - existing_mixed_stats.elapsed);
+                        call_started + (existing_mixed_case_time - existing_mixed_stats.elapsed);
                     let local_deadline = deadline.min(call_end).min(case_end);
                     existing_mixed_stats.attempts += 1;
                     let found =
