@@ -732,7 +732,7 @@ fn choose_move(
     best.map(|(_, action, to)| (action, to))
 }
 
-const MAX_ALTERNATIVE_MOVES: usize = 4;
+const MAX_ALTERNATIVE_MOVES: usize = 16;
 
 // Single moves of the top run (or part of it) that approach the nest,
 // best distance gain first.
