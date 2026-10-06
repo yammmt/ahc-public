@@ -28,6 +28,16 @@ const MAX_PICKUP_APPROACH_STEPS: usize = 12;
 const MAX_PICKUP_FINISH_STEPS: usize = 24;
 const MAX_PICKUP_STATES: usize = 4000;
 const MAX_PICKUP_ROLLOUTS: usize = 8;
+const LOG_EVENTS: bool = false;
+
+macro_rules! log_event {
+    ($dst:expr, $($arg:tt)*) => {
+        if LOG_EVENTS {
+            let _ = writeln!($dst, $($arg)*);
+        }
+    };
+}
+
 const SEARCH_DEADLINE: Duration = Duration::from_millis(1950);
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -99,6 +109,102 @@ thread_local! {
         stacks: Vec::new(),
     });
     static BFS_BUFFER: std::cell::RefCell<BfsBuffer> = std::cell::RefCell::new(BfsBuffer::default());
+}
+
+fn cell_hash(cell: usize, stack: &Stack) -> u64 {
+    if stack.len == 0 {
+        return 0;
+    }
+    let mut code = u64::from(stack.len);
+    for &color in &stack.colors[..stack.len()] {
+        code = code * 13 + u64::from(color) + 1;
+    }
+    let mut value = code ^ ((cell as u64) << 40) ^ 0x9E37_79B9_7F4A_7C15;
+    value = (value ^ (value >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    value = (value ^ (value >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    value ^ (value >> 31)
+}
+
+fn board_hash(board: &Board) -> u64 {
+    board
+        .stacks
+        .iter()
+        .enumerate()
+        .fold(0, |hash, (cell, stack)| hash ^ cell_hash(cell, stack))
+}
+
+// Apply an action and keep the board hash in sync.
+fn apply_hashed(board: &mut Board, hash: &mut u64, action: Action) -> usize {
+    let mut to = action.from;
+    for _ in 0..action.length {
+        to = board.adjacent(to, action.direction).unwrap();
+    }
+    *hash ^= cell_hash(action.from, &board.stacks[action.from]) ^ cell_hash(to, &board.stacks[to]);
+    board.apply(action);
+    *hash ^= cell_hash(action.from, &board.stacks[action.from]) ^ cell_hash(to, &board.stacks[to]);
+    to
+}
+
+// Keys are already well-mixed board hashes.
+#[derive(Default)]
+struct IdentityHasher(u64);
+
+impl std::hash::Hasher for IdentityHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, _: &[u8]) {
+        unreachable!("IdentityHasher only hashes u64 keys");
+    }
+
+    fn write_u64(&mut self, value: u64) {
+        self.0 = value;
+    }
+}
+
+// States visited by the incumbent plan. A rollout reaching one of them can
+// finish with the incumbent's remaining units.
+struct Reference {
+    // Board hash at a unit boundary -> index of the next unit.
+    index: HashMap<u64, usize, std::hash::BuildHasherDefault<IdentityHasher>>,
+    units: Vec<Vec<Action>>,
+    // Operations remaining from each unit boundary.
+    remaining: Vec<usize>,
+}
+
+impl Reference {
+    fn build(board: &Board, plan: &Plan) -> Self {
+        let mut board = board.clone();
+        let mut hash = board_hash(&board);
+        let units: Vec<Vec<Action>> = plan.iter().cloned().collect();
+        let mut remaining = vec![0; units.len() + 1];
+        for j in (0..units.len()).rev() {
+            remaining[j] = remaining[j + 1] + units[j].len();
+        }
+        let mut index = HashMap::with_capacity_and_hasher(units.len() + 1, Default::default());
+        for (j, unit) in units.iter().enumerate() {
+            index.insert(hash, j);
+            for &action in unit {
+                apply_hashed(&mut board, &mut hash, action);
+            }
+        }
+        index.insert(hash, units.len());
+        Self {
+            index,
+            units,
+            remaining,
+        }
+    }
+}
+
+thread_local! {
+    static REFERENCE: std::cell::RefCell<Option<Reference>> = const { std::cell::RefCell::new(None) };
+}
+
+fn set_reference(board: &Board, plan: &Plan) {
+    let reference = Reference::build(board, plan);
+    REFERENCE.with(|cell| *cell.borrow_mut() = Some(reference));
 }
 
 #[derive(Clone)]
@@ -754,7 +860,12 @@ fn transport_cost(
     };
     BFS_BUFFER.with(|buffer| {
         let mut buffer = buffer.borrow_mut();
-        let BfsBuffer { costs, seen, stamp, queue } = &mut *buffer;
+        let BfsBuffer {
+            costs,
+            seen,
+            stamp,
+            queue,
+        } = &mut *buffer;
         if seen.len() != board.stacks.len() {
             seen.clear();
             seen.resize(board.stacks.len(), 0);
@@ -898,7 +1009,10 @@ fn choose_pair(
         if merged_cost >= separate_cost {
             continue;
         }
-        let priority = (separate_cost - merged_cost, MAX_PAIR_STEPS - entry(partner).1);
+        let priority = (
+            separate_cost - merged_cost,
+            MAX_PAIR_STEPS - entry(partner).1,
+        );
         if best
             .as_ref()
             .is_none_or(|&(best_priority, _)| priority > best_priority)
@@ -1007,7 +1121,32 @@ fn legacy_rollout_owned(
         .map(|cell| target_key(&board, distances, cell))
         .collect();
     let mut steps = 0usize;
+    let use_reference = REFERENCE.with(|cell| cell.borrow().is_some());
+    let mut hash = if use_reference { board_hash(&board) } else { 0 };
     loop {
+        if use_reference {
+            let hit = REFERENCE.with(|cell| {
+                let reference = cell.borrow();
+                let reference = reference.as_ref().unwrap();
+                let &j = reference.index.get(&hash)?;
+                let total = count + reference.remaining[j];
+                if incumbent_bound.is_some_and(|bound| total >= bound) {
+                    return Some(Err(RolloutStop::Incumbent));
+                }
+                if total > limit {
+                    return Some(Err(RolloutStop::OperationLimit));
+                }
+                Some(Ok(reference.units[j..].to_vec()))
+            });
+            match hit {
+                Some(Ok(tail)) => {
+                    plan.extend(tail);
+                    return Ok(plan);
+                }
+                Some(Err(stop)) => return Err(stop),
+                None => {}
+            }
+        }
         let key = keys.iter().copied().max().unwrap_or(0);
         if key == 0 {
             break;
@@ -1030,7 +1169,11 @@ fn legacy_rollout_owned(
             return Err(RolloutStop::OperationLimit);
         }
         for &action in &unit {
-            let to = board.apply(action);
+            let to = if use_reference {
+                apply_hashed(&mut board, &mut hash, action)
+            } else {
+                board.apply(action)
+            };
             keys[action.from] = target_key(&board, distances, action.from);
             keys[to] = target_key(&board, distances, to);
         }
@@ -2044,7 +2187,7 @@ const MAX_EXISTING_MIXED_ROLLOUTS: usize = 8;
 const MAX_EXISTING_MIXED_HOME_TABLES: usize = 8;
 const MAX_EXISTING_MIXED_CALLS: usize = 64;
 const EXISTING_MIXED_CALL_TIME: Duration = Duration::from_millis(10);
-const EXISTING_MIXED_CASE_TIME: Duration = Duration::from_millis(200);
+const EXISTING_MIXED_CASE_TIME: Duration = Duration::from_millis(60);
 
 fn existing_mixed_colors(stack: &Stack) -> Option<[u8; 2]> {
     let mut present = [false; 12];
@@ -3321,6 +3464,7 @@ fn solve(n: usize, k: usize, rows: &[Vec<u8>], sample_seed: u64, deadline: Insta
     let mut mixed_deadline_breaks = 0;
     let mut pickup_deadline_breaks = 0;
     while !saved.is_empty() {
+        set_reference(&board, &saved);
         let mut selected_simple_pair = None;
         let mut selected_mixed_actions = None;
         let mut selected_pickup_actions = None;
@@ -3366,6 +3510,7 @@ fn solve(n: usize, k: usize, rows: &[Vec<u8>], sample_seed: u64, deadline: Insta
                 rollouts += 1;
                 if plan_length(&fresh) < plan_length(&saved) {
                     saved = fresh;
+                    set_reference(&board, &saved);
                 }
             }
             let paths = merge_candidates(&board, cell, color);
@@ -3390,6 +3535,7 @@ fn solve(n: usize, k: usize, rows: &[Vec<u8>], sample_seed: u64, deadline: Insta
                 if path.len() + plan_length(&continuation) < plan_length(&saved) {
                     continuation.push_front(path);
                     saved = continuation;
+                    set_reference(&board, &saved);
                     accepted += 1;
                 }
             }
@@ -3432,6 +3578,7 @@ fn solve(n: usize, k: usize, rows: &[Vec<u8>], sample_seed: u64, deadline: Insta
                             selected_mixed_actions = Some(prefix.len());
                             continuation.push_front(prefix);
                             saved = continuation;
+                            set_reference(&board, &saved);
                             mixed_accepted += 1;
                         }
                     }
@@ -3476,6 +3623,7 @@ fn solve(n: usize, k: usize, rows: &[Vec<u8>], sample_seed: u64, deadline: Insta
                         selected_pickup_actions = Some(prefix.len());
                         continuation.push_front(prefix);
                         saved = continuation;
+                        set_reference(&board, &saved);
                         pickup_saved += 1;
                     }
                 }
@@ -3544,7 +3692,8 @@ fn solve(n: usize, k: usize, rows: &[Vec<u8>], sample_seed: u64, deadline: Insta
                     if candidate_length < saved_length {
                         selected_mixed_actions = None;
                         selected_pickup_actions = None;
-                        selected_target_saving = before_target_length - candidate_length;
+                        selected_target_saving =
+                            before_target_length.saturating_sub(candidate_length);
                         if let Some(plan) = replacement {
                             selected_target_candidate = None;
                             selected_springboard = Some(plan);
@@ -3553,11 +3702,12 @@ fn solve(n: usize, k: usize, rows: &[Vec<u8>], sample_seed: u64, deadline: Insta
                             selected_target_candidate = Some((candidate, color));
                             selected_springboard = None;
                             target_saved += 1;
-                            target_savings += saved_length - candidate_length;
+                            target_savings += saved_length.saturating_sub(candidate_length);
                             target_saved_counts.record(candidate, color);
                         }
                         continuation.push_front(unit);
                         saved = continuation;
+                        set_reference(&board, &saved);
                     }
                 }
             }
@@ -3584,7 +3734,7 @@ fn solve(n: usize, k: usize, rows: &[Vec<u8>], sample_seed: u64, deadline: Insta
                     let found =
                         existing_mixed_search(&board, source, colors, &distances, local_deadline);
                     existing_mixed_stats.record_search(&found);
-                    let _ = writeln!(
+                    log_event!(
                         existing_mixed_stats.events,
                         "existing_mixed_search step={} source={} colors={:?} stack={:?} pickups={:?} registered={} expanded={} terminals={:?} generated={} timed_out={} state_limit={} depth_limit={} S={}",
                         actions.len(),
@@ -3601,7 +3751,7 @@ fn solve(n: usize, k: usize, rows: &[Vec<u8>], sample_seed: u64, deadline: Insta
                         found.depth_limit,
                         plan_length(&saved)
                     );
-                    let _ = writeln!(
+                    log_event!(
                         existing_mixed_stats.events,
                         "existing_sender_search step={} requests={} bfs={} expanded={} found={} path_steps={} invalid={} timed_out={} depth_hits={} registered={} selected_merges={} time_us={} updates={} stale={} settled={} queue_peak={}",
                         actions.len(),
@@ -3622,7 +3772,7 @@ fn solve(n: usize, k: usize, rows: &[Vec<u8>], sample_seed: u64, deadline: Insta
                         found.queue_peak
                     );
                     for terminal in &found.terminal_info {
-                        let _ = writeln!(
+                        log_event!(
                             existing_mixed_stats.events,
                             "existing_mixed_terminal step={} p={} collected={} end={} bits={} len={} returned={:?} split={} sender_merges={}",
                             actions.len(),
@@ -3659,7 +3809,7 @@ fn solve(n: usize, k: usize, rows: &[Vec<u8>], sample_seed: u64, deadline: Insta
                             Err(RolloutStop::OperationLimit) => "operation_limit",
                             Err(RolloutStop::NoMove) => "no_move",
                         };
-                        let _ = writeln!(
+                        log_event!(
                             existing_mixed_stats.events,
                             "existing_mixed_candidate step={} index={} S={} p={} status={} continuation={:?} collected={} end={} end_colors={:?} returned={:?} split={} sender_merges={}",
                             actions.len(),
@@ -3681,13 +3831,13 @@ fn solve(n: usize, k: usize, rows: &[Vec<u8>], sample_seed: u64, deadline: Insta
                                 existing_mixed_stats.saved += 1;
                                 existing_mixed_stats.sender_saved += candidate.sender_merges;
 
-                                existing_mixed_stats.savings += before - length;
-                                let _ = writeln!(
+                                existing_mixed_stats.savings += before.saturating_sub(length);
+                                log_event!(
                                     existing_mixed_stats.events,
                                     "existing_mixed_save step={} index={} saving={} prefix={:?} pickups={:?} collected={} returned={:?} split={}",
                                     actions.len(),
                                     index,
-                                    before - length,
+                                    before.saturating_sub(length),
                                     candidate.prefix,
                                     found.pickups,
                                     candidate.collected,
@@ -3697,13 +3847,14 @@ fn solve(n: usize, k: usize, rows: &[Vec<u8>], sample_seed: u64, deadline: Insta
                                 executed_candidate = Some((index, candidate.sender_merges));
                                 continuation.push_front(candidate.prefix);
                                 saved = continuation;
+                                set_reference(&board, &saved);
                             }
                         }
                     }
                     if let Some((index, sender_merges)) = executed_candidate {
                         existing_mixed_stats.executed += 1;
                         existing_mixed_stats.sender_executed += sender_merges;
-                        let _ = writeln!(
+                        log_event!(
                             existing_mixed_stats.events,
                             "existing_mixed_execute step={} index={}",
                             actions.len(),
@@ -3754,6 +3905,7 @@ fn solve(n: usize, k: usize, rows: &[Vec<u8>], sample_seed: u64, deadline: Insta
                     selected_simple_pair = Some(prefix.clone());
                     continuation.push_front(prefix);
                     saved = continuation;
+                    set_reference(&board, &saved);
                     simple_pair_saved += 1;
                 }
             }
@@ -3788,6 +3940,7 @@ fn solve(n: usize, k: usize, rows: &[Vec<u8>], sample_seed: u64, deadline: Insta
             actions.push(action);
         }
     }
+    REFERENCE.with(|cell| *cell.borrow_mut() = None);
     simple_pair_stats.log("simple_pair");
     eprintln!(
         "simple_pair generated={simple_pair_generated} evaluated={simple_pair_evaluated} saved={simple_pair_saved} executed={simple_pair_executed}"
