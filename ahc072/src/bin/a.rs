@@ -33,29 +33,31 @@ const SEARCH_DEADLINE: Duration = Duration::from_millis(1950);
 #[derive(Clone, Copy, Debug, Default)]
 struct Stack {
     colors: [u8; MAX_HEIGHT], // Bottom to top in colors[..len].
-    len: usize,
+    len: u8,
 }
 
 impl PartialEq for Stack {
     fn eq(&self, other: &Self) -> bool {
-        self.len == other.len && self.colors[..self.len] == other.colors[..other.len]
+        self.len == other.len && self.colors[..self.len()] == other.colors[..other.len()]
     }
 }
 
 impl Eq for Stack {}
 
 impl Stack {
+    #[inline]
     fn len(&self) -> usize {
-        self.len
+        usize::from(self.len)
     }
 
+    #[inline]
     fn last(&self) -> Option<u8> {
-        (self.len > 0).then(|| self.colors[self.len - 1])
+        (self.len > 0).then(|| self.colors[self.len() - 1])
     }
 
     fn push(&mut self, color: u8) {
-        assert!(self.len < MAX_HEIGHT);
-        self.colors[self.len] = color;
+        assert!(self.len() < MAX_HEIGHT);
+        self.colors[self.len()] = color;
         self.len += 1;
     }
 
@@ -64,31 +66,74 @@ impl Stack {
             return None;
         }
         self.len -= 1;
-        Some(self.colors[self.len])
+        Some(self.colors[self.len()])
     }
 
     fn top_run_len(&self) -> usize {
         let Some(color) = self.last() else {
             return 0;
         };
+        let len = self.len();
         let mut count = 0;
-        while count < self.len && self.colors[self.len - 1 - count] == color {
+        while count < len && self.colors[len - 1 - count] == color {
             count += 1;
         }
         count
     }
 }
 
+#[derive(Default)]
+struct BfsBuffer {
+    costs: Vec<u16>,
+    seen: Vec<u32>,
+    stamp: u32,
+    queue: Vec<u16>,
+}
+
+thread_local! {
+    static SCRATCH_BOARD: std::cell::RefCell<Board> = std::cell::RefCell::new(Board {
+        n: 0,
+        adj: Default::default(),
+        walls: Vec::new(),
+        nests: Vec::new(),
+        stacks: Vec::new(),
+    });
+    static BFS_BUFFER: std::cell::RefCell<BfsBuffer> = std::cell::RefCell::new(BfsBuffer::default());
+}
+
 #[derive(Clone)]
 struct Board {
     n: usize,
+    // Neighbor table built by build_adjacency; empty means compute on demand.
+    adj: std::rc::Rc<Vec<[u16; 4]>>,
     walls: Vec<bool>,
     nests: Vec<Option<u8>>,
     stacks: Vec<Stack>,
 }
 
 impl Board {
+    fn build_adjacency(&mut self) {
+        self.adj = std::rc::Rc::new(Vec::new());
+        let table = (0..self.n * self.n)
+            .map(|cell| {
+                let mut row = [u16::MAX; 4];
+                for (direction, slot) in row.iter_mut().enumerate() {
+                    if let Some(next) = self.adjacent(cell, direction) {
+                        *slot = next as u16;
+                    }
+                }
+                row
+            })
+            .collect();
+        self.adj = std::rc::Rc::new(table);
+    }
+
+    #[inline]
     fn adjacent(&self, cell: usize, direction: usize) -> Option<usize> {
+        if let Some(row) = self.adj.get(cell) {
+            let next = row[direction];
+            return (next != u16::MAX).then_some(usize::from(next));
+        }
         let (di, dj, _) = DIRECTIONS[direction];
         let i = (cell / self.n).checked_add_signed(di)?;
         let j = (cell % self.n).checked_add_signed(dj)?;
@@ -107,7 +152,7 @@ impl Board {
         }
     }
 
-    fn apply(&mut self, action: Action) {
+    fn apply(&mut self, action: Action) -> usize {
         let height = self.stacks[action.from].len();
         assert!(action.k < height);
         assert!((1..=action.k + 1).contains(&action.length));
@@ -123,12 +168,13 @@ impl Board {
         for (index, slot) in jumping.iter_mut().take(jumping_count).enumerate() {
             *slot = self.stacks[action.from].colors[height - 1 - index];
         }
-        self.stacks[action.from].len = action.k;
+        self.stacks[action.from].len = action.k as u8;
         for &color in jumping.iter().take(jumping_count) {
             self.stacks[to].push(color);
         }
         self.return_home(action.from);
         self.return_home(to);
+        to
     }
 }
 
@@ -293,6 +339,24 @@ fn adjacent_springboard_plan(
         }
     }
     best
+}
+
+// Packed choose_target priority: larger is chosen first, 0 means empty.
+// Ties prefer the smaller cell, as in choose_target.
+fn target_key(board: &Board, distances: &[Vec<usize>], cell: usize) -> u32 {
+    let stack = &board.stacks[cell];
+    let Some(color) = stack.last() else {
+        return 0;
+    };
+    let cleanup_priority = if stack.len() == MAX_HEIGHT {
+        2
+    } else if stack.top_run_len() != stack.len() {
+        1
+    } else {
+        0
+    };
+    let distance = distances[usize::from(color)][cell].min(0x3FFF) as u32;
+    (cleanup_priority << 24) | (distance << 10) | (1023 - cell as u32)
 }
 
 fn choose_target(board: &Board, distances: &[Vec<usize>]) -> Option<(usize, usize)> {
@@ -589,10 +653,18 @@ fn choose_relay(
     {
         return None;
     }
-    let mut after_first = board.clone();
-    after_first.apply(ordinary);
-    let (_, ordinary_end) = choose_group_move(&after_first, ordinary_to, color, distances)?;
-    if after_first.stacks[ordinary_end].last() == Some(color as u8) {
+    let (ordinary_end, ordinary_end_top) = SCRATCH_BOARD.with(|scratch| {
+        let mut after_first = scratch.borrow_mut();
+        after_first.n = board.n;
+        after_first.adj.clone_from(&board.adj);
+        after_first.walls.clone_from(&board.walls);
+        after_first.nests.clone_from(&board.nests);
+        after_first.stacks.clone_from(&board.stacks);
+        after_first.apply(ordinary);
+        let (_, ordinary_end) = choose_group_move(&after_first, ordinary_to, color, distances)?;
+        Some((ordinary_end, after_first.stacks[ordinary_end].last()))
+    })?;
+    if ordinary_end_top == Some(color as u8) {
         return None;
     }
     // Compare two operations plus remaining walking distance against the
@@ -680,28 +752,50 @@ fn transport_cost(
             board.stacks[cell].len()
         }
     };
-    let mut costs = vec![usize::MAX; board.stacks.len()];
-    let mut queue = VecDeque::from([start]);
-    costs[start] = 0;
-    while let Some(cell) = queue.pop_front() {
-        if board.nests[cell] == Some(color as u8) {
-            return Some(costs[cell]);
+    BFS_BUFFER.with(|buffer| {
+        let mut buffer = buffer.borrow_mut();
+        let BfsBuffer { costs, seen, stamp, queue } = &mut *buffer;
+        if seen.len() != board.stacks.len() {
+            seen.clear();
+            seen.resize(board.stacks.len(), 0);
+            costs.resize(board.stacks.len(), 0);
+            *stamp = 0;
         }
-        for direction in 0..DIRECTIONS.len() {
-            let mut to = cell;
-            for _ in 0..=height(cell) {
-                let Some(next) = board.adjacent(to, direction) else {
-                    break;
-                };
-                to = next;
-                if height(to) + moving <= MAX_HEIGHT && costs[to] == usize::MAX {
-                    costs[to] = costs[cell] + 1;
-                    queue.push_back(to);
+        *stamp = stamp.wrapping_add(1);
+        if *stamp == 0 {
+            seen.fill(0);
+            *stamp = 1;
+        }
+        let stamp = *stamp;
+        queue.clear();
+        queue.push(start as u16);
+        costs[start] = 0;
+        seen[start] = stamp;
+        let mut head = 0;
+        while head < queue.len() {
+            let cell = usize::from(queue[head]);
+            head += 1;
+            if board.nests[cell] == Some(color as u8) {
+                return Some(costs[cell] as usize);
+            }
+            let next_cost = costs[cell] + 1;
+            for direction in 0..DIRECTIONS.len() {
+                let mut to = cell;
+                for _ in 0..=height(cell) {
+                    let Some(next) = board.adjacent(to, direction) else {
+                        break;
+                    };
+                    to = next;
+                    if seen[to] != stamp && height(to) + moving <= MAX_HEIGHT {
+                        seen[to] = stamp;
+                        costs[to] = next_cost;
+                        queue.push(to as u16);
+                    }
                 }
             }
         }
-    }
-    None
+        None
+    })
 }
 
 fn lost_singleton_support(board: &Board, cell: usize, distances: &[Vec<usize>]) -> usize {
@@ -748,20 +842,24 @@ fn choose_pair(
     {
         return None;
     }
-    let mut steps = vec![usize::MAX; board.stacks.len()];
-    let mut previous = vec![None; board.stacks.len()];
-    let mut queue = VecDeque::from([cell]);
+    // Cells within MAX_PAIR_STEPS: (cell, steps, previous action, partner).
+    // Partners are recorded but never expanded.
+    let mut visited: Vec<(usize, usize, Option<Action>, bool)> = Vec::with_capacity(32);
     let mut candidates = Vec::new();
-    steps[cell] = 0;
-    while let Some(from) = queue.pop_front() {
-        if steps[from] == MAX_PAIR_STEPS {
+    visited.push((cell, 0, None, false));
+    let mut head = 0;
+    while head < visited.len() {
+        let (from, from_steps, _, partner) = visited[head];
+        head += 1;
+        if partner || from_steps == MAX_PAIR_STEPS {
             continue;
         }
         for direction in 0..DIRECTIONS.len() {
             let Some(to) = board.adjacent(from, direction) else {
                 continue;
             };
-            if steps[to] != usize::MAX || board.nests[to] == Some(color as u8) {
+            if visited.iter().any(|&(seen, ..)| seen == to) || board.nests[to] == Some(color as u8)
+            {
                 continue;
             }
             let target = &board.stacks[to];
@@ -769,23 +867,22 @@ fn choose_pair(
             if target.len() > 0 && !is_partner {
                 continue;
             }
-            steps[to] = steps[from] + 1;
-            previous[to] = Some(Action {
+            let action = Action {
                 from,
                 k: 0,
                 direction,
                 length: 1,
-            });
+            };
+            visited.push((to, from_steps + 1, Some(action), is_partner));
             if is_partner {
                 candidates.push(to);
-            } else {
-                queue.push_back(to);
             }
         }
     }
     if candidates.is_empty() {
         return None;
     }
+    let entry = |target: usize| *visited.iter().find(|&&(seen, ..)| seen == target).unwrap();
     let source_cost = transport_cost(board, cell, color, 1, &[cell])?;
     let support_loss = lost_singleton_support(board, cell, distances);
     let mut best = None;
@@ -797,11 +894,11 @@ fn choose_pair(
             continue;
         };
         let separate_cost = source_cost + partner_cost;
-        let merged_cost = steps[partner] + pair_cost + support_loss;
+        let merged_cost = entry(partner).1 + pair_cost + support_loss;
         if merged_cost >= separate_cost {
             continue;
         }
-        let priority = (separate_cost - merged_cost, MAX_PAIR_STEPS - steps[partner]);
+        let priority = (separate_cost - merged_cost, MAX_PAIR_STEPS - entry(partner).1);
         if best
             .as_ref()
             .is_none_or(|&(best_priority, _)| priority > best_priority)
@@ -812,7 +909,7 @@ fn choose_pair(
     let (_, mut to) = best?;
     let mut actions = Vec::new();
     while to != cell {
-        let action = previous[to]?;
+        let action = entry(to).2?;
         actions.push(action);
         to = action.from;
     }
@@ -891,17 +988,37 @@ fn legacy_rollout(
     deadline: Option<Instant>,
     incumbent_bound: Option<usize>,
 ) -> Result<Plan, RolloutStop> {
+    legacy_rollout_owned(initial.clone(), distances, limit, deadline, incumbent_bound)
+}
+
+fn legacy_rollout_owned(
+    mut board: Board,
+    distances: &[Vec<usize>],
+    limit: usize,
+    deadline: Option<Instant>,
+    incumbent_bound: Option<usize>,
+) -> Result<Plan, RolloutStop> {
     if incumbent_bound == Some(0) {
         return Err(RolloutStop::Incumbent);
     }
-    let mut board = initial.clone();
     let mut plan = Plan::new();
     let mut count = 0;
-    while let Some((cell, color)) = choose_target(&board, distances) {
+    let mut keys: Vec<u32> = (0..board.stacks.len())
+        .map(|cell| target_key(&board, distances, cell))
+        .collect();
+    let mut steps = 0usize;
+    loop {
+        let key = keys.iter().copied().max().unwrap_or(0);
+        if key == 0 {
+            break;
+        }
+        let cell = 1023 - (key & 1023) as usize;
+        let color = usize::from(board.stacks[cell].last().unwrap());
         if count >= limit {
             return Err(RolloutStop::OperationLimit);
         }
-        if deadline.is_some_and(|time| Instant::now() >= time) {
+        steps += 1;
+        if steps % 8 == 1 && deadline.is_some_and(|time| Instant::now() >= time) {
             return Err(RolloutStop::Deadline);
         }
         let unit = legacy_unit(&board, cell, color, distances).ok_or(RolloutStop::NoMove)?;
@@ -913,7 +1030,9 @@ fn legacy_rollout(
             return Err(RolloutStop::OperationLimit);
         }
         for &action in &unit {
-            board.apply(action);
+            let to = board.apply(action);
+            keys[action.from] = target_key(&board, distances, action.from);
+            keys[to] = target_key(&board, distances, to);
         }
         count = next_count;
         plan.push_back(unit);
@@ -940,8 +1059,8 @@ fn candidate_rollout(
         for &action in prefix {
             after.apply(action);
         }
-        legacy_rollout(
-            &after,
+        legacy_rollout_owned(
+            after,
             distances,
             remaining - prefix.len(),
             deadline,
@@ -3117,6 +3236,7 @@ fn main() {
 fn solve(n: usize, k: usize, rows: &[Vec<u8>], sample_seed: u64, deadline: Instant) -> String {
     let mut board = Board {
         n,
+        adj: Default::default(),
         walls: vec![false; n * n],
         nests: vec![None; n * n],
         stacks: vec![Stack::default(); n * n],
@@ -3141,6 +3261,7 @@ fn solve(n: usize, k: usize, rows: &[Vec<u8>], sample_seed: u64, deadline: Insta
             }
         }
     }
+    board.build_adjacency();
 
     let distances: Vec<_> = nest_cells
         .iter()
@@ -3736,6 +3857,7 @@ mod tests {
     fn empty_board() -> Board {
         Board {
             n: 7,
+            adj: Default::default(),
             walls: vec![false; 49],
             nests: vec![None; 49],
             stacks: vec![Stack::default(); 49],
@@ -4046,6 +4168,7 @@ mod tests {
     fn pickup_line_board(n: usize, cells: &[usize]) -> Board {
         let mut board = Board {
             n,
+            adj: Default::default(),
             walls: vec![true; n * n],
             nests: vec![None; n * n],
             stacks: vec![Stack::default(); n * n],
@@ -5087,6 +5210,7 @@ mod tests {
     fn existing_mixed_depth_24_terminal_is_inclusive() {
         let mut board = Board {
             n: 25,
+            adj: Default::default(),
             walls: vec![true; 625],
             nests: vec![None; 625],
             stacks: vec![Stack::default(); 625],
@@ -5132,6 +5256,7 @@ mod tests {
         ];
         let mut board = Board {
             n: 12,
+            adj: Default::default(),
             walls: vec![false; 144],
             nests: vec![None; 144],
             stacks: vec![Stack::default(); 144],
@@ -5548,6 +5673,7 @@ mod tests {
     fn sender_case0000_fixture() -> Board {
         let mut b = Board {
             n: 12,
+            adj: Default::default(),
             walls: vec![false; 144],
             nests: vec![None; 144],
             stacks: vec![Stack::default(); 144],
