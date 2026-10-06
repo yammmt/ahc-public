@@ -38,6 +38,13 @@ macro_rules! log_event {
     };
 }
 
+// Candidate families that no longer pay for their rollouts.
+const ENABLE_MIXED_TRANSPORT: bool = false;
+const ENABLE_PICKUP: bool = false;
+const ENABLE_SIMPLE_PAIR: bool = false;
+// Whole-stack moves in rollouts made this search unprofitable.
+const ENABLE_EXISTING_MIXED: bool = false;
+
 const SEARCH_DEADLINE: Duration = Duration::from_millis(1950);
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -2453,7 +2460,7 @@ const MAX_EXISTING_MIXED_DEPTH: usize = 24;
 const MAX_EXISTING_MIXED_STATES: usize = 4000;
 const MAX_EXISTING_MIXED_ROLLOUTS: usize = 8;
 const MAX_EXISTING_MIXED_HOME_TABLES: usize = 8;
-const MAX_EXISTING_MIXED_CALLS: usize = 0;
+const MAX_EXISTING_MIXED_CALLS: usize = 64;
 const EXISTING_MIXED_CALL_TIME: Duration = Duration::from_millis(10);
 const EXISTING_MIXED_CASE_TIME: Duration = Duration::from_millis(60);
 const EXISTING_MIXED_RESTART_TIME: Duration = Duration::from_millis(15);
@@ -3635,14 +3642,10 @@ fn main() {
         .flatten()
         .filter(|symbol| symbol.is_ascii_lowercase())
         .count();
-    USE_BUS.store(slimes < BUS_MAX_SLIMES, std::sync::atomic::Ordering::Relaxed);
-    if std::env::var("LEGACY_ONLY").is_ok() {
-        // Experiment mode: report only the plain policy length.
-        let expired = started;
-        let plan = solve(n, k, &rows, TARGET_SAMPLE_SEED, expired, &[], false);
-        println!("{}", plan.len());
-        return;
-    }
+    USE_BUS.store(
+        slimes < BUS_MAX_SLIMES,
+        std::sync::atomic::Ordering::Relaxed,
+    );
     let mut best = solve(n, k, &rows, TARGET_SAMPLE_SEED, deadline, &[], false);
     let mut runs = 1;
     let mut seed = TARGET_SAMPLE_SEED;
@@ -3655,7 +3658,15 @@ fn main() {
         } else {
             0
         };
-        let output = solve(n, k, &rows, seed, deadline, &best[..keep], keep > 0 || runs % 2 == 0);
+        let output = solve(
+            n,
+            k,
+            &rows,
+            seed,
+            deadline,
+            &best[..keep],
+            keep > 0 || runs % 2 == 0,
+        );
         runs += 1;
         if output.len() < best.len() {
             best = output;
@@ -3872,7 +3883,8 @@ fn solve(
                     accepted += 1;
                 }
             }
-            if false && mixed_attempts < MAX_MIXED_REPLANS
+            if ENABLE_MIXED_TRANSPORT
+                && mixed_attempts < MAX_MIXED_REPLANS
                 && replans % MIXED_REPLAN_INTERVAL == 1
                 && Instant::now() < deadline
             {
@@ -3917,7 +3929,8 @@ fn solve(
                     }
                 }
             }
-            if false && pickup_attempts < MAX_PICKUP_REPLANS
+            if ENABLE_PICKUP
+                && pickup_attempts < MAX_PICKUP_REPLANS
                 && replans % PICKUP_REPLAN_INTERVAL == 1
                 && Instant::now() < deadline
             {
@@ -4102,7 +4115,9 @@ fn solve(
             if stack.top_run_len() == stack.len() {
                 existing_mixed_stats.not_mixed += 1;
             } else if let Some(colors) = existing_mixed_colors(stack) {
-                if existing_mixed_stats.attempts >= MAX_EXISTING_MIXED_CALLS {
+                if !ENABLE_EXISTING_MIXED
+                    || existing_mixed_stats.attempts >= MAX_EXISTING_MIXED_CALLS
+                {
                     existing_mixed_stats.call_skips += 1;
                 } else if existing_mixed_stats.elapsed >= existing_mixed_case_time {
                     existing_mixed_stats.case_time_skips += 1;
@@ -4261,7 +4276,7 @@ fn solve(
                 existing_mixed_stats.too_many_colors += 1;
             }
         }
-        if false && actions.len() < MAX_REPLANS && Instant::now() < deadline {
+        if ENABLE_SIMPLE_PAIR && actions.len() < MAX_REPLANS && Instant::now() < deadline {
             let prefixes = simple_pair_candidates(&board, &distances);
             simple_pair_generated += prefixes.len();
             for prefix in prefixes {
