@@ -3514,30 +3514,52 @@ fn main() {
     if std::env::var("LEGACY_ONLY").is_ok() {
         // Experiment mode: report only the plain policy length.
         let expired = started;
-        let plan = solve(n, k, &rows, TARGET_SAMPLE_SEED, expired);
-        if std::env::var("LEGACY_PLAN").is_ok() {
-            print!("{plan}");
-        } else {
-            println!("{}", plan.lines().count());
-        }
+        let plan = solve(n, k, &rows, TARGET_SAMPLE_SEED, expired, &[]);
+        println!("{}", plan.len());
         return;
     }
-    let mut best = solve(n, k, &rows, TARGET_SAMPLE_SEED, deadline);
+    let mut best = solve(n, k, &rows, TARGET_SAMPLE_SEED, deadline, &[]);
     let mut runs = 1;
     let mut seed = TARGET_SAMPLE_SEED;
+    let mut rng = TargetRng::new(TARGET_SAMPLE_SEED ^ 0x5DEE_CE66);
     while Instant::now() + RESTART_MARGIN < deadline {
         seed = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(1);
-        let output = solve(n, k, &rows, seed, deadline);
+        // Alternate fresh restarts with re-searching a suffix of the best plan.
+        let keep = if runs % 2 == 0 {
+            rng.index(best.len().max(1))
+        } else {
+            0
+        };
+        let output = solve(n, k, &rows, seed, deadline, &best[..keep]);
         runs += 1;
-        if output.lines().count() < best.lines().count() {
+        if output.len() < best.len() {
             best = output;
         }
     }
-    eprintln!("restarts runs={runs} best={}", best.lines().count());
-    print!("{best}");
+    eprintln!("restarts runs={runs} best={}", best.len());
+    let mut output = String::new();
+    for action in best {
+        let _ = writeln!(
+            output,
+            "{} {} {} {} {}",
+            action.from / n,
+            action.from % n,
+            action.k,
+            DIRECTIONS[action.direction].2,
+            action.length,
+        );
+    }
+    print!("{output}");
 }
 
-fn solve(n: usize, k: usize, rows: &[Vec<u8>], sample_seed: u64, deadline: Instant) -> String {
+fn solve(
+    n: usize,
+    k: usize,
+    rows: &[Vec<u8>],
+    sample_seed: u64,
+    deadline: Instant,
+    prefix: &[Action],
+) -> Vec<Action> {
     let mut board = Board {
         n,
         adj: Default::default(),
@@ -3572,6 +3594,11 @@ fn solve(n: usize, k: usize, rows: &[Vec<u8>], sample_seed: u64, deadline: Insta
         .map(|&nest| distances_from(&board, nest))
         .collect();
 
+    let mut actions = Vec::new();
+    for &action in prefix {
+        board.apply(action);
+        actions.push(action);
+    }
     let mut target_rng = TargetRng::new(sample_seed);
     let mut move_rng = TargetRng::new(sample_seed ^ 0x3C6E_F372_FE94_F82B);
     // Restarts spend less time on the existing mixed search.
@@ -3582,7 +3609,6 @@ fn solve(n: usize, k: usize, rows: &[Vec<u8>], sample_seed: u64, deadline: Insta
     };
     let mut saved = legacy_rollout(&board, &distances, MAX_OPERATIONS, None, None)
         .expect("Legacy solver must produce a complete baseline");
-    let mut actions = Vec::new();
     let mut existing_mixed_stats = ExistingMixedStats::default();
     let mut replans = 0;
     let mut candidates = 0;
@@ -4207,19 +4233,7 @@ fn solve(n: usize, k: usize, rows: &[Vec<u8>], sample_seed: u64, deadline: Insta
         "adjacent_springboard generated={springboard_generated} evaluated={springboard_evaluated} saved={springboard_saved} executed={springboard_executed}"
     );
 
-    let mut output = String::new();
-    for action in actions {
-        let _ = writeln!(
-            output,
-            "{} {} {} {} {}",
-            action.from / n,
-            action.from % n,
-            action.k,
-            DIRECTIONS[action.direction].2,
-            action.length,
-        );
-    }
-    output
+    actions
 }
 
 #[cfg(test)]
