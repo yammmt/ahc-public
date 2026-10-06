@@ -807,7 +807,7 @@ fn alternative_moves(board: &Board, cell: usize, distances: &[usize]) -> Vec<Act
 const MAX_INCOMING_MOVES: usize = 6;
 // Whole mixed stacks travel together only on sparse boards.
 static USE_BUS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-const BUS_MAX_SLIMES: usize = 80;
+const BUS_MAX_SLIMES: usize = 90;
 const RANDOM_STACK_CANDIDATES: usize = 4;
 
 // Moves of other stacks' top runs onto the target cell, preferring groups
