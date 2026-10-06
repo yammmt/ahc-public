@@ -3762,6 +3762,11 @@ fn solve(n: usize, k: usize, rows: &[Vec<u8>], sample_seed: u64, deadline: Insta
                 }
             }
             target_time += target_started.elapsed();
+        }
+        if Instant::now() < deadline
+            && let Some((cell, color)) = choose_target(&board, &distances)
+        {
+            let remaining = MAX_OPERATIONS - actions.len();
             // Plain pilot step: other single moves of the target's top run.
             let first_unit = saved.front().cloned();
             for action in alternative_moves(&board, cell, &distances[color]) {
