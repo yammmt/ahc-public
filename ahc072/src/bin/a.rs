@@ -4045,7 +4045,7 @@ fn solve(n: usize, k: usize, rows: &[Vec<u8>], sample_seed: u64, deadline: Insta
                 existing_mixed_stats.too_many_colors += 1;
             }
         }
-        if actions.len() < MAX_REPLANS && Instant::now() < deadline {
+        if false && actions.len() < MAX_REPLANS && Instant::now() < deadline {
             let prefixes = simple_pair_candidates(&board, &distances);
             simple_pair_generated += prefixes.len();
             for prefix in prefixes {
