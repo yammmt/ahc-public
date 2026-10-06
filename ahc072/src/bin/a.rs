@@ -1257,7 +1257,7 @@ fn bus_join_move(
             let landing = &board.stacks[to];
             if landing.len() == 0
                 || landing.len() + moving > MAX_HEIGHT
-                || own[to] >= own[cell]
+                || own[to] > own[cell]
                 || landing.last() == Some(color as u8)
                 || board.nests[to].is_some()
             {
