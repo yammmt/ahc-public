@@ -733,6 +733,7 @@ fn choose_move(
 }
 
 const MAX_ALTERNATIVE_MOVES: usize = 16;
+const MAX_MIXED_ALTERNATIVE_MOVES: usize = 4;
 
 // Single moves of the top run (or part of it) that approach the nest,
 // best distance gain first.
@@ -764,11 +765,43 @@ fn alternative_moves(board: &Board, cell: usize, distances: &[usize]) -> Vec<Act
         }
     }
     moves.sort_by(|a, b| b.0.cmp(&a.0));
-    moves
+    let mut result: Vec<Action> = moves
         .into_iter()
         .take(MAX_ALTERNATIVE_MOVES)
         .map(|(_, action)| action)
-        .collect()
+        .collect();
+    // Mixed stacks: also carry lower slimes along with the top run.
+    let mut mixed = Vec::new();
+    for moving in stack.top_run_len() + 1..=height {
+        let k = height - moving;
+        for direction in 0..DIRECTIONS.len() {
+            let mut to = cell;
+            for length in 1..=k + 1 {
+                let Some(next) = board.adjacent(to, direction) else {
+                    break;
+                };
+                to = next;
+                if distances[to] >= current || board.stacks[to].len() + moving > MAX_HEIGHT {
+                    continue;
+                }
+                let action = Action {
+                    from: cell,
+                    k,
+                    direction,
+                    length,
+                };
+                mixed.push(((current - distances[to], Reverse(moving)), action));
+            }
+        }
+    }
+    mixed.sort_by(|a, b| b.0.cmp(&a.0));
+    result.extend(
+        mixed
+            .into_iter()
+            .take(MAX_MIXED_ALTERNATIVE_MOVES)
+            .map(|(_, action)| action),
+    );
+    result
 }
 
 fn choose_group_move(
