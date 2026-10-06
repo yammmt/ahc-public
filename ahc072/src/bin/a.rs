@@ -733,7 +733,7 @@ fn choose_move(
 }
 
 const MAX_ALTERNATIVE_MOVES: usize = 16;
-const MAX_MIXED_ALTERNATIVE_MOVES: usize = 4;
+const MAX_MIXED_ALTERNATIVE_MOVES: usize = 10;
 
 // Single moves of the top run (or part of it) that approach the nest,
 // best distance gain first.
