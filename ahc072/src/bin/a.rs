@@ -1192,40 +1192,38 @@ fn bus_move(board: &Board, cell: usize, distances: &[Vec<usize>]) -> Option<Acti
         return None;
     }
     let colors = &stack.colors[..stack.len()];
-    let mut fallback = None;
+    let mut best: Option<(usize, Action)> = None;
     for direction in 0..DIRECTIONS.len() {
         let Some(to) = board.adjacent(cell, direction) else {
             continue;
         };
-        if board.stacks[to].len() > 0 {
-            if fallback.is_none()
-                && board.stacks[to].len() + stack.len() <= MAX_HEIGHT
-                && colors.iter().all(|&color| {
-                    distances[usize::from(color)][to] < distances[usize::from(color)][cell]
-                })
-            {
-                fallback = Some(Action {
+        let landing = board.stacks[to].len();
+        if landing + stack.len() > MAX_HEIGHT
+            || !colors.iter().all(|&color| {
+                distances[usize::from(color)][to] < distances[usize::from(color)][cell]
+            })
+        {
+            continue;
+        }
+        let priority = bus_priority(board, to, landing);
+        if best.is_none_or(|(current, _)| priority > current) {
+            best = Some((
+                priority,
+                Action {
                     from: cell,
                     k: 0,
                     direction,
                     length: 1,
-                });
-            }
-            continue;
-        }
-        if colors
-            .iter()
-            .all(|&color| distances[usize::from(color)][to] < distances[usize::from(color)][cell])
-        {
-            return Some(Action {
-                from: cell,
-                k: 0,
-                direction,
-                length: 1,
-            });
+                },
+            ));
         }
     }
-    fallback
+    best.map(|(_, action)| action)
+}
+
+fn bus_priority(_board: &Board, _to: usize, landing: usize) -> usize {
+    // Prefer joining another stack.
+    landing
 }
 
 fn legacy_unit(
