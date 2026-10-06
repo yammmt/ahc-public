@@ -880,10 +880,13 @@ fn choose_relay(
     }
     let (ordinary_end, ordinary_end_top) = SCRATCH_BOARD.with(|scratch| {
         let mut after_first = scratch.borrow_mut();
-        after_first.n = board.n;
-        after_first.adj.clone_from(&board.adj);
-        after_first.walls.clone_from(&board.walls);
-        after_first.nests.clone_from(&board.nests);
+        // Boards sharing a built neighbor table also share walls and nests.
+        if board.adj.is_empty() || !std::rc::Rc::ptr_eq(&after_first.adj, &board.adj) {
+            after_first.n = board.n;
+            after_first.adj.clone_from(&board.adj);
+            after_first.walls.clone_from(&board.walls);
+            after_first.nests.clone_from(&board.nests);
+        }
         after_first.stacks.clone_from(&board.stacks);
         after_first.apply(ordinary);
         let (_, ordinary_end) = choose_group_move(&after_first, ordinary_to, color, distances)?;
