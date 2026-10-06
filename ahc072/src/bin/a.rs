@@ -732,6 +732,45 @@ fn choose_move(
     best.map(|(_, action, to)| (action, to))
 }
 
+const MAX_ALTERNATIVE_MOVES: usize = 4;
+
+// Single moves of the top run (or part of it) that approach the nest,
+// best distance gain first.
+fn alternative_moves(board: &Board, cell: usize, distances: &[usize]) -> Vec<Action> {
+    let stack = &board.stacks[cell];
+    let height = stack.len();
+    let current = distances[cell];
+    let mut moves = Vec::new();
+    for moving in 1..=stack.top_run_len() {
+        let k = height - moving;
+        for direction in 0..DIRECTIONS.len() {
+            let mut to = cell;
+            for length in 1..=k + 1 {
+                let Some(next) = board.adjacent(to, direction) else {
+                    break;
+                };
+                to = next;
+                if distances[to] >= current || board.stacks[to].len() + moving > MAX_HEIGHT {
+                    continue;
+                }
+                let action = Action {
+                    from: cell,
+                    k,
+                    direction,
+                    length,
+                };
+                moves.push(((current - distances[to], moving), action));
+            }
+        }
+    }
+    moves.sort_by(|a, b| b.0.cmp(&a.0));
+    moves
+        .into_iter()
+        .take(MAX_ALTERNATIVE_MOVES)
+        .map(|(_, action)| action)
+        .collect()
+}
+
 fn choose_group_move(
     board: &Board,
     cell: usize,
@@ -3361,6 +3400,17 @@ fn main() {
     }
     let started = Instant::now();
     let deadline = started + SEARCH_DEADLINE;
+    if std::env::var("LEGACY_ONLY").is_ok() {
+        // Experiment mode: report only the plain policy length.
+        let expired = started;
+        let plan = solve(n, k, &rows, TARGET_SAMPLE_SEED, expired);
+        if std::env::var("LEGACY_PLAN").is_ok() {
+            print!("{plan}");
+        } else {
+            println!("{}", plan.lines().count());
+        }
+        return;
+    }
     let mut best = solve(n, k, &rows, TARGET_SAMPLE_SEED, deadline);
     let mut runs = 1;
     let mut seed = TARGET_SAMPLE_SEED;
@@ -3712,6 +3762,37 @@ fn solve(n: usize, k: usize, rows: &[Vec<u8>], sample_seed: u64, deadline: Insta
                 }
             }
             target_time += target_started.elapsed();
+            // Plain pilot step: other single moves of the target's top run.
+            let first_unit = saved.front().cloned();
+            for action in alternative_moves(&board, cell, &distances[color]) {
+                if Instant::now() >= deadline {
+                    break;
+                }
+                if first_unit.as_deref() == Some(&[action][..]) {
+                    continue;
+                }
+                let prefix = [action];
+                let Ok(mut continuation) = candidate_rollout(
+                    &board,
+                    &distances,
+                    &prefix,
+                    remaining,
+                    plan_length(&saved),
+                    Some(deadline),
+                    &mut rollout_stats[4],
+                ) else {
+                    continue;
+                };
+                if 1 + plan_length(&continuation) < plan_length(&saved) {
+                    selected_mixed_actions = None;
+                    selected_pickup_actions = None;
+                    selected_target_candidate = None;
+                    selected_springboard = None;
+                    continuation.push_front(prefix.to_vec());
+                    saved = continuation;
+                    set_reference(&board, &saved);
+                }
+            }
         }
         if let Some((source, _)) = choose_target(&board, &distances) {
             let stack = &board.stacks[source];
