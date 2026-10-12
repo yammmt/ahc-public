@@ -113,6 +113,58 @@ fn move_cell(c: usize, dir: (isize, isize), l: usize, n: usize, is_wall: &[bool]
     Some(c_next)
 }
 
+/// マスごとの塔の高さの履歴 (挿入中のスライム s を除く).
+/// マス c の塔の高さは, 時刻 starts[c][k] から starts[c][k + 1] の直前まで heights[c][k] である.
+struct Timeline {
+    starts: Vec<Vec<usize>>,
+    heights: Vec<Vec<usize>>,
+}
+
+impl Timeline {
+    /// 挿入済みのスライム `placed` だけを置いた初期盤面から, 操作列 `ret` をシミュレーションする.
+    fn new(n: usize, ret: &[Ans], placed: &[Slime], nest: &[Option<char>]) -> Self {
+        let mut towers: Vec<Vec<char>> = vec![vec![]; n * n];
+        for ss in placed {
+            towers[ss.pos_1d(n)].push(ss.color);
+        }
+        let mut starts = vec![vec![0]; n * n];
+        let mut heights: Vec<Vec<usize>> = towers.iter().map(|tower| vec![tower.len()]).collect();
+
+        for (t, a) in ret.iter().enumerate() {
+            let (c_from, c_to) = a.from_to(n);
+
+            // 残す/跳ばす群を分離
+            let mut group_jumping = towers[c_from].split_off(a.leave_num);
+            // 跳ばす
+            group_jumping.reverse();
+            towers[c_to].extend(group_jumping);
+            for c in [c_from, c_to] {
+                // 帰巣
+                if let Some(nest_color) = nest[c] {
+                    while towers[c].last() == Some(&nest_color) {
+                        towers[c].pop();
+                    }
+                }
+                // 操作が触れたマスでは, 高さが変わらなくても履歴を区切る
+                starts[c].push(t + 1);
+                heights[c].push(towers[c].len());
+            }
+        }
+
+        Timeline { starts, heights }
+    }
+
+    /// 時刻 t (操作 t の直前) を含む, マス c の履歴の番号
+    fn seg_at(&self, c: usize, t: usize) -> usize {
+        self.starts[c].partition_point(|&x| x <= t) - 1
+    }
+
+    /// 時刻 t (操作 t の直前) のマス c の塔の高さ
+    fn height_at(&self, c: usize, t: usize) -> usize {
+        self.heights[c][self.seg_at(c, t)]
+    }
+}
+
 fn jikukan_bfs(slimes: &[Slime], map_default: &[Vec<char>]) -> Vec<Ans> {
     let n = map_default.len();
     let is_wall: Vec<bool> = (0..n * n)
@@ -143,32 +195,8 @@ fn jikukan_bfs(slimes: &[Slime], map_default: &[Vec<char>]) -> Vec<Ans> {
         let mut came_from: Vec<Vec<Vec<Option<(usize, usize, usize)>>>> =
             vec![vec![vec![None; HEIGHT_MAX + 1]; n * n]; t_len];
 
-        // 現在の盤面を初期盤面からシミュレーションし, board[t][c] (t = 0..t_len) を作る
-        let mut board = vec![vec![vec![]; n * n]; t_len];
-        for ss in &slimes[..i] {
-            board[0][ss.pos_1d(n)].push(ss.color);
-        }
-        for t in 0..ret.len() {
-            board[t + 1] = board[t].clone();
-            let a = &ret[t];
-            let (c_from, c_to) = a.from_to(n);
-
-            // 残す/跳ばす群を分離
-            let mut group_jumping = board[t + 1][c_from].split_off(a.leave_num);
-            // 跳ばす
-            group_jumping.reverse();
-            board[t + 1][c_to].extend(group_jumping);
-            // 帰巣 (from/to で処理共通)
-            for c in [c_from, c_to] {
-                let Some(nest_color) = nest[c] else {
-                    continue;
-                };
-                while board[t + 1][c].last() == Some(&nest_color) {
-                    board[t + 1][c].pop();
-                }
-            }
-        }
-        let board = board;
+        // 現在の操作列による, マスごとの塔の高さの履歴
+        let tl = Timeline::new(n, &ret, &slimes[..i], &nest);
 
         let mut deque = VecDeque::new();
         // (マス, コスト, 直前のマス)
@@ -184,7 +212,7 @@ fn jikukan_bfs(slimes: &[Slime], map_default: &[Vec<char>]) -> Vec<Ans> {
 
             // s の帰巣が起きたなら終わり
             // 今回のスライムに関する経路のみを復元する
-            if nest[c_cur] == Some(s.color) && z_cur == board[t_cur][c_cur].len() {
+            if nest[c_cur] == Some(s.color) && z_cur == tl.height_at(c_cur, t_cur) {
                 goal = Some((t_cur, c_cur, z_cur));
                 break;
             }
@@ -207,7 +235,7 @@ fn jikukan_bfs(slimes: &[Slime], map_default: &[Vec<char>]) -> Vec<Ans> {
 
                 // 残る: 自分より上が跳ぶ, コスト増えない (最小限実装ならなくても動く)
                 // c が出発マスかつ s が切れ目より下 (= 残る側にいる)
-                // if c_cur == c_from && z_cur <= a.leave_num && z_cur <= board[t_cur + 1][c_cur].len() {
+                // if c_cur == c_from && z_cur <= a.leave_num && z_cur <= tl.height_at(c_cur, t_cur + 1) {
                 //     deque.push_front((
                 //         (t_cur + 1, c_cur, z_cur),
                 //         cost_cur,
@@ -221,7 +249,7 @@ fn jikukan_bfs(slimes: &[Slime], map_default: &[Vec<char>]) -> Vec<Ans> {
             }
 
             // 自身が一番上で跳ぶ, コスト +1
-            let h = board[t_cur][c_cur].len();
+            let h = tl.height_at(c_cur, t_cur);
             if z_cur != h {
                 // 自身が最上段にいない
                 continue;
@@ -231,7 +259,7 @@ fn jikukan_bfs(slimes: &[Slime], map_default: &[Vec<char>]) -> Vec<Ans> {
                     let Some(c_next) = move_cell(c_cur, d.delta(), l, n, &is_wall) else {
                         break;
                     };
-                    let g = board[t_cur][c_next].len();
+                    let g = tl.height_at(c_next, t_cur);
                     if g + 1 > HEIGHT_MAX {
                         // 高さ制限にかかって着地不可
                         continue;
@@ -262,7 +290,7 @@ fn jikukan_bfs(slimes: &[Slime], map_default: &[Vec<char>]) -> Vec<Ans> {
             if t0 == t1 {
                 // 挿入先が同じターンであれば自身で跳んでいる
                 // 既存ターンを消費せずに自身の位置を変える操作は他にないので
-                jumps_at[t0].push(Ans::jump(c0, c1, board[t0][c0].len(), n));
+                jumps_at[t0].push(Ans::jump(c0, c1, tl.height_at(c0, t0), n));
             }
         }
 
