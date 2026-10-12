@@ -246,8 +246,11 @@ fn insert_slime(
     is_wall: &[bool],
 ) -> (Vec<(usize, Ans)>, Vec<usize>) {
     let t_max = ret.len();
-    // best_time[状態]: その状態に着いた最も早い時刻 (手数が少ない到着も含む)
+    // best_time[状態]: 今の手数までで, その状態に着いた最も早い時刻
     let mut best_time: Vec<Option<usize>> = vec![None; tl.total * Z_LEN];
+    // best_time_next[状態]: 次の手数 (今 + 1) で, その状態に着いた最も早い時刻.
+    // 今の手数の到着より劣るとは限らないので, 今の手数の判定には使わない
+    let mut best_time_next: Vec<Option<usize>> = vec![None; tl.total * Z_LEN];
     let mut labels: Vec<Label> = vec![];
 
     let c0 = s.pos_1d(n);
@@ -399,14 +402,17 @@ fn insert_slime(
                             let g = tl.heights[c_next][k_next];
                             if g + 1 <= HEIGHT_MAX {
                                 let ns = tl.state_id(c_next, k_next, g);
-                                if let Some(nl) = push_label(
-                                    &mut labels,
-                                    &mut best_time,
-                                    ns,
-                                    tau,
-                                    (li, Move::Jump(d, l)),
-                                ) {
-                                    next.push(nl);
+                                // 今の手数までの到着より時刻が真に早いときだけ, 次の手数の候補にする
+                                if best_time[ns].map_or(true, |bt| tau < bt) {
+                                    if let Some(nl) = push_label(
+                                        &mut labels,
+                                        &mut best_time_next,
+                                        ns,
+                                        tau,
+                                        (li, Move::Jump(d, l)),
+                                    ) {
+                                        next.push(nl);
+                                    }
                                 }
                             }
                             k_next += 1;
@@ -421,8 +427,23 @@ fn insert_slime(
                 }
             }
         }
-        assert!(!next.is_empty(), "s が巣に着けない");
-        frontier = next;
+        // 次の手数のラベルを確定する. 同じ状態により早く着くもの (次の手数でも, 今の手数でも) があれば除く
+        let mut kept = vec![];
+        for &nl in &next {
+            let Label { state, time, .. } = labels[nl];
+            if best_time_next[state] == Some(time) && best_time[state].map_or(true, |bt| time < bt)
+            {
+                kept.push(nl);
+            }
+        }
+        for &nl in &next {
+            best_time_next[labels[nl].state] = None;
+        }
+        for &nl in &kept {
+            best_time[labels[nl].state] = Some(labels[nl].time);
+        }
+        assert!(!kept.is_empty(), "s が巣に着けない");
+        frontier = kept;
     };
 
     // 今回のスライムの辿った動きを復元
