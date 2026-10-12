@@ -193,6 +193,8 @@ enum Move {
     Stay(usize),
     /// 既存の操作で跳ぶ一団と一緒に跳ぶ (相乗り). コスト 0. 操作列は変えない
     Ride,
+    /// 既存の操作で跳んだ一団が, s の塔の上に着地する. コスト 0. 操作列は変えない
+    LandedOn,
 }
 
 /// 状態への 1 回の到着.
@@ -230,8 +232,8 @@ fn push_label(
 /// スライム `s` を操作列 `ret` に挿入する動きを, 追加手数が最小になるように求める.
 /// 返り値は (挿入する跳躍の (時刻, 跳躍) の時系列順の列, leave_num を +1 する操作の番号の列).
 ///
-/// 状態は (マス, 区間, z). 遷移は「待つ」「残る」「一緒に跳ぶ」「上に一団が着地」「自分で跳ぶ」の 5 種類で,
-/// 今は「待つ」「残る」「一緒に跳ぶ」「自分で跳ぶ」を実装している. 「待つ」は状態の中に含まれる.
+/// 状態は (マス, 区間, z). 遷移は「待つ」「残る」「一緒に跳ぶ」「上に一団が着地」「自分で跳ぶ」の 5 種類.
+/// 「待つ」は状態の中に含まれる.
 /// 手数ごとに 1 段ずつ幅優先で広げる. コスト 0 の遷移 (「残る」など) の行き先は同じ段に加え,
 /// その段の中で続けて広げる.
 fn insert_slime(
@@ -347,8 +349,39 @@ fn insert_slime(
                 }
             }
 
-            // TODO: 上に一団が着地: コスト 0
+            // 上に一団が着地: コスト 0
             // 操作 t_end が c に着地する. s の下の匹数 z は変わらず, 区間 k + 1 へ
+            if t_end < t_max {
+                let a = &ret[t_end];
+                let (c_from, c_to) = a.from_to(n);
+                // 跳んでくる一団の匹数
+                let group = tl.heights[c_from][tl.seg_at(c_from, t_end)] - a.leave_num;
+                // s が加わっても, 着地後 (帰巣前) の高さが上限以内
+                if c_to == c && h + group + 1 <= HEIGHT_MAX {
+                    let h_after = tl.heights[c][k + 1];
+                    // 「残る」と同じく, s の下にいるはずのスライムが帰巣済みなら,
+                    // s が巣と同じ色のときだけ s ごと帰巣したものとして扱う
+                    let z_after = if z <= h_after {
+                        Some(z)
+                    } else if nest[c] == Some(s.color) {
+                        Some(h_after)
+                    } else {
+                        None
+                    };
+                    if let Some(z_after) = z_after {
+                        let ns = tl.state_id(c, k + 1, z_after);
+                        if let Some(nl) = push_label(
+                            &mut labels,
+                            &mut best_time,
+                            ns,
+                            t_end + 1,
+                            (li, Move::LandedOn),
+                        ) {
+                            frontier.push(nl);
+                        }
+                    }
+                }
+            }
 
             // 自分で跳ぶ: コスト +1
             // 一番上にいるときだけ, 区間の中ならいつでも跳べる
@@ -412,7 +445,7 @@ fn insert_slime(
             }
             Move::Stay(t) => stays.push(t),
             // 既存の操作に乗るだけなので, 操作列は変えない
-            Move::Ride => {}
+            Move::Ride | Move::LandedOn => {}
         }
         li = prev;
     }
