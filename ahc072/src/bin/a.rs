@@ -1,5 +1,6 @@
 use proconio::input;
 use proconio::marker::Chars;
+use std::collections::VecDeque;
 
 const CELL_MAX: usize = 400;
 const HEIGHT_MAX: usize = 8;
@@ -500,6 +501,27 @@ fn jikukan_bfs(slimes: &[Slime], map_default: &[Vec<char>]) -> Vec<Ans> {
     ret
 }
 
+/// 壁を避けて上下左右に 1 マスずつ歩いたときの, マス `start` から各マスへの最短距離.
+/// 届かないマスは usize::MAX
+fn walk_dist(start: usize, n: usize, is_wall: &[bool]) -> Vec<usize> {
+    let mut dist = vec![usize::MAX; n * n];
+    let mut queue = VecDeque::new();
+    dist[start] = 0;
+    queue.push_back(start);
+    while let Some(c) = queue.pop_front() {
+        for d in Dir::ALL {
+            let Some(c_next) = move_cell(c, d.delta(), 1, n, is_wall) else {
+                continue;
+            };
+            if dist[c_next] == usize::MAX {
+                dist[c_next] = dist[c] + 1;
+                queue.push_back(c_next);
+            }
+        }
+    }
+    dist
+}
+
 fn main() {
     input! {
         n: usize,
@@ -508,7 +530,6 @@ fn main() {
         rows: [Chars; n],
     }
 
-    // TODO: スライムを巣に近い順に並べると相乗りが起き易くなる
     let mut slimes = Vec::with_capacity(CELL_MAX);
     for i in 0..n {
         for j in 0..n {
@@ -520,6 +541,19 @@ fn main() {
             }
         }
     }
+
+    // スライムを自分の巣に近い順に挿入する.
+    // 遠くのスライムほど, 先に決まった近いスライムの経路に相乗りしやすい
+    let is_wall: Vec<bool> = (0..n * n).map(|c| rows[c / n][c % n] == '#').collect();
+    let mut nest_dist = std::collections::HashMap::new();
+    for c in 0..n * n {
+        let ch = rows[c / n][c % n];
+        if ('A'..='L').contains(&ch) {
+            nest_dist.insert(ch.to_ascii_lowercase(), walk_dist(c, n, &is_wall));
+        }
+    }
+    // 距離が同じなら, 左上から順のまま (安定ソート)
+    slimes.sort_by_key(|s| nest_dist[&s.color][s.pos_1d(n)]);
 
     let ans = jikukan_bfs(&slimes, &rows);
 
