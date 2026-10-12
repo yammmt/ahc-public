@@ -96,12 +96,14 @@ fn move_cell(c: usize, dir: (isize, isize), l: usize, n: usize, is_wall: &[bool]
     Some(c_next)
 }
 
-/// マスごとの塔の高さの履歴 (挿入中のスライム s を除く).
-/// マス c の塔の高さは, 時刻 starts[c][k] から starts[c][k + 1] の直前まで heights[c][k] である.
+/// マスごとの塔の履歴 (挿入中のスライム s を除く).
+/// マス c の塔は, 時刻 starts[c][k] から starts[c][k + 1] の直前まで towers[c][k] (高さ heights[c][k]) である.
 /// この時間帯を「区間 k」と呼ぶ. 区間内ではマス c の塔は変わらない.
 struct Timeline {
     starts: Vec<Vec<usize>>,
     heights: Vec<Vec<usize>>,
+    /// 塔の色の並び (下から順)
+    towers: Vec<Vec<Vec<char>>>,
     /// 区間の通し番号 = offset[c] + k
     offset: Vec<usize>,
     /// 区間の総数
@@ -119,6 +121,8 @@ impl Timeline {
         }
         let mut starts = vec![vec![0]; n * n];
         let mut heights: Vec<Vec<usize>> = towers.iter().map(|tower| vec![tower.len()]).collect();
+        let mut history: Vec<Vec<Vec<char>>> =
+            towers.iter().map(|tower| vec![tower.clone()]).collect();
 
         for (t, a) in ret.iter().enumerate() {
             let (c_from, c_to) = a.from_to(n);
@@ -138,6 +142,7 @@ impl Timeline {
                 // 操作が触れたマスでは, 高さが変わらなくても履歴を区切る
                 starts[c].push(t + 1);
                 heights[c].push(towers[c].len());
+                history[c].push(towers[c].clone());
             }
         }
 
@@ -153,6 +158,7 @@ impl Timeline {
         Timeline {
             starts,
             heights,
+            towers: history,
             offset,
             total: cell_of_seg.len(),
             cell_of_seg,
@@ -171,6 +177,21 @@ impl Timeline {
         } else {
             t_max
         }
+    }
+
+    /// マス c の区間 k の塔で, s の下に z 匹いるとき, s を含む色 `color` の連続部分の範囲 (lo, hi).
+    /// 同色のスライムは区別できないので, s の下の匹数を lo..=hi のどれにしても塔の色の並びは同じになる
+    fn same_color_run(&self, c: usize, k: usize, z: usize, color: char) -> (usize, usize) {
+        let tower = &self.towers[c][k];
+        let mut lo = z;
+        while lo > 0 && tower[lo - 1] == color {
+            lo -= 1;
+        }
+        let mut hi = z;
+        while hi < tower.len() && tower[hi] == color {
+            hi += 1;
+        }
+        (lo, hi)
     }
 
     /// 状態 (マス c, 区間 k, s の下にいる匹数 z) の通し番号
@@ -233,7 +254,8 @@ fn push_label(
 /// スライム `s` を操作列 `ret` に挿入する動きを, 追加手数が最小になるように求める.
 /// 返り値は (挿入する跳躍の (時刻, 跳躍) の時系列順の列, leave_num を +1 する操作の番号の列).
 ///
-/// 状態は (マス, 区間, z). 遷移は「待つ」「残る」「一緒に跳ぶ」「上に一団が着地」「自分で跳ぶ」の 5 種類.
+/// 状態は (マス, 区間, z). z は s の下にいる匹数で, s を同色の連続部分の一番上とみなした値にそろえる.
+/// 遷移は「待つ」「残る」「一緒に跳ぶ」「上に一団が着地」「自分で跳ぶ」の 5 種類.
 /// 「待つ」は状態の中に含まれる.
 /// 手数ごとに 1 段ずつ幅優先で広げる. コスト 0 の遷移 (「残る」など) の行き先は同じ段に加え,
 /// その段の中で続けて広げる.
@@ -253,8 +275,14 @@ fn insert_slime(
     let mut best_time_next: Vec<Option<usize>> = vec![None; tl.total * Z_LEN];
     let mut labels: Vec<Label> = vec![];
 
+    // 状態の z は, s を同色の連続部分の一番上とみなした値にそろえる (正規化)
+    let state_of = |c: usize, k: usize, z: usize| {
+        let (_, hi) = tl.same_color_run(c, k, z, s.color);
+        tl.state_id(c, k, hi)
+    };
+
     let c0 = s.pos_1d(n);
-    let start = tl.state_id(c0, tl.seg_at(c0, 0), 0);
+    let start = state_of(c0, tl.seg_at(c0, 0), 0);
     best_time[start] = Some(0);
     labels.push(Label {
         state: start,
@@ -271,7 +299,9 @@ fn insert_slime(
             let li = frontier[idx];
             idx += 1;
             let Label { state, time, .. } = labels[li];
+            // z は同色の連続部分の一番上. s は連続部分の中の lo..=z のどこにいるとみなしてもよい
             let (c, k, z) = tl.decode(state);
+            let (lo, _) = tl.same_color_run(c, k, z, s.color);
             let h = tl.heights[c][k];
 
             // s が自分の色の巣で一番上にいれば帰巣
@@ -288,24 +318,27 @@ fn insert_slime(
 
             // 残る: コスト 0
             // 操作 t_end が c から跳び, s が切れ目より下 (z <= leave_num) にいる.
+            // 同色の連続部分の一番下 lo が切れ目より下なら, s はそこにいるとみなして残れる.
             // 区間 k + 1 の同じ z へ. 経路復元で ret[t_end].leave_num を +1 する
             if t_end < t_max {
                 let a = &ret[t_end];
                 let (c_from, _) = a.from_to(n);
-                if c_from == c && z <= a.leave_num {
+                if c_from == c && lo <= a.leave_num {
+                    // 連続部分のうち, 切れ目より下で最も上の位置に s がいるとみなす
+                    let z_stay = z.min(a.leave_num);
                     let h_after = tl.heights[c][k + 1];
                     // 操作の後, s の下にいるはずのスライムが帰巣済み (z > h_after) なら,
                     // 実際には s が上にいて帰巣できない. ただし s が巣と同じ色なら s ごと帰巣するので,
                     // s が一番上にいる (= 帰巣する) 状態として扱う
-                    let z_after = if z <= h_after {
-                        Some(z)
+                    let z_after = if z_stay <= h_after {
+                        Some(z_stay)
                     } else if nest[c] == Some(s.color) {
                         Some(h_after)
                     } else {
                         None
                     };
                     if let Some(z_after) = z_after {
-                        let ns = tl.state_id(c, k + 1, z_after);
+                        let ns = state_of(c, k + 1, z_after);
                         if let Some(nl) = push_label(
                             &mut labels,
                             &mut best_time,
@@ -321,6 +354,7 @@ fn insert_slime(
 
             // 一緒に跳ぶ: コスト 0
             // 操作 t_end が c から跳び, s が切れ目より上 (z >= leave_num) にいる.
+            // 同色の連続部分の一番上 z が切れ目より上なら, s はそこにいるとみなして跳べる.
             // 着地点の, 操作 t_end の後の区間へ. 一団は反転して積まれる
             if t_end < t_max {
                 let a = &ret[t_end];
@@ -330,8 +364,10 @@ fn insert_slime(
                 let g = tl.heights[c_to][k_to];
                 // s が加わっても, 着地後 (帰巣前) の高さが上限以内
                 if c_from == c && z >= a.leave_num && g + (h - a.leave_num) + 1 <= HEIGHT_MAX {
-                    // 一団は反転するので, s より上にいた h - z 匹が s の下に来る
-                    let z_landed = g + (h - z);
+                    // 連続部分のうち, 切れ目より上で最も下の位置に s がいるとみなす
+                    let z_ride = lo.max(a.leave_num);
+                    // 一団は反転するので, s より上にいた h - z_ride 匹が s の下に来る
+                    let z_landed = g + (h - z_ride);
                     let h_after = tl.heights[c_to][k_to + 1];
                     // 「残る」と同じく, s の下にいるはずのスライムが帰巣済みなら,
                     // s が巣と同じ色のときだけ s ごと帰巣したものとして扱う
@@ -343,7 +379,7 @@ fn insert_slime(
                         None
                     };
                     if let Some(z_after) = z_after {
-                        let ns = tl.state_id(c_to, k_to + 1, z_after);
+                        let ns = state_of(c_to, k_to + 1, z_after);
                         if let Some(nl) =
                             push_label(&mut labels, &mut best_time, ns, t_end + 1, (li, Move::Ride))
                         {
@@ -373,7 +409,7 @@ fn insert_slime(
                         None
                     };
                     if let Some(z_after) = z_after {
-                        let ns = tl.state_id(c, k + 1, z_after);
+                        let ns = state_of(c, k + 1, z_after);
                         if let Some(nl) = push_label(
                             &mut labels,
                             &mut best_time,
@@ -388,7 +424,8 @@ fn insert_slime(
             }
 
             // 自分で跳ぶ: コスト +1
-            // 一番上にいるときだけ, 区間の中ならいつでも跳べる
+            // 一番上にいるときだけ, 区間の中ならいつでも跳べる.
+            // 同色の連続部分が塔の一番上まで続いていれば, 一番上の同色と役割を交換したとみなして跳べる
             if z == h {
                 for d in Dir::ALL {
                     for l in 1..=h + 1 {
@@ -401,7 +438,7 @@ fn insert_slime(
                         loop {
                             let g = tl.heights[c_next][k_next];
                             if g + 1 <= HEIGHT_MAX {
-                                let ns = tl.state_id(c_next, k_next, g);
+                                let ns = state_of(c_next, k_next, g);
                                 // 今の手数までの到着より時刻が真に早いときだけ, 次の手数の候補にする
                                 if best_time[ns].map_or(true, |bt| tau < bt) {
                                     if let Some(nl) = push_label(
