@@ -191,6 +191,8 @@ enum Move {
     Jump(Dir, usize),
     /// 操作 t で跳ぶ一団の下に残る. コスト 0. 操作 t の leave_num を +1 する
     Stay(usize),
+    /// 既存の操作で跳ぶ一団と一緒に跳ぶ (相乗り). コスト 0. 操作列は変えない
+    Ride,
 }
 
 /// 状態への 1 回の到着.
@@ -229,7 +231,7 @@ fn push_label(
 /// 返り値は (挿入する跳躍の (時刻, 跳躍) の時系列順の列, leave_num を +1 する操作の番号の列).
 ///
 /// 状態は (マス, 区間, z). 遷移は「待つ」「残る」「一緒に跳ぶ」「上に一団が着地」「自分で跳ぶ」の 5 種類で,
-/// 今は「待つ」「残る」「自分で跳ぶ」を実装している. 「待つ」は状態の中に含まれる.
+/// 今は「待つ」「残る」「一緒に跳ぶ」「自分で跳ぶ」を実装している. 「待つ」は状態の中に含まれる.
 /// 手数ごとに 1 段ずつ幅優先で広げる. コスト 0 の遷移 (「残る」など) の行き先は同じ段に加え,
 /// その段の中で続けて広げる.
 fn insert_slime(
@@ -311,9 +313,39 @@ fn insert_slime(
                 }
             }
 
-            // TODO: 一緒に跳ぶ: コスト 0
+            // 一緒に跳ぶ: コスト 0
             // 操作 t_end が c から跳び, s が切れ目より上 (z >= leave_num) にいる.
             // 着地点の, 操作 t_end の後の区間へ. 一団は反転して積まれる
+            if t_end < t_max {
+                let a = &ret[t_end];
+                let (c_from, c_to) = a.from_to(n);
+                // 着地点の, 操作 t_end の直前と直後の区間
+                let k_to = tl.seg_at(c_to, t_end);
+                let g = tl.heights[c_to][k_to];
+                // s が加わっても, 着地後 (帰巣前) の高さが上限以内
+                if c_from == c && z >= a.leave_num && g + (h - a.leave_num) + 1 <= HEIGHT_MAX {
+                    // 一団は反転するので, s より上にいた h - z 匹が s の下に来る
+                    let z_landed = g + (h - z);
+                    let h_after = tl.heights[c_to][k_to + 1];
+                    // 「残る」と同じく, s の下にいるはずのスライムが帰巣済みなら,
+                    // s が巣と同じ色のときだけ s ごと帰巣したものとして扱う
+                    let z_after = if z_landed <= h_after {
+                        Some(z_landed)
+                    } else if nest[c_to] == Some(s.color) {
+                        Some(h_after)
+                    } else {
+                        None
+                    };
+                    if let Some(z_after) = z_after {
+                        let ns = tl.state_id(c_to, k_to + 1, z_after);
+                        if let Some(nl) =
+                            push_label(&mut labels, &mut best_time, ns, t_end + 1, (li, Move::Ride))
+                        {
+                            frontier.push(nl);
+                        }
+                    }
+                }
+            }
 
             // TODO: 上に一団が着地: コスト 0
             // 操作 t_end が c に着地する. s の下の匹数 z は変わらず, 区間 k + 1 へ
@@ -379,6 +411,8 @@ fn insert_slime(
                 ));
             }
             Move::Stay(t) => stays.push(t),
+            // 既存の操作に乗るだけなので, 操作列は変えない
+            Move::Ride => {}
         }
         li = prev;
     }
