@@ -1,9 +1,13 @@
 use proconio::input;
 use proconio::marker::Chars;
+use rand::rngs::SmallRng;
+use rand::{Rng, SeedableRng};
 use std::collections::VecDeque;
 
 const CELL_MAX: usize = 400;
 const HEIGHT_MAX: usize = 8;
+/// 挿入順の山登りを打ち切る時刻 [秒]. 制限時間は 2 秒
+const TIME_LIMIT_SEC: f64 = 1.8;
 const TURN_MAX: usize = 100_000;
 /// 状態の z (s の下にいる匹数) が取りうる値の数
 const Z_LEN: usize = HEIGHT_MAX + 1;
@@ -581,6 +585,7 @@ fn walk_dist(start: usize, n: usize, is_wall: &[bool]) -> Vec<usize> {
 }
 
 fn main() {
+    let start_time = std::time::Instant::now();
     input! {
         n: usize,
         // k: スライムの色数
@@ -613,9 +618,33 @@ fn main() {
     // 距離が同じなら, 左上から順のまま (安定ソート)
     slimes.sort_by_key(|s| nest_dist[&s.color][s.pos_1d(n)]);
 
-    let ans = jikukan_bfs(&slimes, &rows);
+    let mut best = jikukan_bfs(&slimes, &rows);
 
-    for a in ans {
+    // 挿入順の山登り: 2 匹の順番を入れ替えて作り直し, 操作数が増えなければ採用する
+    let mut rng = SmallRng::seed_from_u64(0);
+    let mut iterations = 0;
+    let mut accepted = 0;
+    while slimes.len() >= 2 && start_time.elapsed().as_secs_f64() < TIME_LIMIT_SEC {
+        iterations += 1;
+        let i = rng.random_range(0..slimes.len());
+        let j = rng.random_range(0..slimes.len());
+        if i == j {
+            continue;
+        }
+        slimes.swap(i, j);
+        let ans = jikukan_bfs(&slimes, &rows);
+        if ans.len() <= best.len() {
+            if ans.len() < best.len() {
+                accepted += 1;
+            }
+            best = ans;
+        } else {
+            slimes.swap(i, j);
+        }
+    }
+    eprintln!("order hill climbing: iterations {iterations}, improved {accepted}");
+
+    for a in best {
         println!("{a}");
     }
 }
