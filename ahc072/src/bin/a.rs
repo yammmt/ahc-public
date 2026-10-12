@@ -184,26 +184,54 @@ impl Timeline {
     }
 }
 
+/// ラベルの間の遷移
+#[derive(Debug, Clone, Copy)]
+enum Move {
+    /// 自分で跳ぶ (方向, 距離). コスト 1
+    Jump(Dir, usize),
+    /// 操作 t で跳ぶ一団の下に残る. コスト 0. 操作 t の leave_num を +1 する
+    Stay(usize),
+}
+
 /// 状態への 1 回の到着.
 /// 同じ状態でも, 着いた時刻が早いほどその後に跳べる時刻の選択肢が多い.
 #[derive(Debug, Clone, Copy)]
 struct Label {
     state: usize,
-    /// 着いた時刻 (= 直前の跳躍を挿入する時刻)
+    /// 着いた時刻 (跳躍なら, その跳躍を挿入する時刻)
     time: usize,
-    /// 直前のラベルと, そこからの跳躍 (方向, 距離). 始点は None
-    prev: Option<(usize, Dir, usize)>,
+    /// 直前のラベルと, そこからの遷移. 始点は None
+    prev: Option<(usize, Move)>,
 }
 
-/// スライム `s` を操作列 `ret` に挿入する跳躍を, 追加手数が最小になるように求める.
-/// 返り値は (挿入する時刻, 跳躍) の時系列順の列.
+/// 状態 `state` に時刻 `time` で着くラベルを追加する.
+/// 手数が同じか少ない到着より時刻が真に早いときだけ追加し, その番号を返す.
+fn push_label(
+    labels: &mut Vec<Label>,
+    best_time: &mut [Option<usize>],
+    state: usize,
+    time: usize,
+    prev: (usize, Move),
+) -> Option<usize> {
+    if best_time[state].is_some_and(|bt| bt <= time) {
+        return None;
+    }
+    best_time[state] = Some(time);
+    labels.push(Label {
+        state,
+        time,
+        prev: Some(prev),
+    });
+    Some(labels.len() - 1)
+}
+
+/// スライム `s` を操作列 `ret` に挿入する動きを, 追加手数が最小になるように求める.
+/// 返り値は (挿入する跳躍の (時刻, 跳躍) の時系列順の列, leave_num を +1 する操作の番号の列).
 ///
 /// 状態は (マス, 区間, z). 遷移は「待つ」「残る」「一緒に跳ぶ」「上に一団が着地」「自分で跳ぶ」の 5 種類で,
-/// 今は「待つ」と「自分で跳ぶ」だけを実装している. 「待つ」は状態の中に含まれ, 辺になるのは
-/// コスト 1 の「自分で跳ぶ」だけなので, 手数ごとに 1 段ずつ幅優先で広げる.
-///
-/// TODO の 3 つ (コスト 0) を足すときは, 同じ段の中でもラベルを広げる必要がある.
-/// また, 経路復元で跳躍以外の遷移 (「残る」の leave_num +1) も扱えるよう, Label に遷移の種類を持たせる.
+/// 今は「待つ」「残る」「自分で跳ぶ」を実装している. 「待つ」は状態の中に含まれる.
+/// 手数ごとに 1 段ずつ幅優先で広げる. コスト 0 の遷移 (「残る」など) の行き先は同じ段に加え,
+/// その段の中で続けて広げる.
 fn insert_slime(
     n: usize,
     ret: &[Ans],
@@ -211,7 +239,7 @@ fn insert_slime(
     s: &Slime,
     nest: &[Option<char>],
     is_wall: &[bool],
-) -> Vec<(usize, Ans)> {
+) -> (Vec<(usize, Ans)>, Vec<usize>) {
     let t_max = ret.len();
     // best_time[状態]: その状態に着いた最も早い時刻 (手数が少ない到着も含む)
     let mut best_time: Vec<Option<usize>> = vec![None; tl.total * Z_LEN];
@@ -225,24 +253,24 @@ fn insert_slime(
         time: 0,
         prev: None,
     });
-    // 今の手数で着いたラベルの番号
+    // 今の手数で着いたラベルの番号. コスト 0 の遷移で段の途中にも増える
     let mut frontier = vec![0];
 
-    let goal = loop {
-        // s が自分の色の巣で一番上にいれば帰巣
-        let found = frontier.iter().find(|&&li| {
-            let (c, k, z) = tl.decode(labels[li].state);
-            nest[c] == Some(s.color) && z == tl.heights[c][k]
-        });
-        if let Some(&li) = found {
-            break li;
-        }
-
+    let goal = 'search: loop {
         let mut next = vec![];
-        for &li in &frontier {
+        let mut idx = 0;
+        while idx < frontier.len() {
+            let li = frontier[idx];
+            idx += 1;
             let Label { state, time, .. } = labels[li];
             let (c, k, z) = tl.decode(state);
             let h = tl.heights[c][k];
+
+            // s が自分の色の巣で一番上にいれば帰巣
+            if nest[c] == Some(s.color) && z == h {
+                break 'search li;
+            }
+
             // マス c の塔が変わらない最後の時刻. 操作 t_end (t_end < t_max のとき) が c に触れる
             let t_end = tl.seg_end(c, k, t_max);
 
@@ -250,9 +278,38 @@ fn insert_slime(
             // 区間の中 (time..=t_end) ではマス c の塔は変わらないので, 待つことは状態に含まれる.
             // 遷移としては書かず, 「自分で跳ぶ」で跳ぶ時刻を選ぶことで表す.
 
-            // TODO: 残る: コスト 0
+            // 残る: コスト 0
             // 操作 t_end が c から跳び, s が切れ目より下 (z <= leave_num) にいる.
-            // 区間 k + 1 の同じ z へ. 経路復元で ret[t_end].leave_num を +1 する必要がある
+            // 区間 k + 1 の同じ z へ. 経路復元で ret[t_end].leave_num を +1 する
+            if t_end < t_max {
+                let a = &ret[t_end];
+                let (c_from, _) = a.from_to(n);
+                if c_from == c && z <= a.leave_num {
+                    let h_after = tl.heights[c][k + 1];
+                    // 操作の後, s の下にいるはずのスライムが帰巣済み (z > h_after) なら,
+                    // 実際には s が上にいて帰巣できない. ただし s が巣と同じ色なら s ごと帰巣するので,
+                    // s が一番上にいる (= 帰巣する) 状態として扱う
+                    let z_after = if z <= h_after {
+                        Some(z)
+                    } else if nest[c] == Some(s.color) {
+                        Some(h_after)
+                    } else {
+                        None
+                    };
+                    if let Some(z_after) = z_after {
+                        let ns = tl.state_id(c, k + 1, z_after);
+                        if let Some(nl) = push_label(
+                            &mut labels,
+                            &mut best_time,
+                            ns,
+                            t_end + 1,
+                            (li, Move::Stay(t_end)),
+                        ) {
+                            frontier.push(nl);
+                        }
+                    }
+                }
+            }
 
             // TODO: 一緒に跳ぶ: コスト 0
             // 操作 t_end が c から跳び, s が切れ目より上 (z >= leave_num) にいる.
@@ -276,15 +333,14 @@ fn insert_slime(
                             let g = tl.heights[c_next][k_next];
                             if g + 1 <= HEIGHT_MAX {
                                 let ns = tl.state_id(c_next, k_next, g);
-                                // 手数が同じか少ない到着より, 時刻が真に早いときだけ残す
-                                if best_time[ns].map_or(true, |bt| tau < bt) {
-                                    best_time[ns] = Some(tau);
-                                    labels.push(Label {
-                                        state: ns,
-                                        time: tau,
-                                        prev: Some((li, d, l)),
-                                    });
-                                    next.push(labels.len() - 1);
+                                if let Some(nl) = push_label(
+                                    &mut labels,
+                                    &mut best_time,
+                                    ns,
+                                    tau,
+                                    (li, Move::Jump(d, l)),
+                                ) {
+                                    next.push(nl);
                                 }
                             }
                             k_next += 1;
@@ -303,25 +359,31 @@ fn insert_slime(
         frontier = next;
     };
 
-    // 今回のスライムの辿った跳躍を復元
+    // 今回のスライムの辿った動きを復元
     let mut jumps = vec![];
+    let mut stays = vec![];
     let mut li = goal;
-    while let Some((prev, d, l)) = labels[li].prev {
-        let (c, _, z) = tl.decode(labels[prev].state);
-        jumps.push((
-            labels[li].time,
-            Ans {
-                pos: (c / n, c % n),
-                // s の下の全員を土台として残す
-                leave_num: z,
-                dir: d,
-                flying_dist: l,
-            },
-        ));
+    while let Some((prev, mv)) = labels[li].prev {
+        match mv {
+            Move::Jump(d, l) => {
+                let (c, _, z) = tl.decode(labels[prev].state);
+                jumps.push((
+                    labels[li].time,
+                    Ans {
+                        pos: (c / n, c % n),
+                        // s の下の全員を土台として残す
+                        leave_num: z,
+                        dir: d,
+                        flying_dist: l,
+                    },
+                ));
+            }
+            Move::Stay(t) => stays.push(t),
+        }
         li = prev;
     }
     jumps.reverse();
-    jumps
+    (jumps, stays)
 }
 
 fn jikukan_bfs(slimes: &[Slime], map_default: &[Vec<char>]) -> Vec<Ans> {
@@ -346,7 +408,12 @@ fn jikukan_bfs(slimes: &[Slime], map_default: &[Vec<char>]) -> Vec<Ans> {
     for (i, s) in slimes.iter().enumerate() {
         // 現在の操作列による, マスごとの塔の高さの履歴
         let tl = Timeline::new(n, &ret, &slimes[..i], &nest);
-        let jumps = insert_slime(n, &ret, &tl, s, &nest, &is_wall);
+        let (jumps, stays) = insert_slime(n, &ret, &tl, s, &nest, &is_wall);
+
+        // s が残る操作は, 残す匹数が s の分だけ増える
+        for t in stays {
+            ret[t].leave_num += 1;
+        }
 
         // 時刻 t の跳躍を ret[t] の直前に挿入する
         let mut ret_new = Vec::with_capacity(ret.len() + jumps.len());
